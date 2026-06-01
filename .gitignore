@@ -1,0 +1,9 @@
+.env
+.edgar_cache/
+.uv-cache/
+.pytest_cache/
+.ipynb_checkpoints/
+__pycache__/
+.venv/
+notebooks/*.csv
+*_phase0_output.csv

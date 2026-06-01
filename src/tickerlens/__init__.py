@@ -1,0 +1,1 @@
+"""Tickerlens application package."""
