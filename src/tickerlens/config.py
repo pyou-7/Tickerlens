@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     edgar_user_agent: str = Field(min_length=1)
     edgar_cache_dir: Path = Path(".edgar_cache")
+    database_url: str = "sqlite:///tickerlens.db"
 
 
 @lru_cache

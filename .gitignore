@@ -1,4 +1,5 @@
 .env
+tickerlens.db
 .edgar_cache/
 output/
 .DS_Store
