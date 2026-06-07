@@ -49,6 +49,27 @@ class EdgarClient:
         cache_file.write_text(json.dumps(data))
         return data
 
+    def fetch_text(self, url: str) -> str:
+        """Fetch a non-JSON URL (e.g. filing index HTML) with caching."""
+        cache_file = self._cache_file(url).with_suffix(".html")
+        if cache_file.exists():
+            return cache_file.read_text()
+
+        self._throttle()
+        response = self._get(url)
+        response.raise_for_status()
+        self._last_request_at = time.monotonic()
+
+        text = response.text
+        cache_file.write_text(text)
+        return text
+
+    def filing_index_url(self, cik: str | int, accession: str) -> str:
+        """Return the EDGAR archive index URL for a filing."""
+        acc_clean = accession.replace("-", "")
+        cik_num = str(int(normalize_cik(cik)))
+        return f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_clean}/"
+
     def company_tickers(self) -> dict[str, Any]:
         return self.fetch_json(SEC_TICKERS_URL)
 

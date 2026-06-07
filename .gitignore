@@ -1,5 +1,7 @@
 .env
 .edgar_cache/
+output/
+.DS_Store
 .uv-cache/
 .pytest_cache/
 .ipynb_checkpoints/
