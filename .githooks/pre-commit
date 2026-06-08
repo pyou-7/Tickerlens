@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit - read-only Claude review of staged changes
+set -uo pipefail
+
+FAIL_CLOSED=0
+MAX_TURNS=25
+PATTERN='\.(py|html|js|ts|css|sql|toml|ya?ml|cfg|ini)$|migrations/|Dockerfile'
+
+[ "${SKIP_CLAUDE_REVIEW:-0}" = "1" ] && { echo "[skip] Claude review skipped."; exit 0; }
+[ -e "$(git rev-parse --git-dir)/MERGE_HEAD" ] && exit 0
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "[warn] 'claude' not on PATH - skipping review."
+  [ "$FAIL_CLOSED" = 1 ] && exit 1 || exit 0
+fi
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E "$PATTERN" || true)
+[ -z "$STAGED" ] && { echo "[skip] No code changes staged."; exit 0; }
+
+echo "[..] Reviewing staged changes with Claude..."
+DIFF_FILE="./.claude-staged.diff"
+git diff --cached --diff-filter=ACMR > "$DIFF_FILE"
+trap 'rm -f "$DIFF_FILE"' EXIT
+
+PROMPT="You are a read-only senior code reviewer for Tickerlens (FastAPI + HTMX +
+Jinja2 + Tailwind + SQLite + Plotly). The staged diff is in ./.claude-staged.diff -
+read it, plus any repo files you need for context. Do NOT modify files.
+Report findings grouped as Critical / Warning / Suggestion.
+- Redundancy: flag duplicated/near-duplicated logic with exact file:line refs and a
+  proposed consolidation, but do not apply it. Do not merge things that should stay
+  independent.
+- Infra: if the diff touches new deps, DB schema/migrations, config, a new module, the
+  public API surface, the EDGAR pipeline, or the build, say so and give a one-paragraph
+  entry to paste into docs/DECISIONS.md.
+Be concise. On the FINAL line print exactly one of:
+VERDICT: PASS
+VERDICT: BLOCK"
+
+OUTPUT=$(claude -p "$PROMPT" --allowedTools "Read,Grep,Glob" --permission-mode dontAsk --max-turns "$MAX_TURNS" 2>&1)
+STATUS=$?
+
+printf '%s\n' "------------------------------------------------------------" "$OUTPUT" "------------------------------------------------------------"
+
+if [ $STATUS -ne 0 ]; then
+  echo "[warn] Claude review did not complete (exit $STATUS)."
+  [ "$FAIL_CLOSED" = 1 ] && { echo "Blocking (FAIL_CLOSED=1)."; exit 1; }
+  echo "Allowing commit (FAIL_CLOSED=0)."; exit 0
+fi
+
+if printf '%s\n' "$OUTPUT" | grep -q '^VERDICT: BLOCK'; then
+  echo "[block] Critical issues found - commit blocked."
+  echo "        Fix them, or override with:  git commit --no-verify"
+  exit 1
+fi
+echo "[ok] Review passed."

@@ -136,7 +136,7 @@ class FinancialsService:
             company.market_cap = quote.market_cap
             if description:
                 company.description = description
-            company.updated_at = dt.datetime.utcnow()
+            company.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
         except Exception:
             db.rollback()
@@ -259,7 +259,7 @@ def _upsert_company(session: Session, cik: str, submissions: dict, ticker: str) 
             ticker=primary_ticker,
             fiscal_year_end=submissions.get("fiscalYearEnd"),
             sic=str(submissions.get("sic", "")) or None,
-            updated_at=dt.datetime.utcnow(),
+            updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
         )
         .on_conflict_do_update(
             index_elements=["cik"],
@@ -268,7 +268,7 @@ def _upsert_company(session: Session, cik: str, submissions: dict, ticker: str) 
                 "ticker": primary_ticker,
                 "fiscal_year_end": submissions.get("fiscalYearEnd"),
                 "sic": str(submissions.get("sic", "")) or None,
-                "updated_at": dt.datetime.utcnow(),
+                "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
             },
         )
     )
@@ -288,7 +288,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             eps_basic=row.eps_basic,
             eps_diluted=row.eps_diluted,
             free_cash_flow=row.free_cash_flow,
-            updated_at=dt.datetime.utcnow(),
+            updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
         )
         .on_conflict_do_update(
             index_elements=["cik", "period_end"],
@@ -300,7 +300,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "eps_basic": row.eps_basic,
                 "eps_diluted": row.eps_diluted,
                 "free_cash_flow": row.free_cash_flow,
-                "updated_at": dt.datetime.utcnow(),
+                "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
             },
         )
     )

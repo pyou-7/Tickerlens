@@ -1,7 +1,7 @@
 [project]
 name = "tickerlens"
 version = "0.1.0"
-description = "Add your description here"
+description = "Personal research tool for analyzing US public companies from SEC EDGAR data"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.4",

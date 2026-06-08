@@ -2,22 +2,28 @@
 
 Personal research tool for analyzing US public companies from SEC EDGAR data.
 
-Tickerlens is currently in Phase 1: turning the Phase 0 EDGAR/XBRL notebook findings into reusable application code. The product scope is intentionally personal-use only: no auth, payments, marketing, multi-user features, or commercial polish unless the project is later productized.
+Tickerlens is a single-user tool — no auth, payments, marketing, or multi-user features. If it proves useful after daily use, the productization PRD is archived for revisit.
 
 ## Current State
 
-- Phase 0 EDGAR feasibility passed for AAPL and JNJ.
-- Self-built EDGAR parsing remains the chosen path.
-- Core notebook logic now exists as reusable modules under `src/tickerlens/`.
-- Current extraction target: recent quarterly Revenue, Net Income, EPS, and FCF from SEC `companyfacts`.
-- Next build target: local persistence models and migrations for companies plus quarterly financials.
+**Phase 2 — Single-company browsing UI** (Phase 1 complete)
+
+Phase 1 delivered end-to-end data flow for one company:
+- SEC EDGAR client with rate limiting and disk cache
+- XBRL extraction and concept-mapping (revenue tag fallback, YTD un-cumulation, Q4 derivation)
+- SQLAlchemy models + Alembic migrations (Company + QuarterlyFinancials)
+- Service layer: fetch_and_persist, enrich_company (Wikipedia + Yahoo), get_overview
+- FastAPI routes + Jinja2 templates for the company overview page
+- Focused tests for XBRL logic and the financials service
 
 ## Source Of Truth
 
-- `docs/PRD_Tickerlens.md`: product requirements and scope boundaries.
-- `docs/PROJECT_STATUS.md`: current phase, decisions, and next tasks.
-- `docs/AGENT_HANDOFF.md`: short working context for Codex, Claude Code, Gemini, or any other agent.
-- `CLAUDE.md`: coding conventions and critical rules.
+- `docs/PRD_Tickerlens.md` — product requirements and scope boundaries
+- `docs/PROJECT_STATUS.md` — current phase, decisions, and next tasks
+- `docs/ARCHITECTURE.md` — living system description
+- `docs/DECISIONS.md` — append-only log of architectural decisions and the WHY
+- `docs/AGENT_HANDOFF.md` — concise current-state map for any agent
+- `CLAUDE.md` — coding conventions and critical rules
 
 Read `docs/PROJECT_STATUS.md` and `docs/AGENT_HANDOFF.md` before starting new work.
 
@@ -25,42 +31,72 @@ Read `docs/PROJECT_STATUS.md` and `docs/AGENT_HANDOFF.md` before starting new wo
 
 ```text
 src/tickerlens/
-  config.py              Pydantic settings
+  config.py              Pydantic settings (EDGAR_USER_AGENT, DATABASE_URL)
+  main.py                FastAPI app entry
   data/
     edgar.py             SEC JSON client, cache, throttling, CIK helpers
     xbrl.py              XBRL concept mapping and quarterly metric extraction
+    sic.py               SIC code → sector bucket mapping
+    wikipedia.py         Company description via Wikipedia API
+    yahoo.py             Last price and market cap via yfinance
+  models/
+    company.py           Company model (CIK as primary key)
+    quarterly_financial.py  QuarterlyFinancial model
+    database.py          Engine/session/create_tables helpers
   services/
-    financials.py        Business service composing EDGAR + XBRL
+    financials.py        Business service: fetch_and_persist, enrich, get_overview
+    ir_download.py       Filing discovery and FY labeling for earnings downloads
+  routes/
+    company.py           FastAPI handlers (home, overview, refresh)
+  templates/             Jinja2 templates (base, index, company/overview, partials)
+  static/                CSS, JS, images
 
 tests/
-  data/test_xbrl.py      Focused tests for the highest-risk XBRL logic
+  data/test_xbrl.py      XBRL edge-case tests (fiscal-year inference, YTD un-cumulation)
+  services/test_financials.py  Service-layer tests (TTM, YoY, upsert idempotency)
 
-notebooks/
-  01_edgar_first_look.ipynb
-  02_edgar_generalization_jnj.ipynb
+scripts/
+  download_earnings.py   Earnings PDF download CLI (Chrome headless)
+
+alembic/versions/        Database migrations
+docs/
+  PRD_Tickerlens.md      Product requirements
+  PROJECT_STATUS.md      Phase tracker
+  ARCHITECTURE.md        System architecture
+  DECISIONS.md           Architectural decision log
+  AGENT_HANDOFF.md       Agent-readable current state
+  progress/              Per-phase handoff files (ephemeral)
 ```
 
 ## Critical Rules
 
-- CIK is the canonical company key. Ticker is only a label.
-- Every SEC request must include the configured `EDGAR_USER_AGENT`.
+- CIK is the canonical company key. Ticker is only a display label.
+- Every SEC request must include the configured `EDGAR_USER_AGENT` header.
 - EDGAR calls must stay at or below 10 requests per second.
-- Raw SEC responses are cached under `.edgar_cache/`, which is intentionally gitignored.
-- Financial extraction must go through `data/xbrl.py` concept mapping.
-- Routes, when added, should call services. Services should not perform raw HTTP except through `data/` clients.
+- Raw SEC responses are cached under `.edgar_cache/` (gitignored).
+- Financial extraction must go through `data/xbrl.py` concept mapping — never raw XBRL tags in services or routes.
+- Routes call services. Services do not make HTTP calls (those live in `data/`).
 
 ## Setup
 
-Create a local `.env` file:
+Copy `.env.example` to `.env` and fill in your email:
 
-```text
-EDGAR_USER_AGENT=Tickerlens Personal <your-email@example.com>
+```bash
+cp .env.example .env
+# Edit .env: set EDGAR_USER_AGENT=Tickerlens Personal <your-email@example.com>
 ```
 
-Install dependencies:
+Install dependencies and apply migrations:
 
 ```bash
 uv sync
+uv run alembic upgrade head
+```
+
+Run the dev server:
+
+```bash
+uv run uvicorn tickerlens.main:app --reload
 ```
 
 Run tests:
@@ -69,22 +105,19 @@ Run tests:
 uv run pytest
 ```
 
-Run a quick cached extraction sanity check after `.edgar_cache/` has AAPL/JNJ responses:
+Download earnings PDFs for a company:
 
 ```bash
-uv run python - <<'PY'
-from tickerlens.data.edgar import EdgarClient
-from tickerlens.services.financials import FinancialsService
-
-service = FinancialsService(EdgarClient(cache_dir=".edgar_cache"))
-for cik in ["0000320193", "0000200406"]:
-    rows = service.recent_quarterly_financials(cik)
-    print(cik, [(row.period, round(row.revenue or 0), round(row.free_cash_flow or 0)) for row in rows])
-PY
+uv run python scripts/download_earnings.py AAPL --periods 4
 ```
 
-## Current Limitations
+## Code Review
 
-- Python is currently pinned to 3.11 locally; the project plan says to move to 3.12 at the start of Phase 1.
-- Persistence, FastAPI routes, templates, and migrations are not added yet.
-- XBRL extraction is proven on AAPL and JNJ only; broaden coverage before scaling to all companies.
+A pre-commit hook reviews staged changes with Claude before every commit:
+
+```bash
+git config core.hooksPath .githooks   # activate once
+```
+
+To run a manual review: `/review` in Claude Code.
+To skip in an emergency: `SKIP_CLAUDE_REVIEW=1 git commit` or `git commit --no-verify`.
