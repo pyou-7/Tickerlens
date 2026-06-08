@@ -14,6 +14,9 @@ class Company(Base):
     ticker: Mapped[str | None] = mapped_column(String(20), index=True)
     fiscal_year_end: Mapped[str | None] = mapped_column(String(4))  # MMDD
     sic: Mapped[str | None] = mapped_column(String(10))
+    description: Mapped[str | None] = mapped_column(String(2000))
+    last_price: Mapped[float | None] = mapped_column()
+    market_cap: Mapped[float | None] = mapped_column()
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )

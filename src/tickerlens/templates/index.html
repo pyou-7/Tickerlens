@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Tickerlens{% endblock %}
+{% block content %}
+<div class="flex flex-col items-center justify-center min-h-[60vh] gap-6">
+  <h1 class="text-4xl font-bold text-white">Tickerlens</h1>
+  <p class="text-gray-400">Enter a ticker to get started.</p>
+  <form action="" method="get" id="ticker-form"
+        onsubmit="window.location='/company/'+document.getElementById('ticker-input').value.toUpperCase();return false;"
+        class="flex gap-2">
+    <input id="ticker-input" type="text" placeholder="AAPL"
+           class="w-40 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 uppercase"
+           autofocus />
+    <button type="submit"
+            class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2 font-semibold text-white transition">
+      Go
+    </button>
+  </form>
+</div>
+{% endblock %}

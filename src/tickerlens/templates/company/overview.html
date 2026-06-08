@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ overview.ticker or overview.name }} — Tickerlens{% endblock %}
+
+{% macro fmt_large(val) -%}
+  {%- if val is none -%}—
+  {%- elif val >= 1_000_000_000_000 -%}${{ "%.2f"|format(val / 1_000_000_000_000) }}T
+  {%- elif val >= 1_000_000_000 -%}${{ "%.2f"|format(val / 1_000_000_000) }}B
+  {%- elif val >= 1_000_000 -%}${{ "%.2f"|format(val / 1_000_000) }}M
+  {%- else -%}${{ "%.0f"|format(val) }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_price(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_eps(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{# kpi_card: label, value string, yoy pct (float or none) #}
+{% macro kpi_card(label, value, yoy_pct) %}
+<div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
+  <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
+  <div class="text-2xl font-bold text-white">{{ value }}</div>
+  <div class="mt-1 h-4">
+    {%- if yoy_pct is not none -%}
+      {%- if yoy_pct >= 0 -%}
+        <span class="text-green-400 text-xs font-medium">+{{ "%.1f"|format(yoy_pct) }}% YoY</span>
+      {%- else -%}
+        <span class="text-red-400 text-xs font-medium">{{ "%.1f"|format(yoy_pct) }}% YoY</span>
+      {%- endif -%}
+    {%- endif -%}
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+
+<!-- Company header -->
+<div class="flex items-start justify-between mb-8">
+  <div>
+    <div class="flex items-center gap-3 mb-1 flex-wrap">
+      <h1 class="text-3xl font-bold text-white">{{ overview.name }}</h1>
+      {% if overview.ticker %}
+        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ overview.ticker }}</span>
+      {% endif %}
+      {% if overview.sector %}
+        <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ overview.sector }}</span>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-4 text-sm text-gray-400 flex-wrap">
+      {% if overview.last_price %}
+        <span class="text-white font-semibold text-lg">{{ fmt_price(overview.last_price) }}</span>
+      {% endif %}
+      {% if overview.market_cap %}
+        <span>Mkt Cap {{ fmt_large(overview.market_cap) }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <form method="post" action="/company/{{ overview.ticker }}/refresh">
+    <button type="submit"
+            class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
+      ↻ Refresh
+    </button>
+  </form>
+</div>
+
+<!-- Description -->
+{% if overview.description %}
+<p class="text-gray-400 text-sm leading-relaxed mb-8 max-w-3xl">{{ overview.description }}</p>
+{% endif %}
+
+<!-- Latest quarter snapshot -->
+<div class="mb-6">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">
+    Latest quarter — {{ overview.latest_label }}
+    <span class="normal-case text-gray-600 ml-1">(ended {{ overview.latest_period_end }})</span>
+  </h2>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    {{ kpi_card("Revenue", fmt_large(overview.latest_kpi.revenue), overview.yoy.revenue) }}
+    {{ kpi_card("Net Income", fmt_large(overview.latest_kpi.net_income), overview.yoy.net_income) }}
+    {{ kpi_card("EPS (diluted)", fmt_eps(overview.latest_kpi.eps_diluted), overview.yoy.eps_diluted) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(overview.latest_kpi.free_cash_flow), overview.yoy.free_cash_flow) }}
+  </div>
+</div>
+
+<!-- TTM snapshot -->
+<div class="mb-10">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">
+    Trailing twelve months (TTM)
+    {%- if overview.ttm_quarters < 4 %}
+      <span class="normal-case text-yellow-600 ml-1">({{ overview.ttm_quarters }}-quarter partial — limited history)</span>
+    {%- endif %}
+  </h2>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    {{ kpi_card("Revenue", fmt_large(overview.ttm_kpi.revenue), none) }}
+    {{ kpi_card("Net Income", fmt_large(overview.ttm_kpi.net_income), none) }}
+    {{ kpi_card("EPS (diluted)", fmt_eps(overview.ttm_kpi.eps_diluted), none) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(overview.ttm_kpi.free_cash_flow), none) }}
+  </div>
+</div>
+
+<!-- View detail -->
+<div>
+  <a href="/company/{{ overview.ticker }}/detail"
+     class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 font-semibold text-white transition text-sm">
+    View detailed periods →
+  </a>
+</div>
+
+{% endblock %}
