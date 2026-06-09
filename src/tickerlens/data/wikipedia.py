@@ -44,7 +44,8 @@ def _title_relevant(title: str, company_name: str) -> bool:
 
 
 def _search_title(query: str) -> str | None:
-    """Return the Wikipedia title, empty string if no results, None on error."""
+    """Return the Wikipedia title, empty string if no results, None on network error.
+    Callers treat both falsy values identically — no distinction is enforced upstream."""
     try:
         resp = httpx.get(
             _SEARCH,
