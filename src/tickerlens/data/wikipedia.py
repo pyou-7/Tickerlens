@@ -62,7 +62,7 @@ def _search_title(query: str) -> str | None:
         resp.raise_for_status()
         results = resp.json().get("query", {}).get("search", [])
         return results[0]["title"] if results else ""
-    except Exception:
+    except (httpx.HTTPError, httpx.TimeoutException, OSError):
         logger.warning("Wikipedia search failed for %r", query, exc_info=True)
         return None
 
@@ -79,6 +79,6 @@ def _fetch_extract(title: str) -> str | None:
         if len(extract.split()) < _MIN_WORDS:
             return None
         return extract[:_MAX_CHARS]
-    except Exception:
+    except (httpx.HTTPError, httpx.TimeoutException, OSError):
         logger.warning("Wikipedia extract failed for %r", title, exc_info=True)
         return None
