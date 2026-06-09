@@ -12,29 +12,18 @@ _MIN_WORDS = 50
 _MAX_CHARS = 1800
 _STOP_WORDS = {"inc", "corp", "co", "ltd", "llc", "plc", "the", "and", "of", "group"}
 
-# Sentinel: fetch succeeded but no relevant article found.
-# Distinct from None which means a network/parse error occurred.
-NOT_FOUND = object()
-
 
 def get_description(company_name: str) -> str | None:
     """Fetch a company description from Wikipedia.
 
-    Returns a description string, or None if no relevant page exists or
-    a transient error occurred. Callers can check whether None came from
-    a confirmed non-match by the `description is None and title is None`
-    path — but for most uses, None means "don't overwrite existing data."
-
-    Internal logic:
-      - _search_title returns None on network error, empty-string sentinel on
-        "no results found" so we can distinguish the two cases.
-      - _title_relevant gates on the first significant word matching.
+    Returns a description string, or None if no relevant page exists,
+    the relevance check fails, or a transient network error occurs.
+    Callers should treat None as "overwrite with None" — a fresh search
+    that finds nothing is preferable to keeping stale/wrong text.
     """
     title = _search_title(company_name)
-    if title is None:
-        return None  # network error — caller should keep existing DB value
-    if title == "" or not _title_relevant(title, company_name):
-        return None  # confirmed no relevant match — caller may clear DB value
+    if not title or not _title_relevant(title, company_name):
+        return None
     return _fetch_extract(title)
 
 
