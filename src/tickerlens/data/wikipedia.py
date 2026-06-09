@@ -12,16 +12,37 @@ _MIN_WORDS = 50
 _MAX_CHARS = 1800
 
 
+_STOP_WORDS = {"inc", "corp", "co", "ltd", "llc", "plc", "the", "and", "of", "group"}
+
+
 def get_description(company_name: str) -> str | None:
     """Fetch a company description from Wikipedia.
 
-    Searches by company name, returns the extract if it's long enough,
-    or None if nothing usable is found.
+    Searches by company name + 'company' for disambiguation, then validates
+    that the returned title has at least one meaningful word in common with
+    the query before returning the extract.
     """
-    title = _search_title(company_name)
-    if not title:
+    query = f"{company_name} company"
+    title = _search_title(query)
+    if not title or not _title_relevant(title, company_name):
         return None
     return _fetch_extract(title)
+
+
+def _title_relevant(title: str, company_name: str) -> bool:
+    """Return True if the title's first significant word matches the company name's first significant word."""
+    def first_significant(text: str) -> str | None:
+        for word in text.split():
+            w = word.lower().strip(".,")
+            if w not in _STOP_WORDS and len(w) > 2:
+                return w
+        return None
+
+    title_words = {w.lower() for w in title.split()} - _STOP_WORDS
+    name_words = {w.lower().strip(".,") for w in company_name.split()} - _STOP_WORDS
+    first = first_significant(company_name)
+    # Require the first meaningful word AND at least one total overlap
+    return first is not None and first in title_words and bool(title_words & name_words)
 
 
 def _search_title(query: str) -> str | None:

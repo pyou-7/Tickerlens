@@ -134,8 +134,7 @@ class FinancialsService:
 
             company.last_price = quote.last_price
             company.market_cap = quote.market_cap
-            if description:
-                company.description = description
+            company.description = description  # None clears a stale description
             company.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
         except Exception:

@@ -3,10 +3,14 @@
 
 {% macro fmt_large(val) -%}
   {%- if val is none -%}—
-  {%- elif val >= 1_000_000_000_000 -%}${{ "%.2f"|format(val / 1_000_000_000_000) }}T
-  {%- elif val >= 1_000_000_000 -%}${{ "%.2f"|format(val / 1_000_000_000) }}B
-  {%- elif val >= 1_000_000 -%}${{ "%.2f"|format(val / 1_000_000) }}M
-  {%- else -%}${{ "%.0f"|format(val) }}
+  {%- else -%}
+    {%- set abs = val | abs -%}
+    {%- set sign = "-" if val < 0 else "" -%}
+    {%- if abs >= 1_000_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+    {%- elif abs >= 1_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000) }}B
+    {%- elif abs >= 1_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000) }}M
+    {%- else -%}{{ sign }}${{ "%.0f"|format(abs) }}
+    {%- endif -%}
   {%- endif -%}
 {%- endmacro %}
 

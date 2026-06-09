@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from enum import StrEnum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, ConfigDict
 
@@ -94,14 +97,28 @@ def extract_recent_quarterly_financials(
 ) -> list[QuarterlyFinancials]:
     """Extract recent Revenue, Net Income, EPS, and FCF from SEC companyfacts."""
 
+    # Revenue is the canonical anchor — hard failure if missing.
     revenue = quarterly_income_metric(companyfacts, Metric.REVENUE, fiscal_year_end)
-    net_income = quarterly_income_metric(companyfacts, Metric.NET_INCOME, fiscal_year_end)
-    eps_basic = quarterly_income_metric(companyfacts, Metric.EPS_BASIC, fiscal_year_end)
-    eps_diluted = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, fiscal_year_end)
-    opcf = quarterly_cash_flow_metric(
-        companyfacts, Metric.OPERATING_CASH_FLOW, fiscal_year_end
-    )
-    capex = quarterly_cash_flow_metric(companyfacts, Metric.CAPEX, fiscal_year_end)
+
+    def _safe_income(metric: Metric) -> list[PeriodMetric]:
+        try:
+            return quarterly_income_metric(companyfacts, metric, fiscal_year_end)
+        except KeyError:
+            logger.warning("No XBRL facts for %s — storing None", metric.value)
+            return []
+
+    def _safe_cashflow(metric: Metric) -> list[PeriodMetric]:
+        try:
+            return quarterly_cash_flow_metric(companyfacts, metric, fiscal_year_end)
+        except KeyError:
+            logger.warning("No XBRL facts for %s — storing None", metric.value)
+            return []
+
+    net_income = _safe_income(Metric.NET_INCOME)
+    eps_basic = _safe_income(Metric.EPS_BASIC)
+    eps_diluted = _safe_income(Metric.EPS_DILUTED)
+    opcf = _safe_cashflow(Metric.OPERATING_CASH_FLOW)
+    capex = _safe_cashflow(Metric.CAPEX)
 
     canonical = sorted(revenue, key=lambda item: item.end)[-periods:]
     by_end = {
