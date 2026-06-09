@@ -10,49 +10,59 @@ _API = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 _SEARCH = "https://en.wikipedia.org/w/api.php"
 _MIN_WORDS = 50
 _MAX_CHARS = 1800
-
-
 _STOP_WORDS = {"inc", "corp", "co", "ltd", "llc", "plc", "the", "and", "of", "group"}
+
+# Sentinel: fetch succeeded but no relevant article found.
+# Distinct from None which means a network/parse error occurred.
+NOT_FOUND = object()
 
 
 def get_description(company_name: str) -> str | None:
     """Fetch a company description from Wikipedia.
 
-    Searches by company name + 'company' for disambiguation, then validates
-    that the returned title has at least one meaningful word in common with
-    the query before returning the extract.
+    Returns a description string, or None if no relevant page exists or
+    a transient error occurred. Callers can check whether None came from
+    a confirmed non-match by the `description is None and title is None`
+    path — but for most uses, None means "don't overwrite existing data."
+
+    Internal logic:
+      - _search_title returns None on network error, empty-string sentinel on
+        "no results found" so we can distinguish the two cases.
+      - _title_relevant gates on the first significant word matching.
     """
-    query = f"{company_name} company"
-    title = _search_title(query)
-    if not title or not _title_relevant(title, company_name):
-        return None
+    title = _search_title(company_name)
+    if title is None:
+        return None  # network error — caller should keep existing DB value
+    if title == "" or not _title_relevant(title, company_name):
+        return None  # confirmed no relevant match — caller may clear DB value
     return _fetch_extract(title)
 
 
 def _title_relevant(title: str, company_name: str) -> bool:
-    """Return True if the title's first significant word matches the company name's first significant word."""
-    def first_significant(text: str) -> str | None:
-        for word in text.split():
-            w = word.lower().strip(".,")
-            if w not in _STOP_WORDS and len(w) > 2:
-                return w
-        return None
+    """Return True if the title's first significant word matches the company name's."""
+    def significant_words(text: str) -> list[str]:
+        return [
+            w.lower().strip(".,")
+            for w in text.split()
+            if w.lower().strip(".,") not in _STOP_WORDS and len(w.strip(".,")) > 2
+        ]
 
-    title_words = {w.lower() for w in title.split()} - _STOP_WORDS
-    name_words = {w.lower().strip(".,") for w in company_name.split()} - _STOP_WORDS
-    first = first_significant(company_name)
-    # Require the first meaningful word AND at least one total overlap
-    return first is not None and first in title_words and bool(title_words & name_words)
+    title_words = set(significant_words(title))
+    name_words = significant_words(company_name)
+    if not name_words:
+        return False
+    return name_words[0] in title_words
 
 
 def _search_title(query: str) -> str | None:
+    """Return the Wikipedia title, empty string if no results, None on error."""
     try:
         resp = httpx.get(
             _SEARCH,
             params={
                 "action": "query",
                 "list": "search",
-                "srsearch": query,
+                "srsearch": f"{query} company",
                 "format": "json",
                 "srlimit": 1,
             },
@@ -61,7 +71,7 @@ def _search_title(query: str) -> str | None:
         )
         resp.raise_for_status()
         results = resp.json().get("query", {}).get("search", [])
-        return results[0]["title"] if results else None
+        return results[0]["title"] if results else ""
     except Exception:
         logger.warning("Wikipedia search failed for %r", query, exc_info=True)
         return None
