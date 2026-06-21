@@ -61,6 +61,39 @@ class CompanyOverview(BaseModel):
     ttm_quarters: int  # number of quarters summed (< 4 means partial)
 
 
+class PeriodData(BaseModel):
+    """Data for a single selected period (quarterly or yearly aggregate)."""
+    label: str                  # "Q2 FY2025" or "FY2025"
+    period_end: dt.date | None  # None for yearly aggregates
+    fiscal_year: int
+    fiscal_period: str | None   # "Q1"–"Q4" for quarterly; None for yearly
+    kpi: KPISnapshot
+    yoy: KPIChange
+    qoq: KPIChange | None       # None for yearly
+
+
+class DetailContext(BaseModel):
+    """Everything the detail page needs to render."""
+    cik: str
+    name: str
+    ticker: str | None
+    sector: str | None
+    last_price: float | None
+    market_cap: float | None
+    # Selector state
+    granularity: str            # "quarterly" | "yearly"
+    quarter_options: list[str]  # most recent first, e.g. ["Q4 FY2025", ...]
+    year_options: list[int]     # most recent first, e.g. [2025, 2024, 2023]
+    selected_quarter: str       # e.g. "Q4 FY2025"
+    selected_year: int          # e.g. 2025
+    # Current period
+    current: PeriodData
+    # Chart data — all available quarters in chronological order
+    chart_labels: list[str]
+    chart_revenue: list[float | None]
+    chart_eps: list[float | None]
+
+
 # ── service ───────────────────────────────────────────────────────────────────
 
 class FinancialsService:
@@ -192,6 +225,89 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_detail(
+        self,
+        ticker: str,
+        granularity: str = "quarterly",
+        selected_quarter: str | None = None,
+        selected_year: int | None = None,
+        session: Session | None = None,
+    ) -> DetailContext:
+        """Return everything the detail / time-slicer page needs."""
+        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+
+            if not all_rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+
+            latest = all_rows[-1]
+
+            # Build selector option lists (most recent first)
+            quarter_options = [
+                f"{r.fiscal_period} FY{r.fiscal_year}" for r in reversed(all_rows)
+            ]
+            seen_years: set[int] = set()
+            year_options: list[int] = []
+            for r in reversed(all_rows):
+                if r.fiscal_year not in seen_years:
+                    year_options.append(r.fiscal_year)
+                    seen_years.add(r.fiscal_year)
+
+            # Default selections to latest quarter / latest year
+            if selected_quarter is None:
+                selected_quarter = f"{latest.fiscal_period} FY{latest.fiscal_year}"
+            if selected_year is None:
+                selected_year = year_options[0]
+
+            # Build current period data
+            if granularity == "yearly":
+                current = _build_yearly_period(all_rows, selected_year, year_options[0])
+                selected_year = current.fiscal_year  # may have been corrected
+            else:
+                current, selected_quarter = _build_quarterly_period(
+                    all_rows, selected_quarter, latest
+                )
+
+            # Chart data — chronological order across all quarters
+            chart_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
+            chart_revenue = [r.revenue for r in all_rows]
+            chart_eps = [r.eps_diluted for r in all_rows]
+
+            return DetailContext(
+                cik=cik,
+                name=company.name,
+                ticker=company.ticker,
+                sector=sector_for_sic(company.sic),
+                last_price=company.last_price,
+                market_cap=company.market_cap,
+                granularity=granularity,
+                quarter_options=quarter_options,
+                year_options=year_options,
+                selected_quarter=selected_quarter,
+                selected_year=selected_year,
+                current=current,
+                chart_labels=chart_labels,
+                chart_revenue=chart_revenue,
+                chart_eps=chart_eps,
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -243,6 +359,101 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         eps_basic=_pct_change(latest.eps_basic, prior.eps_basic),
         eps_diluted=_pct_change(latest.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(latest.free_cash_flow, prior.free_cash_flow),
+    )
+
+
+def _compute_qoq(
+    current: QuarterlyFinancial, prior: QuarterlyFinancial | None
+) -> KPIChange:
+    if prior is None:
+        return KPIChange()
+    return KPIChange(
+        revenue=_pct_change(current.revenue, prior.revenue),
+        net_income=_pct_change(current.net_income, prior.net_income),
+        eps_basic=_pct_change(current.eps_basic, prior.eps_basic),
+        eps_diluted=_pct_change(current.eps_diluted, prior.eps_diluted),
+        free_cash_flow=_pct_change(current.free_cash_flow, prior.free_cash_flow),
+    )
+
+
+def _compute_kpi_yoy(current_kpi: KPISnapshot, prior_kpi: KPISnapshot) -> KPIChange:
+    return KPIChange(
+        revenue=_pct_change(current_kpi.revenue, prior_kpi.revenue),
+        net_income=_pct_change(current_kpi.net_income, prior_kpi.net_income),
+        eps_basic=_pct_change(current_kpi.eps_basic, prior_kpi.eps_basic),
+        eps_diluted=_pct_change(current_kpi.eps_diluted, prior_kpi.eps_diluted),
+        free_cash_flow=_pct_change(current_kpi.free_cash_flow, prior_kpi.free_cash_flow),
+    )
+
+
+def _parse_quarter_label(label: str) -> tuple[str, int] | None:
+    """Parse "Q2 FY2025" → ("Q2", 2025). Returns None on invalid input."""
+    try:
+        fp, fy_str = label.split(" FY")
+        return fp, int(fy_str)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _build_quarterly_period(
+    all_rows: list[QuarterlyFinancial],
+    selected_quarter: str,
+    latest: QuarterlyFinancial,
+) -> tuple[PeriodData, str]:
+    """Build PeriodData for a single quarter selection. Returns (data, corrected_label)."""
+    parsed = _parse_quarter_label(selected_quarter)
+    if parsed is None:
+        fp, fy = latest.fiscal_period, latest.fiscal_year
+    else:
+        fp, fy = parsed
+
+    row = next(
+        (r for r in all_rows if r.fiscal_period == fp and r.fiscal_year == fy),
+        latest,
+    )
+    corrected_label = f"{row.fiscal_period} FY{row.fiscal_year}"
+
+    row_idx = next((i for i, r in enumerate(all_rows) if r is row), len(all_rows) - 1)
+    prior_qoq = all_rows[row_idx - 1] if row_idx > 0 else None
+
+    return (
+        PeriodData(
+            label=corrected_label,
+            period_end=row.period_end,
+            fiscal_year=row.fiscal_year,
+            fiscal_period=row.fiscal_period,
+            kpi=_to_kpi(row),
+            yoy=_compute_yoy(row, list(all_rows)),
+            qoq=_compute_qoq(row, prior_qoq),
+        ),
+        corrected_label,
+    )
+
+
+def _build_yearly_period(
+    all_rows: list[QuarterlyFinancial],
+    selected_year: int,
+    default_year: int,
+) -> PeriodData:
+    """Build PeriodData for a fiscal-year aggregate."""
+    year_rows = [r for r in all_rows if r.fiscal_year == selected_year]
+    if not year_rows:
+        selected_year = default_year
+        year_rows = [r for r in all_rows if r.fiscal_year == selected_year]
+
+    kpi = _compute_ttm(year_rows)
+
+    prior_rows = [r for r in all_rows if r.fiscal_year == selected_year - 1]
+    yoy = _compute_kpi_yoy(kpi, _compute_ttm(prior_rows)) if prior_rows else KPIChange()
+
+    return PeriodData(
+        label=f"FY{selected_year}",
+        period_end=year_rows[-1].period_end if year_rows else None,
+        fiscal_year=selected_year,
+        fiscal_period=None,
+        kpi=kpi,
+        yoy=yoy,
+        qoq=None,
     )
 
 

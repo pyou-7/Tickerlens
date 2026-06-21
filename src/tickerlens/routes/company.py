@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from tickerlens.services.financials import CompanyNotFoundError, FinancialsService
+from tickerlens.services.financials import CompanyNotFoundError, FinancialsService, DetailContext
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
@@ -35,6 +35,58 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
         request=request,
         name="company/overview.html",
         context={"overview": overview},
+    )
+
+
+@router.get("/company/{ticker}/detail", response_class=HTMLResponse)
+def company_detail(
+    request: Request,
+    ticker: str,
+    granularity: str = "quarterly",
+    quarter: str | None = None,
+    year: int | None = None,
+) -> HTMLResponse:
+    ticker = ticker.upper()
+    try:
+        ctx = _svc.get_detail(
+            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+        )
+    except CompanyNotFoundError:
+        try:
+            _svc.fetch_and_persist(ticker, periods=8)
+            _svc.enrich_company(ticker)
+            ctx = _svc.get_detail(
+                ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="company/detail.html",
+        context={"ctx": ctx},
+    )
+
+
+@router.get("/company/{ticker}/detail/data", response_class=HTMLResponse)
+def company_detail_data(
+    request: Request,
+    ticker: str,
+    granularity: str = "quarterly",
+    quarter: str | None = None,
+    year: int | None = None,
+) -> HTMLResponse:
+    """HTMX endpoint — returns only the swappable data section of the detail page."""
+    ticker = ticker.upper()
+    try:
+        ctx = _svc.get_detail(
+            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+        )
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/detail_data.html",
+        context={"ctx": ctx},
     )
 
 

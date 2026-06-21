@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}{{ ctx.ticker or ctx.name }} — Detail — Tickerlens{% endblock %}
+
+{% macro fmt_large(val) -%}
+  {%- if val is none -%}—
+  {%- else -%}
+    {%- set abs = val | abs -%}
+    {%- set sign = "-" if val < 0 else "" -%}
+    {%- if abs >= 1_000_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+    {%- elif abs >= 1_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000) }}B
+    {%- elif abs >= 1_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000) }}M
+    {%- else -%}{{ sign }}${{ "%.0f"|format(abs) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_price(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+
+<!-- Breadcrumb -->
+<div class="mb-6 text-sm text-gray-500">
+  <a href="/company/{{ ctx.ticker }}" class="text-indigo-400 hover:text-indigo-300 transition">← Back to Overview</a>
+</div>
+
+<!-- Company header -->
+<div class="flex items-start justify-between mb-8">
+  <div>
+    <div class="flex items-center gap-3 mb-1 flex-wrap">
+      <h1 class="text-3xl font-bold text-white">{{ ctx.name }}</h1>
+      {% if ctx.ticker %}
+        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ ctx.ticker }}</span>
+      {% endif %}
+      {% if ctx.sector %}
+        <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ ctx.sector }}</span>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-4 text-sm text-gray-400 flex-wrap">
+      {% if ctx.last_price %}
+        <span class="text-white font-semibold text-lg">{{ fmt_price(ctx.last_price) }}</span>
+      {% endif %}
+      {% if ctx.market_cap %}
+        <span>Mkt Cap {{ fmt_large(ctx.market_cap) }}</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Time slicer controls -->
+<div
+  x-data="{ gran: '{{ ctx.granularity }}' }"
+  class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4"
+>
+  <form
+    id="slicer-form"
+    hx-get="/company/{{ ctx.ticker }}/detail/data"
+    hx-target="#detail-data"
+    hx-swap="innerHTML"
+    hx-trigger="change"
+    hx-indicator="#slicer-spinner"
+    class="flex flex-wrap items-center gap-4"
+  >
+    <!-- Granularity radio toggle (styled as buttons) -->
+    <div class="flex rounded-lg overflow-hidden border border-gray-700 text-sm">
+      <label class="cursor-pointer">
+        <input type="radio" name="granularity" value="quarterly" class="sr-only"
+               x-model="gran" {% if ctx.granularity == 'quarterly' %}checked{% endif %}>
+        <span class="block px-4 py-1.5 transition"
+              :class="gran === 'quarterly' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">
+          Quarterly
+        </span>
+      </label>
+      <label class="cursor-pointer">
+        <input type="radio" name="granularity" value="yearly" class="sr-only"
+               x-model="gran" {% if ctx.granularity == 'yearly' %}checked{% endif %}>
+        <span class="block px-4 py-1.5 transition"
+              :class="gran === 'yearly' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">
+          Yearly
+        </span>
+      </label>
+    </div>
+
+    <!-- Quarter selector -->
+    <div x-show="gran === 'quarterly'" x-cloak>
+      <select
+        name="quarter"
+        :disabled="gran !== 'quarterly'"
+        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {% for opt in ctx.quarter_options %}
+          <option value="{{ opt }}" {% if opt == ctx.selected_quarter %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Year selector -->
+    <div x-show="gran === 'yearly'" x-cloak>
+      <select
+        name="year"
+        :disabled="gran !== 'yearly'"
+        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {% for yr in ctx.year_options %}
+          <option value="{{ yr }}" {% if yr == ctx.selected_year %}selected{% endif %}>FY{{ yr }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Loading indicator -->
+    <span id="slicer-spinner" class="htmx-indicator text-xs text-gray-500">Loading…</span>
+  </form>
+</div>
+
+<!-- Data section — swapped by HTMX on period change -->
+<div id="detail-data">
+  {% include "partials/detail_data.html" %}
+</div>
+
+<style>
+  [x-cloak] { display: none !important; }
+  .htmx-indicator { display: none; }
+  .htmx-request .htmx-indicator { display: inline; }
+  .htmx-request.htmx-indicator { display: inline; }
+</style>
+
+<script>
+  function renderTrendChart() {
+    var dataEl = document.getElementById('chart-data-json');
+    if (!dataEl || !window.Plotly) return;
+
+    var data    = JSON.parse(dataEl.textContent);
+    var labels  = data.labels;
+    var revenue = data.revenue;
+    var eps     = data.eps;
+    var revenueB = revenue.map(function(v) { return v === null ? null : v / 1e9; });
+
+    var darkBg  = '#111827';
+    var gridCol = '#1f2937';
+    var textCol = '#9ca3af';
+
+    var traceRevenue = {
+      x: labels, y: revenueB, name: 'Revenue (B)',
+      type: 'scatter', mode: 'lines+markers',
+      line: { color: '#6366f1', width: 2 }, marker: { size: 5 },
+      connectgaps: false, yaxis: 'y',
+    };
+    var traceEPS = {
+      x: labels, y: eps, name: 'EPS Diluted',
+      type: 'scatter', mode: 'lines+markers',
+      line: { color: '#34d399', width: 2 }, marker: { size: 5 },
+      connectgaps: false, yaxis: 'y2',
+    };
+    var layout = {
+      paper_bgcolor: darkBg, plot_bgcolor: darkBg,
+      margin: { t: 10, r: 60, b: 60, l: 60 },
+      font: { color: textCol, size: 11 },
+      legend: { orientation: 'h', x: 0, y: -0.25, font: { color: textCol } },
+      xaxis: { tickangle: -35, gridcolor: gridCol, linecolor: gridCol, tickfont: { size: 10 } },
+      yaxis: {
+        title: { text: 'Revenue ($B)', font: { color: '#6366f1', size: 11 } },
+        gridcolor: gridCol, linecolor: gridCol,
+        tickprefix: '$', ticksuffix: 'B', tickfont: { size: 10 },
+      },
+      yaxis2: {
+        title: { text: 'EPS ($)', font: { color: '#34d399', size: 11 } },
+        overlaying: 'y', side: 'right', showgrid: false,
+        tickprefix: '$', tickfont: { size: 10 },
+      },
+    };
+    Plotly.newPlot('trend-chart', [traceRevenue, traceEPS], layout, { displayModeBar: false, responsive: true });
+  }
+
+  // Initial page load
+  document.addEventListener('DOMContentLoaded', renderTrendChart);
+
+  // After every HTMX swap into #detail-data
+  document.body.addEventListener('htmx:afterSettle', function(evt) {
+    if (evt.detail.target && evt.detail.target.id === 'detail-data') {
+      renderTrendChart();
+    }
+  });
+</script>
+
+{% endblock %}

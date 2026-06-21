@@ -1,0 +1,195 @@
+{% macro fmt_large(val) -%}
+  {%- if val is none -%}—
+  {%- else -%}
+    {%- set abs = val | abs -%}
+    {%- set sign = "-" if val < 0 else "" -%}
+    {%- if abs >= 1_000_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+    {%- elif abs >= 1_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000) }}B
+    {%- elif abs >= 1_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000) }}M
+    {%- else -%}{{ sign }}${{ "%.0f"|format(abs) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_eps(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro change_badge(pct, show_qoq=false) %}
+  {%- if pct is not none -%}
+    {%- if pct >= 0 -%}
+      <span class="inline-flex items-center gap-0.5 text-green-400 text-xs font-medium">
+        ▲ +{{ "%.1f"|format(pct) }}%{% if show_qoq %} QoQ{% endif %}
+      </span>
+    {%- else -%}
+      <span class="inline-flex items-center gap-0.5 text-red-400 text-xs font-medium">
+        ▼ {{ "%.1f"|format(pct) }}%{% if show_qoq %} QoQ{% endif %}
+      </span>
+    {%- endif -%}
+  {%- else -%}
+    <span class="text-gray-600 text-xs">—</span>
+  {%- endif -%}
+{% endmacro %}
+
+{% macro kpi_card(label, value, yoy_pct, qoq_pct=none) %}
+<div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
+  <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
+  <div class="text-2xl font-bold text-white mb-1">{{ value }}</div>
+  <div class="flex flex-col gap-0.5">
+    <div class="h-4">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">YoY</span>{% endif %}</div>
+    {% if qoq_pct is not none %}
+    <div class="h-4">{{ change_badge(qoq_pct, show_qoq=true) }}</div>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+<!-- Period label -->
+<div class="mb-4">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500">
+    {{ ctx.current.label }}
+    {% if ctx.current.period_end %}
+      <span class="normal-case text-gray-600 ml-1">(ended {{ ctx.current.period_end }})</span>
+    {% endif %}
+  </h2>
+</div>
+
+<!-- Hero KPI row -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+  {{ kpi_card(
+      "Revenue",
+      fmt_large(ctx.current.kpi.revenue),
+      ctx.current.yoy.revenue,
+      ctx.current.qoq.revenue if ctx.current.qoq else none
+  ) }}
+  {{ kpi_card(
+      "Net Income",
+      fmt_large(ctx.current.kpi.net_income),
+      ctx.current.yoy.net_income,
+      ctx.current.qoq.net_income if ctx.current.qoq else none
+  ) }}
+  {{ kpi_card(
+      "EPS (diluted)",
+      fmt_eps(ctx.current.kpi.eps_diluted),
+      ctx.current.yoy.eps_diluted,
+      ctx.current.qoq.eps_diluted if ctx.current.qoq else none
+  ) }}
+  {{ kpi_card(
+      "Free Cash Flow",
+      fmt_large(ctx.current.kpi.free_cash_flow),
+      ctx.current.yoy.free_cash_flow,
+      ctx.current.qoq.free_cash_flow if ctx.current.qoq else none
+  ) }}
+</div>
+
+<!-- Trend chart -->
+<div class="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-8">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-4">Revenue &amp; EPS Trend</h2>
+  <div id="trend-chart" style="height: 280px;"></div>
+</div>
+
+<!-- Tabbed financial tables -->
+<div
+  x-data="{ tab: 'income' }"
+  class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden"
+>
+  <!-- Tab header -->
+  <div class="flex border-b border-gray-800">
+    <button
+      @click="tab = 'income'"
+      class="px-5 py-3 text-sm font-medium transition border-b-2"
+      :class="tab === 'income' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+    >Income Statement</button>
+    <button
+      @click="tab = 'cashflow'"
+      class="px-5 py-3 text-sm font-medium transition border-b-2"
+      :class="tab === 'cashflow' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+    >Cash Flow</button>
+    <button
+      @click="tab = 'balance'"
+      class="px-5 py-3 text-sm font-medium transition border-b-2"
+      :class="tab === 'balance' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+    >Balance Sheet</button>
+  </div>
+
+  <!-- Income Statement tab -->
+  <div x-show="tab === 'income'" class="p-4">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+          <th class="text-left py-2 pr-4 font-medium">Metric</th>
+          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+          {% if ctx.current.qoq %}
+          <th class="text-right py-2 font-medium">QoQ</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800/50">
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Revenue</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.revenue) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Net Income</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.net_income) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">EPS Basic</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">EPS Diluted</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Cash Flow tab -->
+  <div x-show="tab === 'cashflow'" class="p-4">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+          <th class="text-left py-2 pr-4 font-medium">Metric</th>
+          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+          {% if ctx.current.qoq %}
+          <th class="text-right py-2 font-medium">QoQ</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800/50">
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Free Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
+        </tr>
+      </tbody>
+    </table>
+    <p class="text-xs text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
+  </div>
+
+  <!-- Balance Sheet tab -->
+  <div x-show="tab === 'balance'" class="p-6 text-center">
+    <p class="text-gray-500 text-sm">Balance sheet details coming in a future update.</p>
+  </div>
+</div>
+
+<!-- Chart data payload — read by renderTrendChart() in detail.html -->
+<script type="application/json" id="chart-data-json">
+{
+  "labels":  {{ ctx.chart_labels  | tojson }},
+  "revenue": {{ ctx.chart_revenue | tojson }},
+  "eps":     {{ ctx.chart_eps     | tojson }}
+}
+</script>

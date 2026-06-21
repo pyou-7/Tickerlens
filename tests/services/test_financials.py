@@ -13,9 +13,14 @@ from tickerlens.models.quarterly_financial import QuarterlyFinancial
 from tickerlens.services.financials import (
     CompanyNotFoundError,
     FinancialsService,
+    _build_quarterly_period,
+    _build_yearly_period,
+    _compute_qoq,
+    _compute_kpi_yoy,
     _compute_ttm,
     _compute_yoy,
     _pct_change,
+    KPISnapshot,
 )
 
 
@@ -249,6 +254,263 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
 
     financials = session.query(QuarterlyFinancial).all()
     assert any(f.revenue == pytest.approx(95_000) for f in financials)
+
+
+# ── _compute_qoq ─────────────────────────────────────────────────────────────
+
+def test_compute_qoq_calculates_change_from_prior_quarter() -> None:
+    current = _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2",
+                   revenue=100.0, eps_diluted=1.0)
+    prior   = _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
+                   revenue=80.0, eps_diluted=0.8)
+    qoq = _compute_qoq(current, prior)
+    assert qoq.revenue    == pytest.approx(25.0)
+    assert qoq.eps_diluted == pytest.approx(25.0)
+
+
+def test_compute_qoq_returns_empty_when_no_prior() -> None:
+    current = _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
+                   revenue=100.0)
+    qoq = _compute_qoq(current, None)
+    assert qoq.revenue is None
+
+
+# ── _compute_kpi_yoy ─────────────────────────────────────────────────────────
+
+def test_compute_kpi_yoy_computes_pct_change() -> None:
+    current_kpi = KPISnapshot(revenue=110.0, net_income=55.0)
+    prior_kpi   = KPISnapshot(revenue=100.0, net_income=50.0)
+    yoy = _compute_kpi_yoy(current_kpi, prior_kpi)
+    assert yoy.revenue    == pytest.approx(10.0)
+    assert yoy.net_income == pytest.approx(10.0)
+
+
+def test_compute_kpi_yoy_handles_null_values() -> None:
+    current_kpi = KPISnapshot(revenue=None, net_income=55.0)
+    prior_kpi   = KPISnapshot(revenue=100.0, net_income=None)
+    yoy = _compute_kpi_yoy(current_kpi, prior_kpi)
+    assert yoy.revenue    is None
+    assert yoy.net_income is None
+
+
+# ── _build_quarterly_period ───────────────────────────────────────────────────
+
+def test_build_quarterly_period_selects_correct_row() -> None:
+    rows = [
+        _row(period_end=dt.date(2024, 9, 30), fiscal_year=2024, fiscal_period="Q3", revenue=91.0),
+        _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=100.0),
+    ]
+    data, label = _build_quarterly_period(rows, "Q1 FY2025", rows[-1])
+    assert label == "Q1 FY2025"
+    assert data.kpi.revenue == pytest.approx(95.0)
+    assert data.fiscal_period == "Q1"
+    assert data.fiscal_year == 2025
+
+
+def test_build_quarterly_period_computes_yoy_and_qoq() -> None:
+    q3_2024 = _row(period_end=dt.date(2024, 9, 30), fiscal_year=2024, fiscal_period="Q3", revenue=91.0)
+    q3_2025 = _row(period_end=dt.date(2025, 9, 28), fiscal_year=2025, fiscal_period="Q3", revenue=100.0)
+    q2_2025 = _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=85.0)
+    rows = [q3_2024, q2_2025, q3_2025]
+
+    data, _ = _build_quarterly_period(rows, "Q3 FY2025", q3_2025)
+    expected_yoy = (100.0 - 91.0) / 91.0 * 100
+    assert data.yoy.revenue == pytest.approx(expected_yoy)
+    # QoQ vs Q2 2025 (previous row)
+    expected_qoq = (100.0 - 85.0) / 85.0 * 100
+    assert data.qoq is not None
+    assert data.qoq.revenue == pytest.approx(expected_qoq)
+
+
+def test_build_quarterly_period_falls_back_to_latest_on_bad_label() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=100.0),
+    ]
+    data, label = _build_quarterly_period(rows, "INVALID", rows[-1])
+    assert data.kpi.revenue == pytest.approx(100.0)   # latest
+    assert label == "Q2 FY2025"
+
+
+def test_build_quarterly_period_no_qoq_for_first_row() -> None:
+    rows = [
+        _row(period_end=dt.date(2023, 9, 30), fiscal_year=2023, fiscal_period="Q3", revenue=88.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=100.0),
+    ]
+    # Select earliest row — has no prior QoQ
+    data, _ = _build_quarterly_period(rows, "Q3 FY2023", rows[-1])
+    assert data.qoq is not None
+    assert data.qoq.revenue is None   # prior is None → _compute_qoq returns empty KPIChange
+
+
+# ── _build_yearly_period ─────────────────────────────────────────────────────
+
+def test_build_yearly_period_sums_all_quarters_in_year() -> None:
+    rows = [
+        _row(period_end=dt.date(2024, 12, 31), fiscal_year=2024, fiscal_period="Q4", revenue=119.0),
+        _row(period_end=dt.date(2025, 3, 31),  fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30),  fiscal_year=2025, fiscal_period="Q2", revenue=85.0),
+        _row(period_end=dt.date(2025, 9, 28),  fiscal_year=2025, fiscal_period="Q3", revenue=94.0),
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4", revenue=124.0),
+    ]
+    data = _build_yearly_period(rows, selected_year=2025, default_year=2025)
+    assert data.label == "FY2025"
+    assert data.fiscal_period is None
+    assert data.qoq is None
+    assert data.kpi.revenue == pytest.approx(95.0 + 85.0 + 94.0 + 124.0)
+
+
+def test_build_yearly_period_computes_yoy_vs_prior_year() -> None:
+    rows = [
+        _row(period_end=dt.date(2024, 3, 31),  fiscal_year=2024, fiscal_period="Q1", revenue=90.0),
+        _row(period_end=dt.date(2024, 6, 30),  fiscal_year=2024, fiscal_period="Q2", revenue=80.0),
+        _row(period_end=dt.date(2025, 3, 31),  fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30),  fiscal_year=2025, fiscal_period="Q2", revenue=85.0),
+    ]
+    data = _build_yearly_period(rows, selected_year=2025, default_year=2025)
+    prior_rev = 90.0 + 80.0
+    current_rev = 95.0 + 85.0
+    expected_yoy = (current_rev - prior_rev) / prior_rev * 100
+    assert data.yoy.revenue == pytest.approx(expected_yoy)
+
+
+def test_build_yearly_period_falls_back_to_default_when_year_missing() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=85.0),
+    ]
+    data = _build_yearly_period(rows, selected_year=2099, default_year=2025)
+    assert data.fiscal_year == 2025
+
+
+# ── get_detail ────────────────────────────────────────────────────────────────
+
+def test_get_detail_returns_correct_quarterly_context(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    rows = [
+        _row(cik=cik, period_end=dt.date(2024, 9, 30), fiscal_year=2024, fiscal_period="Q3",
+             revenue=91_000, net_income=21_000, eps_basic=1.40, eps_diluted=1.38, free_cash_flow=20_000),
+        _row(cik=cik, period_end=dt.date(2024, 12, 31), fiscal_year=2024, fiscal_period="Q4",
+             revenue=119_575, net_income=33_917, eps_basic=2.21, eps_diluted=2.18, free_cash_flow=26_600),
+        _row(cik=cik, period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
+             revenue=95_359, net_income=24_780, eps_basic=1.65, eps_diluted=1.64, free_cash_flow=30_300),
+        _row(cik=cik, period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2",
+             revenue=85_777, net_income=21_448, eps_basic=1.43, eps_diluted=1.40, free_cash_flow=22_700),
+        _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025, fiscal_period="Q3",
+             revenue=94_930, net_income=23_630, eps_basic=1.57, eps_diluted=1.55, free_cash_flow=26_800),
+    ]
+    for r in rows:
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="quarterly", selected_quarter="Q3 FY2025")
+
+    assert ctx.granularity == "quarterly"
+    assert ctx.selected_quarter == "Q3 FY2025"
+    assert ctx.current.label == "Q3 FY2025"
+    assert ctx.current.kpi.revenue == pytest.approx(94_930)
+    # YoY vs Q3 2024
+    expected_yoy = (94_930 - 91_000) / 91_000 * 100
+    assert ctx.current.yoy.revenue == pytest.approx(expected_yoy)
+    # QoQ vs Q2 2025
+    expected_qoq = (94_930 - 85_777) / 85_777 * 100
+    assert ctx.current.qoq is not None
+    assert ctx.current.qoq.revenue == pytest.approx(expected_qoq)
+
+
+def test_get_detail_returns_correct_yearly_context(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    rows = [
+        _row(cik=cik, period_end=dt.date(2024, 3, 31), fiscal_year=2024, fiscal_period="Q1", revenue=90_000),
+        _row(cik=cik, period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95_000),
+        _row(cik=cik, period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=85_000),
+    ]
+    for r in rows:
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
+
+    assert ctx.granularity == "yearly"
+    assert ctx.selected_year == 2025
+    assert ctx.current.label == "FY2025"
+    assert ctx.current.fiscal_period is None
+    assert ctx.current.qoq is None
+    assert ctx.current.kpi.revenue == pytest.approx(95_000 + 85_000)
+
+
+def test_get_detail_defaults_to_latest_quarter(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025, fiscal_period="Q3",
+                     revenue=94_930))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL")
+    assert ctx.current.label == "Q3 FY2025"
+
+
+def test_get_detail_raises_when_no_data(session: Session) -> None:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    with pytest.raises(CompanyNotFoundError):
+        svc.get_detail("AAPL")
+
+
+def test_get_detail_chart_data_is_chronological(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    rows = [
+        _row(cik=cik, period_end=dt.date(2024, 3, 31), fiscal_year=2024, fiscal_period="Q1", revenue=90_000),
+        _row(cik=cik, period_end=dt.date(2024, 6, 30), fiscal_year=2024, fiscal_period="Q2", revenue=80_000),
+        _row(cik=cik, period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95_000),
+    ]
+    for r in rows:
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL")
+    assert ctx.chart_labels == ["Q1 FY2024", "Q2 FY2024", "Q1 FY2025"]
+    assert ctx.chart_revenue == [pytest.approx(90_000), pytest.approx(80_000), pytest.approx(95_000)]
+
+
+def test_get_detail_quarter_options_most_recent_first(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    rows = [
+        _row(cik=cik, period_end=dt.date(2024, 3, 31), fiscal_year=2024, fiscal_period="Q1", revenue=90_000),
+        _row(cik=cik, period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=85_000),
+    ]
+    for r in rows:
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL")
+    assert ctx.quarter_options[0] == "Q2 FY2025"
+    assert ctx.quarter_options[-1] == "Q1 FY2024"
 
 
 def test_fetch_and_persist_upsert_is_idempotent(session: Session) -> None:
