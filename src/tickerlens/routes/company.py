@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -42,7 +43,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
 def company_detail(
     request: Request,
     ticker: str,
-    granularity: str = "quarterly",
+    granularity: Literal["quarterly", "yearly"] = "quarterly",
     quarter: str | None = None,
     year: int | None = None,
 ) -> HTMLResponse:
@@ -71,7 +72,7 @@ def company_detail(
 def company_detail_data(
     request: Request,
     ticker: str,
-    granularity: str = "quarterly",
+    granularity: Literal["quarterly", "yearly"] = "quarterly",
     quarter: str | None = None,
     year: int | None = None,
 ) -> HTMLResponse:

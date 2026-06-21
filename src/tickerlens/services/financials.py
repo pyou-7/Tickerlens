@@ -362,6 +362,22 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
     )
 
 
+def _is_prior_quarter(
+    candidate: QuarterlyFinancial | None, current: QuarterlyFinancial
+) -> bool:
+    """True only when candidate is the quarter immediately before current."""
+    if candidate is None:
+        return False
+    _prev = {"Q2": ("Q1", 0), "Q3": ("Q2", 0), "Q4": ("Q3", 0), "Q1": ("Q4", -1)}
+    expected_fp, fy_delta = _prev.get(current.fiscal_period, (None, None))
+    if expected_fp is None:
+        return False
+    return (
+        candidate.fiscal_period == expected_fp
+        and candidate.fiscal_year == current.fiscal_year + fy_delta
+    )
+
+
 def _compute_qoq(
     current: QuarterlyFinancial, prior: QuarterlyFinancial | None
 ) -> KPIChange:
@@ -414,7 +430,10 @@ def _build_quarterly_period(
     corrected_label = f"{row.fiscal_period} FY{row.fiscal_year}"
 
     row_idx = next((i for i, r in enumerate(all_rows) if r is row), len(all_rows) - 1)
-    prior_qoq = all_rows[row_idx - 1] if row_idx > 0 else None
+    _candidate = all_rows[row_idx - 1] if row_idx > 0 else None
+    # Only treat the candidate as QoQ if it is truly the immediately preceding quarter
+    # (handles gaps in DB history — e.g. Q3 2023 followed by Q2 2025).
+    prior_qoq = _candidate if _is_prior_quarter(_candidate, row) else None
 
     return (
         PeriodData(

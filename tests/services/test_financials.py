@@ -333,6 +333,17 @@ def test_build_quarterly_period_falls_back_to_latest_on_bad_label() -> None:
     assert label == "Q2 FY2025"
 
 
+def test_build_quarterly_period_no_qoq_when_prior_row_is_not_adjacent_quarter() -> None:
+    # DB has Q3 2023 and Q2 2025 — a big gap. QoQ should be None, not Q3 2023.
+    rows = [
+        _row(period_end=dt.date(2023, 9, 30), fiscal_year=2023, fiscal_period="Q3", revenue=88.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=100.0),
+    ]
+    data, _ = _build_quarterly_period(rows, "Q2 FY2025", rows[-1])
+    assert data.qoq is not None
+    assert data.qoq.revenue is None  # gap → _is_prior_quarter returns False → empty KPIChange
+
+
 def test_build_quarterly_period_no_qoq_for_first_row() -> None:
     rows = [
         _row(period_end=dt.date(2023, 9, 30), fiscal_year=2023, fiscal_period="Q3", revenue=88.0),
