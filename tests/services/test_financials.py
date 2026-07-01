@@ -45,6 +45,10 @@ def _row(
     eps_basic: float | None = None,
     eps_diluted: float | None = None,
     free_cash_flow: float | None = None,
+    total_assets: float | None = None,
+    total_liabilities: float | None = None,
+    total_equity: float | None = None,
+    cash_and_equivalents: float | None = None,
 ) -> QuarterlyFinancial:
     r = QuarterlyFinancial()
     r.cik = cik
@@ -56,6 +60,10 @@ def _row(
     r.eps_basic = eps_basic
     r.eps_diluted = eps_diluted
     r.free_cash_flow = free_cash_flow
+    r.total_assets = total_assets
+    r.total_liabilities = total_liabilities
+    r.total_equity = total_equity
+    r.cash_and_equivalents = cash_and_equivalents
     r.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     return r
 
@@ -432,6 +440,42 @@ def test_get_detail_returns_correct_quarterly_context(session: Session) -> None:
     expected_qoq = (94_930 - 85_777) / 85_777 * 100
     assert ctx.current.qoq is not None
     assert ctx.current.qoq.revenue == pytest.approx(expected_qoq)
+
+
+def test_get_detail_exposes_balance_sheet_with_yoy(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    rows = [
+        _row(cik=cik, period_end=dt.date(2024, 9, 28), fiscal_year=2024, fiscal_period="Q3",
+             revenue=94_000, total_assets=352_000, total_liabilities=290_000,
+             total_equity=62_000, cash_and_equivalents=29_000),
+        _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025, fiscal_period="Q2",
+             revenue=85_000, total_assets=331_000, total_liabilities=265_000,
+             total_equity=66_000, cash_and_equivalents=28_000),
+        _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025, fiscal_period="Q3",
+             revenue=94_930, total_assets=364_000, total_liabilities=308_000,
+             total_equity=56_000, cash_and_equivalents=30_000),
+    ]
+    for r in rows:
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="quarterly", selected_quarter="Q3 FY2025")
+
+    bs = ctx.current.balance_sheet
+    assert bs.total_assets == pytest.approx(364_000)
+    assert bs.total_equity == pytest.approx(56_000)
+    # YoY vs Q3 2024
+    expected_yoy = (364_000 - 352_000) / 352_000 * 100
+    assert ctx.current.balance_sheet_yoy.total_assets == pytest.approx(expected_yoy)
+    # QoQ vs Q2 2025
+    assert ctx.current.balance_sheet_qoq is not None
+    expected_qoq = (364_000 - 331_000) / 331_000 * 100
+    assert ctx.current.balance_sheet_qoq.total_assets == pytest.approx(expected_qoq)
 
 
 def test_get_detail_returns_correct_yearly_context(session: Session) -> None:

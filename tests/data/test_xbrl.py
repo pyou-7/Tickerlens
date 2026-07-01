@@ -2,6 +2,7 @@ import datetime as dt
 
 from tickerlens.data.xbrl import (
     Metric,
+    balance_sheet_metric,
     concept_facts,
     extract_recent_quarterly_financials,
     infer_fiscal_year,
@@ -129,6 +130,59 @@ def test_recent_quarterly_financials_joins_by_end_date_not_label() -> None:
     ]
 
 
+def test_balance_sheet_metric_takes_latest_filed_per_end() -> None:
+    # Same period end reported twice (a 10-Q then a restated later filing) plus a second
+    # quarter. We keep the latest-filed value per end date.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            instant_fact("2025-03-29", 331_000, 2025, "Q1", filed="2025-05-01"),
+                            # restated later — must win for the same end date
+                            instant_fact("2025-03-29", 331_500, 2025, "Q1", filed="2025-08-05"),
+                            instant_fact("2025-06-28", 337_000, 2025, "Q2", filed="2025-08-05"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+    values = balance_sheet_metric(companyfacts, Metric.TOTAL_ASSETS, fiscal_year_end="0928")
+
+    assert values[dt.date(2025, 3, 29)] == 331_500  # latest filed wins
+    assert values[dt.date(2025, 6, 28)] == 337_000
+
+
+def test_extract_joins_balance_sheet_by_period_end() -> None:
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-12-29", "2026-03-29", 24_062, 2026, "Q1"),
+        ],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        assets_values=[
+            ("2026-03-29", 331_233, 2026, "Q1"),  # matches the revenue period end
+            ("2025-12-28", 344_085, 2025, "Q4"),  # different end — must not leak in
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts,
+        fiscal_year_end="0928",
+        periods=4,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].period == "FY2026 Q1"
+    assert rows[0].total_assets == 331_233
+
+
 def make_companyfacts(
     *,
     revenue_values: list[tuple[str, str, float, int, str]],
@@ -137,25 +191,45 @@ def make_companyfacts(
     diluted_eps_values: list[tuple[str, str, float, int, str]],
     opcf_values: list[tuple[str, str, float, int, str]],
     capex_values: list[tuple[str, str, float, int, str]],
+    assets_values: list[tuple[str, float, int, str]] | None = None,
 ) -> dict:
-    return {
-        "facts": {
-            "us-gaap": {
-                "RevenueFromContractWithCustomerExcludingAssessedTax": units(
-                    "USD", revenue_values
-                ),
-                "NetIncomeLoss": units("USD", net_income_values),
-                "EarningsPerShareBasic": units("USD/shares", basic_eps_values),
-                "EarningsPerShareDiluted": units("USD/shares", diluted_eps_values),
-                "NetCashProvidedByUsedInOperatingActivities": units("USD", opcf_values),
-                "PaymentsToAcquirePropertyPlantAndEquipment": units("USD", capex_values),
-            }
-        }
+    us_gaap = {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
+        "NetIncomeLoss": units("USD", net_income_values),
+        "EarningsPerShareBasic": units("USD/shares", basic_eps_values),
+        "EarningsPerShareDiluted": units("USD/shares", diluted_eps_values),
+        "NetCashProvidedByUsedInOperatingActivities": units("USD", opcf_values),
+        "PaymentsToAcquirePropertyPlantAndEquipment": units("USD", capex_values),
     }
+    if assets_values is not None:
+        us_gaap["Assets"] = instant_units(assets_values)
+    return {"facts": {"us-gaap": us_gaap}}
 
 
 def units(unit_name: str, values: list[tuple[str, str, float, int, str]]) -> dict:
     return {"units": {unit_name: [fact(*value) for value in values]}}
+
+
+def instant_units(values: list[tuple[str, float, int, str]]) -> dict:
+    return {"units": {"USD": [instant_fact(*value) for value in values]}}
+
+
+def instant_fact(
+    end: str,
+    val: float,
+    fy: int,
+    fp: str,
+    filed: str = "2026-04-22",
+) -> dict:
+    """An instant (point-in-time) balance-sheet fact — has ``end`` but no ``start``."""
+    return {
+        "end": end,
+        "val": val,
+        "fy": fy,
+        "fp": fp,
+        "form": "10-Q" if fp != "FY" else "10-K",
+        "filed": filed,
+    }
 
 
 def fact(

@@ -43,6 +43,22 @@ class KPIChange(BaseModel):
     free_cash_flow: float | None = None
 
 
+class BalanceSheet(BaseModel):
+    """Point-in-time balance-sheet values as of a period end."""
+    total_assets: float | None = None
+    total_liabilities: float | None = None
+    total_equity: float | None = None
+    cash_and_equivalents: float | None = None
+
+
+class BalanceSheetChange(BaseModel):
+    """Percentage change for each balance-sheet line (None = not computable)."""
+    total_assets: float | None = None
+    total_liabilities: float | None = None
+    total_equity: float | None = None
+    cash_and_equivalents: float | None = None
+
+
 class CompanyOverview(BaseModel):
     cik: str
     name: str
@@ -70,6 +86,9 @@ class PeriodData(BaseModel):
     kpi: KPISnapshot
     yoy: KPIChange
     qoq: KPIChange | None       # None for yearly
+    balance_sheet: BalanceSheet
+    balance_sheet_yoy: BalanceSheetChange
+    balance_sheet_qoq: BalanceSheetChange | None  # None for yearly
 
 
 class DetailContext(BaseModel):
@@ -321,6 +340,24 @@ def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
     )
 
 
+def _to_bs(row: QuarterlyFinancial) -> BalanceSheet:
+    return BalanceSheet(
+        total_assets=row.total_assets,
+        total_liabilities=row.total_liabilities,
+        total_equity=row.total_equity,
+        cash_and_equivalents=row.cash_and_equivalents,
+    )
+
+
+def _bs_change(current: BalanceSheet, prior: BalanceSheet) -> BalanceSheetChange:
+    return BalanceSheetChange(
+        total_assets=_pct_change(current.total_assets, prior.total_assets),
+        total_liabilities=_pct_change(current.total_liabilities, prior.total_liabilities),
+        total_equity=_pct_change(current.total_equity, prior.total_equity),
+        cash_and_equivalents=_pct_change(current.cash_and_equivalents, prior.cash_and_equivalents),
+    )
+
+
 def _sum_nullable(*values: float | None) -> float | None:
     nums = [v for v in values if v is not None]
     return sum(nums) if nums else None
@@ -360,6 +397,30 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         eps_diluted=_pct_change(latest.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(latest.free_cash_flow, prior.free_cash_flow),
     )
+
+
+def _compute_bs_yoy(
+    latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]
+) -> BalanceSheetChange:
+    prior = next(
+        (
+            r for r in rows
+            if r.fiscal_period == latest.fiscal_period
+            and r.fiscal_year == latest.fiscal_year - 1
+        ),
+        None,
+    )
+    if prior is None:
+        return BalanceSheetChange()
+    return _bs_change(_to_bs(latest), _to_bs(prior))
+
+
+def _compute_bs_qoq(
+    current: QuarterlyFinancial, prior: QuarterlyFinancial | None
+) -> BalanceSheetChange:
+    if prior is None:
+        return BalanceSheetChange()
+    return _bs_change(_to_bs(current), _to_bs(prior))
 
 
 def _is_prior_quarter(
@@ -444,6 +505,9 @@ def _build_quarterly_period(
             kpi=_to_kpi(row),
             yoy=_compute_yoy(row, list(all_rows)),
             qoq=_compute_qoq(row, prior_qoq),
+            balance_sheet=_to_bs(row),
+            balance_sheet_yoy=_compute_bs_yoy(row, list(all_rows)),
+            balance_sheet_qoq=_compute_bs_qoq(row, prior_qoq),
         ),
         corrected_label,
     )
@@ -465,6 +529,15 @@ def _build_yearly_period(
     prior_rows = [r for r in all_rows if r.fiscal_year == selected_year - 1]
     yoy = _compute_kpi_yoy(kpi, _compute_ttm(prior_rows)) if prior_rows else KPIChange()
 
+    # Balance sheet is a point-in-time value — use the year's last quarter (year end),
+    # not a sum, and compare against the prior year's last quarter.
+    balance_sheet = _to_bs(year_rows[-1]) if year_rows else BalanceSheet()
+    balance_sheet_yoy = (
+        _bs_change(balance_sheet, _to_bs(prior_rows[-1]))
+        if year_rows and prior_rows
+        else BalanceSheetChange()
+    )
+
     return PeriodData(
         label=f"FY{selected_year}",
         period_end=year_rows[-1].period_end if year_rows else None,
@@ -473,6 +546,9 @@ def _build_yearly_period(
         kpi=kpi,
         yoy=yoy,
         qoq=None,
+        balance_sheet=balance_sheet,
+        balance_sheet_yoy=balance_sheet_yoy,
+        balance_sheet_qoq=None,
     )
 
 
@@ -517,6 +593,10 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             eps_basic=row.eps_basic,
             eps_diluted=row.eps_diluted,
             free_cash_flow=row.free_cash_flow,
+            total_assets=row.total_assets,
+            total_liabilities=row.total_liabilities,
+            total_equity=row.total_equity,
+            cash_and_equivalents=row.cash_and_equivalents,
             updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
         )
         .on_conflict_do_update(
@@ -529,6 +609,10 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "eps_basic": row.eps_basic,
                 "eps_diluted": row.eps_diluted,
                 "free_cash_flow": row.free_cash_flow,
+                "total_assets": row.total_assets,
+                "total_liabilities": row.total_liabilities,
+                "total_equity": row.total_equity,
+                "cash_and_equivalents": row.cash_and_equivalents,
                 "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
             },
         )

@@ -6,9 +6,9 @@ This file is a living document. Update it as decisions are made or phases shift.
 
 ## Current Phase
 
-**Phase 1 — Data flowing for one company**
+**Phase 2 — Single-company browsing UI**
 
-Goal: turn the Phase 0 notebook findings into reusable EDGAR/XBRL modules and local storage for one company.
+Goal: a usable Overview page and Time Slicer detail view for one company, single-period mode first. Range and Compare modes are deferred to Phase 3.
 
 ---
 
@@ -17,24 +17,29 @@ Goal: turn the Phase 0 notebook findings into reusable EDGAR/XBRL modules and lo
 - PRD written and refined (`docs/PRD_Tickerlens.md` — v1.0 personal scope)
 - Working context captured in `CLAUDE.md`, `README.md`, and `docs/AGENT_HANDOFF.md`
 - Stack chosen and locked (see `CLAUDE.md`)
-- Project structure planned
 - Claude Code context configured (`CLAUDE.md` + `.claude/`)
 - Phase 0 EDGAR feasibility passed with AAPL and JNJ notebooks
-- Multi-agent handoff docs added (`README.md`, `docs/AGENT_HANDOFF.md`, `CLAUDE.md`)
+- **Phase 1 complete** — data flows end-to-end for one company:
+  - `data/edgar.py`, `data/xbrl.py`, `data/sic.py`, `data/wikipedia.py`, `data/yahoo.py`
+  - `models/` (Company, QuarterlyFinancial) + Alembic migrations
+  - `services/financials.py` (`fetch_and_persist`, `enrich_company`, `get_overview`, `get_detail`)
+  - `tests/` — 36 passing (XBRL + financials service)
+- **Phase 2 in progress:**
+  - Overview page (PRD §4.1): header, description, latest-quarter KPI cards w/ YoY, TTM snapshot
+  - Time Slicer detail view (PRD §4.3): quarterly/yearly selectors, HTMX swap, Plotly revenue+EPS trend, hero KPIs, tabbed Income/Cash Flow tables — single-period mode
 
 ---
 
-## What's next (concrete tasks)
+## What's next (concrete Phase 2 tasks)
 
-1. ~~Initialize the `uv` project skeleton~~ *(minimal setup done: .env, .gitignore, pyproject.toml, deps)*
-2. ~~Create `notebooks/01_edgar_first_look.ipynb`~~ *(created; smoke test passing)*
-3. ~~Pull Apple's most recent 10-Q from SEC EDGAR using the `companyfacts` API~~ *(done in `notebooks/01_edgar_first_look.ipynb`)*
-4. ~~Extract Revenue, Net Income, EPS, FCF for the most recent 4 quarters~~ *(done for AAPL and JNJ)*
-5. ~~Repeat for one company in a different sector (e.g., JNJ healthcare, JPM finance) — compare XBRL tagging differences~~ *(done in `notebooks/02_edgar_generalization_jnj.ipynb`)*
-6. ~~**Decision gate:** is self-built EDGAR parsing tractable in a personal-time budget, or pivot to a paid API (FMP, Finnhub paid)?~~ *(continue self-built EDGAR into Phase 1)*
-7. Pin Python to 3.12 at start of Phase 1 (currently 3.11.9 via Anaconda)
-8. ~~Start Phase 1 project skeleton under `src/tickerlens/`, beginning with `data/edgar.py` and `data/xbrl.py`~~ *(done; reusable EDGAR client, XBRL mapper, financials service, and XBRL tests added)*
-9. Add local persistence models and migrations for companies + quarterly financials
+1. ~~**Balance Sheet tab** in the detail view~~ *(done — instant-fact extraction for assets/liabilities/equity/cash, persisted, with YoY/QoQ; PR on `phase2/balance-sheet-tab`)*
+2. **Revenue breakdown card** on the Overview (PRD §4.1 #5) — segment/geography auto-detect (tabbed if both exist, single if one, hidden if neither).
+3. **Detail collapsible sections** (PRD §4.3 #6): press-release highlights, guidance, transcript excerpts, risk factors — "Not available for this period" when missing.
+4. **Sticky Download button** in the detail view (PRD §4.3 #7).
+5. **QoQ toggle** — make QoQ change indicators toggleable instead of always shown.
+6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+
+Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or news feed — those are Phase 3+.
 
 ---
 
@@ -51,6 +56,7 @@ Goal: turn the Phase 0 notebook findings into reusable EDGAR/XBRL modules and lo
 
 | Date | Decision |
 |---|---|
+| 2026-06-29 | Reconciled `PROJECT_STATUS.md` with actual state: Phase 1 complete, Phase 2 (Overview + Time Slicer detail) in progress. Set up a daily scheduled cloud agent that picks one Phase 2 task and opens a PR for review |
 | 2026-05-31 | Added `docs/AGENT_HANDOFF.md` as the concise current-state handoff for Codex, Claude Code, Gemini, and future agents |
 | 2026-05-31 | Moved Phase 0 notebook logic into reusable modules: `data/edgar.py`, `data/xbrl.py`, and `services/financials.py`; XBRL joins are anchored by period end date |
 | 2026-05-31 | Phase 0 EDGAR decision gate passed: AAPL and JNJ both work with `companyfacts`; continue self-built EDGAR into Phase 1, with explicit concept mapping and period-label handling |

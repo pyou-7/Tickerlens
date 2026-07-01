@@ -20,6 +20,11 @@ class QuarterlyFinancial(Base):
     eps_basic: Mapped[float | None] = mapped_column(Float)
     eps_diluted: Mapped[float | None] = mapped_column(Float)
     free_cash_flow: Mapped[float | None] = mapped_column(Float)
+    # Balance sheet (instant, as of period_end)
+    total_assets: Mapped[float | None] = mapped_column(Float)
+    total_liabilities: Mapped[float | None] = mapped_column(Float)
+    total_equity: Mapped[float | None] = mapped_column(Float)
+    cash_and_equivalents: Mapped[float | None] = mapped_column(Float)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )
