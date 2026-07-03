@@ -15,15 +15,15 @@
   {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
 {%- endmacro %}
 
-{% macro change_badge(pct, show_qoq=false) %}
+{% macro change_badge(pct) %}
   {%- if pct is not none -%}
     {%- if pct >= 0 -%}
       <span class="inline-flex items-center gap-0.5 text-green-400 text-xs font-medium">
-        ▲ +{{ "%.1f"|format(pct) }}%{% if show_qoq %} QoQ{% endif %}
+        ▲ +{{ "%.1f"|format(pct) }}%
       </span>
     {%- else -%}
       <span class="inline-flex items-center gap-0.5 text-red-400 text-xs font-medium">
-        ▼ {{ "%.1f"|format(pct) }}%{% if show_qoq %} QoQ{% endif %}
+        ▼ {{ "%.1f"|format(pct) }}%
       </span>
     {%- endif -%}
   {%- else -%}
@@ -31,55 +31,74 @@
   {%- endif -%}
 {% endmacro %}
 
+{# kpi_card shows a single change badge that follows the `changeMode` toggle
+   ("yoy" | "qoq") from the enclosing x-data scope. When a period has no QoQ
+   (yearly view, or a quarter with no adjacent prior), only the YoY badge is
+   rendered and the toggle is hidden by the caller. #}
 {% macro kpi_card(label, value, yoy_pct, qoq_pct=none) %}
 <div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
   <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
   <div class="text-2xl font-bold text-white mb-1">{{ value }}</div>
-  <div class="flex flex-col gap-0.5">
-    <div class="h-4">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">YoY</span>{% endif %}</div>
+  <div class="h-4">
+    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">YoY</span>{% endif %}</span>
     {% if qoq_pct is not none %}
-    <div class="h-4">{{ change_badge(qoq_pct, show_qoq=true) }}</div>
+    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-gray-600 text-xs">QoQ</span></span>
     {% endif %}
   </div>
 </div>
 {% endmacro %}
 
-<!-- Period label -->
-<div class="mb-4">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500">
-    {{ ctx.current.label }}
-    {% if ctx.current.period_end %}
-      <span class="normal-case text-gray-600 ml-1">(ended {{ ctx.current.period_end }})</span>
+<!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card.
+     changeMode resets to 'yoy' on each HTMX period swap (this partial is re-rendered),
+     which is the intended default when the selected period changes. -->
+<div x-data="{ changeMode: 'yoy' }">
+  <!-- Period label + change-mode toggle -->
+  <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
+    <h2 class="text-xs uppercase tracking-widest text-gray-500">
+      {{ ctx.current.label }}
+      {% if ctx.current.period_end %}
+        <span class="normal-case text-gray-600 ml-1">(ended {{ ctx.current.period_end }})</span>
+      {% endif %}
+    </h2>
+    {% if ctx.current.qoq %}
+    <div class="flex rounded-lg overflow-hidden border border-gray-700 text-xs" role="group" aria-label="Change comparison mode">
+      <button type="button" @click="changeMode = 'yoy'" :aria-pressed="changeMode === 'yoy'"
+              class="px-3 py-1 transition"
+              :class="changeMode === 'yoy' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">YoY</button>
+      <button type="button" @click="changeMode = 'qoq'" :aria-pressed="changeMode === 'qoq'"
+              class="px-3 py-1 transition"
+              :class="changeMode === 'qoq' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">QoQ</button>
+    </div>
     {% endif %}
-  </h2>
-</div>
+  </div>
 
-<!-- Hero KPI row -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-  {{ kpi_card(
-      "Revenue",
-      fmt_large(ctx.current.kpi.revenue),
-      ctx.current.yoy.revenue,
-      ctx.current.qoq.revenue if ctx.current.qoq else none
-  ) }}
-  {{ kpi_card(
-      "Net Income",
-      fmt_large(ctx.current.kpi.net_income),
-      ctx.current.yoy.net_income,
-      ctx.current.qoq.net_income if ctx.current.qoq else none
-  ) }}
-  {{ kpi_card(
-      "EPS (diluted)",
-      fmt_eps(ctx.current.kpi.eps_diluted),
-      ctx.current.yoy.eps_diluted,
-      ctx.current.qoq.eps_diluted if ctx.current.qoq else none
-  ) }}
-  {{ kpi_card(
-      "Free Cash Flow",
-      fmt_large(ctx.current.kpi.free_cash_flow),
-      ctx.current.yoy.free_cash_flow,
-      ctx.current.qoq.free_cash_flow if ctx.current.qoq else none
-  ) }}
+  <!-- Hero KPI row -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+    {{ kpi_card(
+        "Revenue",
+        fmt_large(ctx.current.kpi.revenue),
+        ctx.current.yoy.revenue,
+        ctx.current.qoq.revenue if ctx.current.qoq else none
+    ) }}
+    {{ kpi_card(
+        "Net Income",
+        fmt_large(ctx.current.kpi.net_income),
+        ctx.current.yoy.net_income,
+        ctx.current.qoq.net_income if ctx.current.qoq else none
+    ) }}
+    {{ kpi_card(
+        "EPS (diluted)",
+        fmt_eps(ctx.current.kpi.eps_diluted),
+        ctx.current.yoy.eps_diluted,
+        ctx.current.qoq.eps_diluted if ctx.current.qoq else none
+    ) }}
+    {{ kpi_card(
+        "Free Cash Flow",
+        fmt_large(ctx.current.kpi.free_cash_flow),
+        ctx.current.yoy.free_cash_flow,
+        ctx.current.qoq.free_cash_flow if ctx.current.qoq else none
+    ) }}
+  </div>
 </div>
 
 <!-- Trend chart -->
@@ -88,7 +107,9 @@
   <div id="trend-chart" style="height: 280px;"></div>
 </div>
 
-<!-- Tabbed financial tables -->
+<!-- Tabbed financial tables.
+     These always show both YoY and QoQ columns (when a prior quarter exists);
+     the YoY/QoQ toggle above applies to the hero KPI cards only. -->
 <div
   x-data="{ tab: 'income' }"
   class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden"
