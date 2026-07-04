@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import String, DateTime
+from sqlalchemy import String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tickerlens.models.base import Base
@@ -17,6 +17,8 @@ class Company(Base):
     description: Mapped[str | None] = mapped_column(String(2000))
     last_price: Mapped[float | None] = mapped_column()
     market_cap: Mapped[float | None] = mapped_column()
+    risk_factors: Mapped[str | None] = mapped_column(Text)
+    risk_factors_source: Mapped[str | None] = mapped_column(String(64))  # e.g. "10-K filed 2024-11-01"
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )

@@ -252,6 +252,39 @@
   </div>
 </div>
 
+<!-- Collapsible disclosure sections (PRD 4.3 #6).
+     Each stays visible and shows "Not available for this period" when empty, so
+     the reader knows where to look. Risk Factors are populated from the latest
+     10-K; the others await their content sources in a later phase. -->
+{% macro disclosure(title, body, source=none) %}
+<div x-data="{ open: false }" class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden">
+  <button type="button" @click="open = !open" :aria-expanded="open"
+          class="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-gray-800/30 transition">
+    <span class="text-sm font-medium text-gray-200">{{ title }}</span>
+    <svg class="w-4 h-4 text-gray-500 transition-transform" :class="open && 'rotate-180'"
+         fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+    </svg>
+  </button>
+  <div x-show="open" x-cloak class="px-5 pb-4 border-t border-gray-800/50 pt-3">
+    {% if body %}
+      <div class="text-sm text-gray-400 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-line">{{ body }}</div>
+      {% if source %}<p class="text-xs text-gray-600 mt-3">Source: {{ source }}</p>{% endif %}
+    {% else %}
+      <p class="text-sm text-gray-600">Not available for this period.</p>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+<div class="mt-8 space-y-3">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-1">Disclosures</h2>
+  {{ disclosure("Press release highlights", none) }}
+  {{ disclosure("Management guidance", none) }}
+  {{ disclosure("Transcript excerpts", none) }}
+  {{ disclosure("Risk factors", ctx.risk_factors, ctx.risk_factors_source) }}
+</div>
+
 <!-- Chart data payload — read by renderTrendChart() in detail.html -->
 <script type="application/json" id="chart-data-json">
 {
