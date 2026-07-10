@@ -34,7 +34,7 @@ If the tool proves useful in practice, commercialization is a possible future di
 - Time slicer with three modes: single period, range, side-by-side compare
 - Two separate selectors: Quarterly (e.g., "Q3 FY2025") and Yearly (e.g., "FY2025")
 - 3-year historical depth
-- Ticker / company-name search with autocomplete
+- Ticker / company-name search with autocomplete (combobox with ranked suggestions — Section 4.10)
 - Watchlist (unlimited; this is your tool)
 - Earnings calendar with customizable alerts
 - Organized ZIP downloads
@@ -137,7 +137,7 @@ Since you're the only user, AI analysis ships with v1.0 — no need to defer it 
 
 ### 4.6 Watchlist
 - Unlimited (it's your tool)
-- Search by ticker or company name with autocomplete
+- Search by ticker or company name with autocomplete (full spec in Section 4.10)
 - Companies pinned to home screen by default
 
 ### 4.7 Daily News Feed (Watchlist-Scoped)
@@ -166,6 +166,39 @@ Single Quarter, Single Year, Range, and Compare ZIP structures are unchanged fro
 | Acquisition | Banner + locked read-only historical data |
 | Delisting | Banner + read-only data; no calendar entry for future |
 | Missing transcript | "Not available for this period" — section visible |
+
+### 4.10 Company Search (Global Navigation)
+
+The primary way to open a company. Modeled on the **combobox / command-palette pattern** used by Linear, Vercel, Raycast, and GitHub (the `cmdk` pattern): a single text input with a ranked suggestion dropdown and full keyboard support.
+
+**Where it appears:**
+1. Home page — the main input (replaces the current raw ticker field)
+2. Persistent header on every page — compact search box
+3. `Cmd+K` / `Ctrl+K` anywhere → focuses/opens the search (nice-to-have, not a blocker)
+
+**Matching — ticker and company name are equivalent:**
+- `AAPL` and `Apple` (and `apple inc`) all resolve to the same company (CIK `0000320193`)
+- Case-insensitive; matches on **both** ticker and company name simultaneously
+- Prefix matching from the first keystroke: typing `t` suggests Tesla (TSLA), T-Mobile (TMUS), AT&T (T), …
+
+**Ranking (top → bottom):**
+1. Exact ticker match (`T` → AT&T first, even while other T-names also match)
+2. Ticker prefix match (`TSL` → TSLA)
+3. Company-name prefix match (`tes` → Tesla)
+4. Company-name contains/fuzzy match (typo tolerance is nice-to-have, not required)
+- Tie-break within a rank by market cap (bigger first) when available, else alphabetically
+
+**Dropdown behavior:**
+- Appears from the **first character** typed; debounce ~150 ms
+- Max **8 suggestions**; each row shows `TICKER — Company Name`, with the matched substring highlighted
+- Keyboard: `↑`/`↓` to navigate, `Enter` to open the highlighted company, `Esc` to dismiss
+- Mouse click on any row opens that company
+- Pressing `Enter` with no highlighted row: if the raw text is an exact ticker, go there directly; otherwise open the top suggestion
+- No matches → "No companies found for '…'" (never a dead-end error page)
+
+**Data source:** SEC `company_tickers.json` (already fetched and cached by `data/edgar.py`) — provides ticker, company name, and CIK for all ~10,000 EDGAR filers. No new external dependency. Selection always resolves to **CIK** before navigation (ticker remains a display label, per the canonical-key rule).
+
+**Scope note:** ships with Phase 3 (alongside the watchlist, per Section 7). The spec lives here so the build phase doesn't have to invent UX.
 
 ---
 
