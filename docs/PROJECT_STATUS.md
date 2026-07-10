@@ -32,12 +32,14 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
 
 ## What's next (concrete Phase 2 tasks)
 
-1. ~~**Balance Sheet tab** in the detail view~~ *(done — instant-fact extraction for assets/liabilities/equity/cash, persisted, with YoY/QoQ; PR on `phase2/balance-sheet-tab`)*
-2. **Revenue breakdown card** on the Overview (PRD §4.1 #5) — segment/geography auto-detect (tabbed if both exist, single if one, hidden if neither).
-3. **Detail collapsible sections** (PRD §4.3 #6): press-release highlights, guidance, transcript excerpts, risk factors — "Not available for this period" when missing.
-4. **Sticky Download button** in the detail view (PRD §4.3 #7).
-5. **QoQ toggle** — make QoQ change indicators toggleable instead of always shown.
+1. ~~**Balance Sheet tab** in the detail view~~ *(done — merged in PR #1)*
+2. ~~**QoQ toggle** on the hero KPI row~~ *(done — merged in PR #2)*
+3. ~~**Detail collapsible sections** with Risk Factors extraction~~ *(done — merged in PR #3; press release/guidance/transcript sections show "Not available" pending content sources)*
+4. **Press-release highlights content** for the collapsible section — extract from the matched 8-K ex-99 exhibit (infra exists in `services/ir_download.py`).
+5. **Sticky Download button** in the detail view (PRD §4.3 #7) — note: full ZIP download is Phase 3; keep this to a simple per-period PDF link or defer.
 6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+
+**Blocked / needs founder decision:** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser (large effort) — do not start without explicit approval.
 
 Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or news feed — those are Phase 3+.
 
