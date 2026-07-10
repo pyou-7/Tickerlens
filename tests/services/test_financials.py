@@ -579,3 +579,139 @@ def test_fetch_and_persist_upsert_is_idempotent(session: Session) -> None:
     svc.fetch_and_persist("AAPL", periods=4, session=session)  # must not raise or duplicate
 
     assert session.query(QuarterlyFinancial).count() == 1
+
+
+# ── enrich_press_releases ─────────────────────────────────────────────────────
+
+def _earnings_period(fp: str, fy: int, period_end: dt.date, er_doc: str | None):
+    from tickerlens.services.ir_download import EarningsPeriod
+    return EarningsPeriod(
+        quarter_label=f"{fp} FY{fy}",
+        fiscal_year=f"FY{fy}",
+        fp=fp,
+        fy=fy,
+        period_end=period_end,
+        sec_form="10-Q",
+        sec_accession="0000320193-25-000001",
+        sec_doc="doc.htm",
+        er_accession="0000320193-25-000002" if er_doc else None,
+        er_doc=er_doc,
+    )
+
+
+def test_enrich_press_releases_matches_by_period_end(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=94_000))
+    session.commit()
+
+    periods = [
+        _earnings_period("Q3", 2025, dt.date(2025, 6, 28), "ex99.htm"),
+        # A quarter we have no financials row for — must be skipped, not crash.
+        _earnings_period("Q2", 2025, dt.date(2025, 3, 29), "ex99b.htm"),
+        # No ex-99 exhibit found — must be skipped.
+        _earnings_period("Q1", 2025, dt.date(2024, 12, 28), None),
+    ]
+    monkeypatch.setattr(
+        "tickerlens.services.financials.discover_earnings_filings",
+        lambda ticker, client, n_quarters: periods,
+    )
+
+    body = "Apple today announced record third quarter revenue and EPS growth. " * 12
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.fetch_text.return_value = f"<html><body><p>{body}</p></body></html>"
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    updated = svc.enrich_press_releases("AAPL", session=session)
+
+    assert updated == 1
+    row = session.query(QuarterlyFinancial).one()
+    assert row.press_release_highlights is not None
+    assert "record third quarter revenue" in row.press_release_highlights
+    assert row.press_release_source == "8-K ex-99, Q3 FY2025"
+
+
+def test_enrich_press_releases_survives_discovery_failure(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(ticker, client, n_quarters):
+        raise RuntimeError("EDGAR down")
+
+    monkeypatch.setattr(
+        "tickerlens.services.financials.discover_earnings_filings", _boom
+    )
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    assert svc.enrich_press_releases("AAPL", session=session) == 0
+
+
+def test_enrich_press_releases_does_not_wipe_value_on_short_stub(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    row = _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+               fiscal_period="Q3", revenue=94_000)
+    row.press_release_highlights = "previously stored good text"
+    row.press_release_source = "8-K ex-99, Q3 FY2025"
+    session.add(row)
+    session.commit()
+
+    periods = [_earnings_period("Q3", 2025, dt.date(2025, 6, 28), "ex99.htm")]
+    monkeypatch.setattr(
+        "tickerlens.services.financials.discover_earnings_filings",
+        lambda ticker, client, n_quarters: periods,
+    )
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.fetch_text.return_value = "<body>stub</body>"  # too short → None
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    assert svc.enrich_press_releases("AAPL", session=session) == 0
+    fresh = session.query(QuarterlyFinancial).one()
+    assert fresh.press_release_highlights == "previously stored good text"
+
+
+def test_enrich_press_releases_skips_failed_exhibit_and_continues(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 3, 29), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=85_000))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=94_000))
+    session.commit()
+
+    periods = [
+        _earnings_period("Q2", 2025, dt.date(2025, 3, 29), "ex99a.htm"),
+        _earnings_period("Q3", 2025, dt.date(2025, 6, 28), "ex99b.htm"),
+    ]
+    monkeypatch.setattr(
+        "tickerlens.services.financials.discover_earnings_filings",
+        lambda ticker, client, n_quarters: periods,
+    )
+
+    body = "Apple reports third quarter results with revenue growth across segments. " * 12
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    # First exhibit fetch times out; the second succeeds — the failure must be
+    # skipped without aborting the loop.
+    mock_edgar.fetch_text.side_effect = [
+        RuntimeError("timeout"),
+        f"<html><body><p>{body}</p></body></html>",
+    ]
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    assert svc.enrich_press_releases("AAPL", session=session) == 1
+
+    q2 = session.query(QuarterlyFinancial).filter_by(fiscal_period="Q2").one()
+    q3 = session.query(QuarterlyFinancial).filter_by(fiscal_period="Q3").one()
+    assert q2.press_release_highlights is None
+    assert q3.press_release_highlights is not None
