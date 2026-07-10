@@ -18,6 +18,11 @@ class Metric(StrEnum):
     EPS_DILUTED = "eps_diluted"
     OPERATING_CASH_FLOW = "operating_cash_flow"
     CAPEX = "capex"
+    # Balance-sheet metrics are *instant* (point-in-time) facts, not durations.
+    TOTAL_ASSETS = "total_assets"
+    TOTAL_LIABILITIES = "total_liabilities"
+    TOTAL_EQUITY = "total_equity"
+    CASH_AND_EQUIVALENTS = "cash_and_equivalents"
 
 
 class ConceptSpec(BaseModel):
@@ -59,6 +64,11 @@ class QuarterlyFinancials(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    # Balance sheet (instant, as of period end)
+    total_assets: float | None = None
+    total_liabilities: float | None = None
+    total_equity: float | None = None
+    cash_and_equivalents: float | None = None
 
     @property
     def period(self) -> str:
@@ -87,7 +97,30 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         tags=("PaymentsToAcquirePropertyPlantAndEquipment",),
         unit="USD",
     ),
+    Metric.TOTAL_ASSETS: ConceptSpec(tags=("Assets",), unit="USD"),
+    Metric.TOTAL_LIABILITIES: ConceptSpec(tags=("Liabilities",), unit="USD"),
+    Metric.TOTAL_EQUITY: ConceptSpec(
+        tags=(
+            "StockholdersEquity",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        ),
+        unit="USD",
+    ),
+    Metric.CASH_AND_EQUIVALENTS: ConceptSpec(
+        tags=(
+            "CashAndCashEquivalentsAtCarryingValue",
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+        ),
+        unit="USD",
+    ),
 }
+
+BALANCE_SHEET_METRICS: tuple[Metric, ...] = (
+    Metric.TOTAL_ASSETS,
+    Metric.TOTAL_LIABILITIES,
+    Metric.TOTAL_EQUITY,
+    Metric.CASH_AND_EQUIVALENTS,
+)
 
 
 def extract_recent_quarterly_financials(
@@ -108,11 +141,19 @@ def extract_recent_quarterly_financials(
             logger.warning("No XBRL facts for %s — storing None", metric.value)
             return []
 
+    def _safe_bs(metric: Metric) -> dict[dt.date, float]:
+        try:
+            return balance_sheet_metric(companyfacts, metric, fiscal_year_end)
+        except KeyError:
+            logger.warning("No XBRL facts for %s — storing None", metric.value)
+            return {}
+
     net_income  = _safe(quarterly_income_metric,    Metric.NET_INCOME)
     eps_basic   = _safe(quarterly_income_metric,    Metric.EPS_BASIC)
     eps_diluted = _safe(quarterly_income_metric,    Metric.EPS_DILUTED)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
+    balance_sheet = {metric: _safe_bs(metric) for metric in BALANCE_SHEET_METRICS}
 
     canonical = sorted(revenue, key=lambda item: item.end)[-periods:]
     by_end = {
@@ -142,6 +183,10 @@ def extract_recent_quarterly_financials(
                 eps_basic=_value_for_end(by_end[Metric.EPS_BASIC], item.end),
                 eps_diluted=_value_for_end(by_end[Metric.EPS_DILUTED], item.end),
                 free_cash_flow=free_cash_flow,
+                total_assets=balance_sheet[Metric.TOTAL_ASSETS].get(item.end),
+                total_liabilities=balance_sheet[Metric.TOTAL_LIABILITIES].get(item.end),
+                total_equity=balance_sheet[Metric.TOTAL_EQUITY].get(item.end),
+                cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
             )
         )
     return rows
@@ -202,7 +247,18 @@ def quarterly_cash_flow_metric(
     return sorted(results, key=lambda item: item.end)
 
 
-def concept_facts(companyfacts: dict[str, Any], metric: Metric) -> tuple[str, list[XbrlFact]]:
+def concept_facts(
+    companyfacts: dict[str, Any],
+    metric: Metric,
+    *,
+    instant: bool = False,
+) -> tuple[str, list[XbrlFact]]:
+    """Return (source_tag, facts) for the first tag in the metric's fallback chain.
+
+    Duration facts (income, cash flow) carry both ``start`` and ``end``; instant
+    facts (balance sheet) carry only ``end``. Pass ``instant=True`` to keep the
+    latter, which would otherwise be filtered out by the ``start`` requirement.
+    """
     spec = CONCEPTS[metric]
     us_gaap = companyfacts["facts"]["us-gaap"]
     for tag in spec.tags:
@@ -212,12 +268,34 @@ def concept_facts(companyfacts: dict[str, Any], metric: Metric) -> tuple[str, li
             XbrlFact.model_validate(raw)
             for raw in raw_facts
             if raw.get("form") in {"10-Q", "10-K"}
-            and raw.get("start")
             and raw.get("end")
+            and (instant or raw.get("start"))
         ]
         if facts:
             return tag, facts
     raise KeyError(f"No XBRL facts found for metric {metric.value}")
+
+
+def balance_sheet_metric(
+    companyfacts: dict[str, Any],
+    metric: Metric,
+    fiscal_year_end: str | None = None,
+) -> dict[dt.date, float]:
+    """Extract instant balance-sheet values keyed by period-end date.
+
+    Balance-sheet facts are point-in-time, so they join to a quarter by ``end``
+    alone. The same ``end`` can appear across filings (a 10-Q value later restated
+    in a 10-K); keep the latest-filed one, preferring the fact whose fiscal-year
+    label matches the fiscal year inferred for that end date.
+    """
+    source_tag, facts = concept_facts(companyfacts, metric, instant=True)
+    grouped: dict[dt.date, list[XbrlFact]] = {}
+    for fact in facts:
+        grouped.setdefault(fact.end, []).append(fact)
+    return {
+        end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
+        for end, candidates in grouped.items()
+    }
 
 
 def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:

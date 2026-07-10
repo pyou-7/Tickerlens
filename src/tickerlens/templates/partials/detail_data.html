@@ -201,8 +201,54 @@
   </div>
 
   <!-- Balance Sheet tab -->
-  <div x-show="tab === 'balance'" class="p-6 text-center">
-    <p class="text-gray-500 text-sm">Balance sheet details coming in a future update.</p>
+  <div x-show="tab === 'balance'" class="p-4">
+    {% set bs = ctx.current.balance_sheet %}
+    {% if bs.total_assets is none and bs.total_liabilities is none
+          and bs.total_equity is none and bs.cash_and_equivalents is none %}
+      <p class="text-gray-500 text-sm py-4 text-center">Not available for this period.</p>
+    {% else %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+          <th class="text-left py-2 pr-4 font-medium">Metric</th>
+          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+          {% if ctx.current.balance_sheet_qoq %}
+          <th class="text-right py-2 font-medium">QoQ</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800/50">
+        {% set bs_yoy = ctx.current.balance_sheet_yoy %}
+        {% set bs_qoq = ctx.current.balance_sheet_qoq %}
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Total Assets</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_assets) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_assets) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Total Liabilities</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_liabilities) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_liabilities) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Total Equity</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_equity) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_equity) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Cash &amp; Equivalents</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.cash_and_equivalents) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
+        </tr>
+      </tbody>
+    </table>
+    <p class="text-xs text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
+    {% endif %}
   </div>
 </div>
 
