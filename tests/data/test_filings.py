@@ -2,6 +2,7 @@ from datetime import date
 
 from tickerlens.data.filings import (
     AnnualFiling,
+    extract_press_release_text,
     extract_risk_factors,
     filing_doc_url,
     latest_annual_filing,
@@ -91,6 +92,44 @@ def test_extract_risk_factors_stops_at_cybersecurity_item_1c() -> None:
     result = extract_risk_factors(html)
     assert result is not None
     assert "security program" not in result
+
+
+def test_extract_press_release_text_returns_document_top() -> None:
+    paragraphs = "Revenue grew 12% year over year driven by strong product demand. " * 12
+    html = (
+        "<html><body><h1>Acme Reports Fourth Quarter Results</h1>"
+        f"<p>{paragraphs}</p></body></html>"
+    )
+    result = extract_press_release_text(html)
+    assert result is not None
+    assert result.startswith("Acme Reports Fourth Quarter Results")
+    assert "Revenue grew 12%" in result
+
+
+def test_extract_press_release_text_strips_edgar_exhibit_boilerplate() -> None:
+    body = "Revenue grew 12% year over year driven by strong product demand. " * 12
+    html = (
+        "<body><p>EX-99.1</p><p>2</p><p>a8-kex991q220260328.htm</p>"
+        "<p>EX-99.1</p><p>Document</p><p>Exhibit 99.1</p>"
+        f"<h1>Acme reports second quarter results</h1><p>{body}</p></body>"
+    )
+    result = extract_press_release_text(html)
+    assert result is not None
+    assert result.startswith("Acme reports second quarter results")
+    assert "EX-99" not in result
+
+
+def test_extract_press_release_text_none_for_short_stub() -> None:
+    assert extract_press_release_text("<body><p>See attached.</p></body>") is None
+
+
+def test_extract_press_release_text_truncates_to_max_chars() -> None:
+    body = "quarterly results sentence. " * 400
+    html = f"<body><p>{body}</p></body>"
+    result = extract_press_release_text(html, max_chars=1000)
+    assert result is not None
+    assert len(result) <= 1001
+    assert result.endswith("…")
 
 
 def test_latest_annual_filing_picks_most_recent_10k() -> None:

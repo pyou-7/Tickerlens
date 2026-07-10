@@ -108,6 +108,32 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     return best_section
 
 
+def extract_press_release_text(document_html: str, max_chars: int = 4000) -> str | None:
+    """Best-effort extract an earnings press release (8-K ex-99 exhibit) as plain text.
+
+    Unlike Risk Factors there are no section boundaries to find — the exhibit *is*
+    the press release, and its opening (headline + key results) is the part worth
+    keeping, so we take the document top and cap it. EDGAR prepends filename/label
+    boilerplate ("EX-99.1 … Exhibit 99.1") before the actual headline; everything up
+    to the last such marker near the top is dropped. Returns None when the result
+    is too short to be a real press release (an index stub or empty exhibit).
+    """
+    text = _html_to_text(document_html)
+    last_marker_end = None
+    for m in re.finditer(r"(?i)ex(?:hibit)?[\s.-]*99(?:\.\d+)?", text[:600]):
+        last_marker_end = m.end()
+    if last_marker_end is not None:
+        text = text[last_marker_end:].lstrip(" \n:.-–")
+        # A lone "Document" label often follows the exhibit marker line.
+        text = re.sub(r"^(?:Document)\s*\n", "", text)
+    if len(text) < _MIN_SECTION_CHARS:
+        logger.info("Press release text too short to be a real exhibit — skipping")
+        return None
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return text
+
+
 def _html_to_text(document_html: str) -> str:
     """Strip HTML to plain text, preserving block boundaries as line breaks.
 

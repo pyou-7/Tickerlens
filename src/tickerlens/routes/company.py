@@ -98,6 +98,9 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
     try:
         _svc.fetch_and_persist(ticker, periods=8)
         _svc.enrich_company(ticker)
+        # Adds up to ~16 serial EDGAR fetches (8-K index + exhibit per quarter,
+        # throttled and disk-cached). Keep further enrichment off this hot path.
+        _svc.enrich_press_releases(ticker, periods=8)
         overview = _svc.get_overview(ticker)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
