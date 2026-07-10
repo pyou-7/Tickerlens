@@ -9,6 +9,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
+from tickerlens.data.filings import extract_risk_factors, filing_doc_url, latest_annual_filing
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
@@ -111,6 +112,9 @@ class DetailContext(BaseModel):
     chart_labels: list[str]
     chart_revenue: list[float | None]
     chart_eps: list[float | None]
+    # Narrative (company-level, from latest 10-K; None = not available)
+    risk_factors: str | None = None
+    risk_factors_source: str | None = None
 
 
 # ── service ───────────────────────────────────────────────────────────────────
@@ -187,6 +191,15 @@ class FinancialsService:
             company.last_price = quote.last_price
             company.market_cap = quote.market_cap
             company.description = description  # None clears a stale description
+
+            # Risk factors are expensive to fetch and parse; only overwrite when
+            # we successfully extract them, so a transient failure never wipes a
+            # previously-good value.
+            rf_text, rf_source = self._fetch_risk_factors(cik)
+            if rf_text is not None:
+                company.risk_factors = rf_text
+                company.risk_factors_source = rf_source
+
             company.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
         except Exception:
@@ -195,6 +208,29 @@ class FinancialsService:
         finally:
             if session is None and self._session is None:
                 db.close()
+
+    def _fetch_risk_factors(self, cik: str) -> tuple[str | None, str | None]:
+        """Fetch the latest 10-K and extract Item 1A. Returns (text, source_label).
+
+        Best-effort: any network or parse failure yields (None, None) and is
+        logged, never raised — enrichment must not fail on missing narrative.
+        """
+        try:
+            submissions = self.edgar_client.submissions(cik)
+            filing = latest_annual_filing(submissions)
+            if filing is None:
+                # No 10-K in the recent submissions page (SEC paginates older
+                # filings into filings.files, which we don't yet traverse).
+                logger.warning("No 10-K found in recent submissions for CIK %s", cik)
+                return None, None
+            html = self.edgar_client.fetch_text(filing_doc_url(cik, filing))
+            text = extract_risk_factors(html)
+            if text is None:
+                return None, None
+            return text, f"10-K filed {filing.filing_date.isoformat()}"
+        except Exception:
+            logger.warning("Risk-factors extraction failed for CIK %s", cik, exc_info=True)
+            return None, None
 
     def get_overview(self, ticker: str, session: Session | None = None) -> CompanyOverview:
         """Return everything needed to render the Overview page."""
@@ -322,6 +358,8 @@ class FinancialsService:
                 chart_labels=chart_labels,
                 chart_revenue=chart_revenue,
                 chart_eps=chart_eps,
+                risk_factors=company.risk_factors,
+                risk_factors_source=company.risk_factors_source,
             )
         finally:
             if session is None and self._session is None:
