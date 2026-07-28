@@ -254,8 +254,9 @@
 
 <!-- Collapsible disclosure sections (PRD 4.3 #6).
      Each stays visible and shows "Not available for this period" when empty, so
-     the reader knows where to look. Risk Factors are populated from the latest
-     10-K; the others await their content sources in a later phase. -->
+     the reader knows where to look. Risk Factors come from the latest 10-K
+     (company-level); press release highlights from the quarter's 8-K ex-99
+     (per-period). Guidance and transcripts await content sources in a later phase. -->
 {% macro disclosure(title, body, source=none) %}
 <div x-data="{ open: false }" class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden">
   <button type="button" @click="open = !open" :aria-expanded="open"
@@ -279,7 +280,7 @@
 
 <div class="mt-8 space-y-3">
   <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-1">Disclosures</h2>
-  {{ disclosure("Press release highlights", none) }}
+  {{ disclosure("Press release highlights", ctx.current.press_release, ctx.current.press_release_source) }}
   {{ disclosure("Management guidance", none) }}
   {{ disclosure("Transcript excerpts", none) }}
   {{ disclosure("Risk factors", ctx.risk_factors, ctx.risk_factors_source) }}

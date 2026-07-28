@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tickerlens.models.base import Base
@@ -25,6 +25,8 @@ class QuarterlyFinancial(Base):
     total_liabilities: Mapped[float | None] = mapped_column(Float)
     total_equity: Mapped[float | None] = mapped_column(Float)
     cash_and_equivalents: Mapped[float | None] = mapped_column(Float)
+    press_release_highlights: Mapped[str | None] = mapped_column(Text)
+    press_release_source: Mapped[str | None] = mapped_column(String(64))  # e.g. "8-K ex-99 filed 2026-05-01"
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )

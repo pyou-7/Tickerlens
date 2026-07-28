@@ -9,7 +9,12 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
-from tickerlens.data.filings import extract_risk_factors, filing_doc_url, latest_annual_filing
+from tickerlens.data.filings import (
+    extract_press_release_text,
+    extract_risk_factors,
+    filing_doc_url,
+    latest_annual_filing,
+)
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
@@ -17,6 +22,7 @@ from tickerlens.data.yahoo import get_quote
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
+from tickerlens.services.ir_download import discover_earnings_filings, er_doc_url
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +96,9 @@ class PeriodData(BaseModel):
     balance_sheet: BalanceSheet
     balance_sheet_yoy: BalanceSheetChange
     balance_sheet_qoq: BalanceSheetChange | None  # None for yearly
+    # Narrative (per-quarter, from the earnings 8-K ex-99; None = not available)
+    press_release: str | None = None
+    press_release_source: str | None = None
 
 
 class DetailContext(BaseModel):
@@ -231,6 +240,68 @@ class FinancialsService:
         except Exception:
             logger.warning("Risk-factors extraction failed for CIK %s", cik, exc_info=True)
             return None, None
+
+    def enrich_press_releases(
+        self,
+        ticker: str,
+        periods: int = 8,
+        session: Session | None = None,
+    ) -> int:
+        """Fetch earnings press releases (8-K ex-99) and store per matching quarter.
+
+        Matches exhibits to quarterly_financials rows by period end date. Best-effort
+        throughout: discovery or per-document failures are logged and skipped, and a
+        stored value is only overwritten on a successful new extraction. Returns the
+        number of quarters updated.
+        """
+        try:
+            cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+            earnings = discover_earnings_filings(ticker, self.edgar_client, n_quarters=periods)
+        except Exception:
+            logger.warning("Earnings-filing discovery failed for %s", ticker, exc_info=True)
+            return 0
+
+        db = session or self._session or get_session()
+        updated = 0
+        try:
+            for period in earnings:
+                url = er_doc_url(cik, period)
+                if url is None:
+                    continue  # no ex-99 exhibit found for this quarter
+                try:
+                    html = self.edgar_client.fetch_text(url)
+                    text = extract_press_release_text(html)
+                except Exception:
+                    logger.warning(
+                        "Press-release fetch/extract failed for %s %s",
+                        ticker, period.quarter_label, exc_info=True,
+                    )
+                    continue
+                if text is None:
+                    continue
+
+                row = db.execute(
+                    select(QuarterlyFinancial).where(
+                        QuarterlyFinancial.cik == cik,
+                        QuarterlyFinancial.period_end == period.period_end,
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    continue  # exhibit for a quarter we don't have financials for
+
+                row.press_release_highlights = text
+                row.press_release_source = f"8-K ex-99, {period.quarter_label}"
+                row.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+                updated += 1
+
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            if session is None and self._session is None:
+                db.close()
+        return updated
 
     def get_overview(self, ticker: str, session: Session | None = None) -> CompanyOverview:
         """Return everything needed to render the Overview page."""
@@ -546,6 +617,8 @@ def _build_quarterly_period(
             balance_sheet=_to_bs(row),
             balance_sheet_yoy=_compute_bs_yoy(row, list(all_rows)),
             balance_sheet_qoq=_compute_bs_qoq(row, prior_qoq),
+            press_release=row.press_release_highlights,
+            press_release_source=row.press_release_source,
         ),
         corrected_label,
     )
