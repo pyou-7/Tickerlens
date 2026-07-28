@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path
 from typing import Literal
 
@@ -64,7 +65,7 @@ def company_detail(
     return templates.TemplateResponse(
         request=request,
         name="company/detail.html",
-        context={"ctx": ctx},
+        context={"ctx": ctx, "exported_on": dt.date.today()},
     )
 
 

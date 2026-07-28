@@ -45,8 +45,10 @@ services/        Business logic — orchestrates data/ and models/
 | File | Role |
 |---|---|
 | `src/tickerlens/data/edgar.py` | SEC JSON client; throttler (≤10 req/sec); disk cache; CIK helpers |
+| `src/tickerlens/data/filings.py` | Best-effort narrative extraction from 10-K and 8-K exhibit HTML |
 | `src/tickerlens/data/xbrl.py` | Concept-mapping layer; quarterly metric extraction; YTD un-cumulation |
-| `src/tickerlens/services/financials.py` | Service boundary for financial extraction (routes call this) |
+| `src/tickerlens/services/financials.py` | Financial persistence, enrichment, overview, and detail-view service boundary |
+| `src/tickerlens/services/ir_download.py` | Earnings filing discovery and 8-K ex-99 matching |
 | `src/tickerlens/models/` | SQLAlchemy 2.0 models; CIK is the FK on every company join |
 | `src/tickerlens/ai/` | Rules-based scoring + LLM calls (Claude SDK) |
 | `src/tickerlens/jobs/` | APScheduler background tasks |
@@ -81,6 +83,11 @@ Q4 = FY_annual (10-K) − Q3_YTD.
 ### HTMX-first frontend
 Routes return HTML. JSON endpoints are only added when explicitly needed.
 
+### Single-period PDF export
+The Phase 2 detail view uses the browser print dialog for a lightweight per-period PDF.
+Print-only CSS removes app controls, adds company/period context, and includes the required
+dated “As of” footer. Multi-document ZIP generation remains a separate Phase 3 workflow.
+
 ---
 
 ## Data Flow — Fetch and Persist One Company
@@ -107,12 +114,12 @@ EdgarClient.fetch_companyfacts(cik)
 
 ---
 
-## Phase Roadmap (current: Phase 1)
+## Phase Roadmap (current: Phase 3)
 
 - **Phase 0** Setup + EDGAR exploration ✅
 - **Phase 1** Data flowing for one company ✅
-- **Phase 2** Single-company browsing UI ← current
-- **Phase 3** Scale to all US public companies + watchlist + downloads
+- **Phase 2** Single-company browsing UI ✅
+- **Phase 3** Scale to all US public companies + watchlist + downloads ← current
 - **Phase 4** Earnings calendar + alerts
 - **Phase 5** AI analysis
 - **Phase 6** News feed

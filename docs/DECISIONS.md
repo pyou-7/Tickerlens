@@ -92,3 +92,11 @@ Format:
 **What:** Migration `6b81522c5e05` adds `press_release_highlights` (Text) and `press_release_source` (String 64) to `quarterly_financials`. `enrich_press_releases` in `services/financials.py` reuses `ir_download.discover_earnings_filings` to find each quarter's 8-K ex-99 exhibit, extracts plain text via `filings.extract_press_release_text` (EDGAR exhibit-header boilerplate stripped, capped at 4,000 chars), and stores it against the matching quarter by period end date. Runs on the refresh route only (not first-visit auto-fetch) to keep first page loads fast; failures are logged and skipped, and stored values are only overwritten on successful extraction.
 **Why:** The detail view's "Press release highlights" disclosure (PRD §4.3 #6) needed per-quarter content. Unlike risk factors (company-level, latest 10-K), press releases are inherently per-period, so they live on `quarterly_financials`, not `companies`.
 **Alternatives considered:** Storing only the latest quarter's release on `companies` (rejected: the time slicer shows historical quarters, each needs its own release); summarizing "highlights" with the LLM (deferred to Phase 5 AI analysis — raw opening text is useful now and the LLM can consume the stored text later).
+
+---
+
+## 2026-07-27 — Browser print for single-period PDF export
+
+**What:** The Time Slicer’s sticky Download PDF action invokes the browser print dialog with a print-specific company/period header, readable light styling, a useful filename, and a dated “As of” footer.
+**Why:** Phase 2 needs a lightweight export for the currently selected period, while the multi-document ZIP workflow belongs to Phase 3. Browser print produces a local PDF without adding a premature server-side generation pipeline.
+**Alternatives considered:** Server-side WeasyPrint PDF generation (deferred: unnecessary duplication for the current page); reusing Chrome headless filing conversion (rejected: that pipeline converts SEC source documents, not the Tickerlens detail view); building ZIP export now (deferred to Phase 3).

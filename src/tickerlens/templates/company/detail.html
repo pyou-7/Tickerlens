@@ -25,12 +25,18 @@
 {% block content %}
 
 <!-- Breadcrumb -->
-<div class="mb-6 text-sm text-gray-500">
+<div class="mb-6 text-sm text-gray-500 print:hidden">
   <a href="/company/{{ ctx.ticker }}" class="text-indigo-400 hover:text-indigo-300 transition">← Back to Overview</a>
 </div>
 
+<!-- Print-only header (company + period), shown in place of the app chrome -->
+<div class="hidden print:block mb-6">
+  <h1 class="text-2xl font-bold text-black">{{ ctx.name }}{% if ctx.ticker %} ({{ ctx.ticker }}){% endif %}</h1>
+  <p class="text-sm text-gray-700">{{ ctx.current.label }}{% if ctx.current.period_end %} — as of {{ ctx.current.period_end }}{% endif %}</p>
+</div>
+
 <!-- Company header -->
-<div class="flex items-start justify-between mb-8">
+<div class="flex items-start justify-between mb-8 print:hidden">
   <div>
     <div class="flex items-center gap-3 mb-1 flex-wrap">
       <h1 class="text-3xl font-bold text-white">{{ ctx.name }}</h1>
@@ -55,7 +61,7 @@
 <!-- Time slicer controls -->
 <div
   x-data="{ gran: '{{ ctx.granularity }}' }"
-  class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4"
+  class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4 print:hidden"
 >
   <form
     id="slicer-form"
@@ -122,11 +128,57 @@
   {% include "partials/detail_data.html" %}
 </div>
 
+<!-- Per-period export. The browser print dialog provides Save as PDF. -->
+<button
+  type="button"
+  onclick="window.print()"
+  aria-label="Download {{ ctx.current.label }} as PDF"
+  class="fixed z-40 bottom-6 right-6 inline-flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-950/40 transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-gray-950 print:hidden"
+>
+  <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" class="h-5 w-5">
+    <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v7.69L6.78 7.97a.75.75 0 0 0-1.06 1.06l3.75 3.75c.293.293.767.293 1.06 0l3.75-3.75a.75.75 0 1 0-1.06-1.06l-2.47 2.47V2.75Z"/>
+    <path d="M3.5 12.25a.75.75 0 0 0-1.5 0v2.5A2.25 2.25 0 0 0 4.25 17h11.5A2.25 2.25 0 0 0 18 14.75v-2.5a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 1-.75.75H4.25a.75.75 0 0 1-.75-.75v-2.5Z"/>
+  </svg>
+  Download PDF
+</button>
+
+<footer class="print-footer">
+  Tickerlens · As of {{ exported_on }}
+</footer>
+
 <style>
   [x-cloak] { display: none !important; }
   .htmx-indicator { display: none; }
   .htmx-request .htmx-indicator { display: inline; }
   .htmx-request.htmx-indicator { display: inline; }
+  .print-footer { display: none; }
+
+  @media print {
+    @page { margin: 14mm 12mm 18mm; }
+    html, body { background: white !important; color: black !important; }
+    nav { display: none !important; }
+    main { max-width: none !important; padding: 0 !important; }
+    #detail-data [class*="bg-gray-"] { background: white !important; }
+    #detail-data [class*="border-gray-"] { border-color: #d1d5db !important; }
+    #detail-data .text-white,
+    #detail-data .text-gray-200,
+    #detail-data .text-gray-300,
+    #detail-data .text-gray-400 { color: #111827 !important; }
+    #detail-data .text-gray-500,
+    #detail-data .text-gray-600 { color: #4b5563 !important; }
+    .print-footer {
+      display: block;
+      position: fixed;
+      right: 0;
+      bottom: -10mm;
+      left: 0;
+      border-top: 1px solid #d1d5db;
+      padding-top: 2mm;
+      color: #4b5563;
+      font-size: 9pt;
+      text-align: right;
+    }
+  }
 </style>
 
 <script>
@@ -184,6 +236,15 @@
     if (evt.detail.target && evt.detail.target.id === 'detail-data') {
       renderTrendChart();
     }
+  });
+
+  // Give browser-generated PDFs a useful per-period filename.
+  var screenTitle = document.title;
+  window.addEventListener('beforeprint', function() {
+    document.title = {{ (((ctx.ticker or ctx.name) ~ "_" ~ ctx.current.label ~ "_Tickerlens") | replace(" ", "_")) | tojson }};
+  });
+  window.addEventListener('afterprint', function() {
+    document.title = screenTitle;
   });
 </script>
 

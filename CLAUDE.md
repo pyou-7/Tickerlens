@@ -52,12 +52,14 @@ src/tickerlens/
 ## Current implementation snapshot
 
 - Phase 0 notebooks proved EDGAR `companyfacts` extraction for AAPL and JNJ.
-- Reusable Phase 1 logic now lives in:
-  - `src/tickerlens/data/edgar.py` — SEC client, cache, rate limit, CIK helpers
-  - `src/tickerlens/data/xbrl.py` — concept mapping and quarterly metric extraction
-  - `src/tickerlens/services/financials.py` — service boundary for financial extraction
+- Phase 1 data flow is complete: EDGAR fetch → XBRL normalization → SQLite persistence.
+- Phase 2 single-company browsing is complete:
+  - Overview and Time Slicer detail pages with quarterly/yearly single-period selection
+  - Plotly trends, YoY/QoQ KPIs, and Income/Cash Flow/Balance Sheet tabs
+  - Stored 10-K risk factors and per-quarter 8-K ex-99 press-release text
+  - Sticky per-period browser print/PDF action with a dated snapshot footer
 - XBRL joins are anchored by period `end` date, not `fy/fp`, because comparative facts can carry misleading fiscal labels.
-- The next build step is local persistence models and migrations for companies + quarterly financials.
+- The current build phase is Phase 3: company-universe ingestion, search, watchlist, Range/Compare modes, and ZIP downloads.
 
 ## Conventions
 

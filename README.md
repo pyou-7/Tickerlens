@@ -6,15 +6,19 @@ Tickerlens is a single-user tool — no auth, payments, marketing, or multi-user
 
 ## Current State
 
-**Phase 2 — Single-company browsing UI** (Phase 1 complete)
+**Phase 3 — Scale to all US public companies** (Phases 1–2 complete)
 
-Phase 1 delivered end-to-end data flow for one company:
+The current app includes:
 - SEC EDGAR client with rate limiting and disk cache
 - XBRL extraction and concept-mapping (revenue tag fallback, YTD un-cumulation, Q4 derivation)
 - SQLAlchemy models + Alembic migrations (Company + QuarterlyFinancials)
-- Service layer: fetch_and_persist, enrich_company (Wikipedia + Yahoo), get_overview
-- FastAPI routes + Jinja2 templates for the company overview page
-- Focused tests for XBRL logic and the financials service
+- Company overview and single-period Time Slicer detail views
+- Quarterly/yearly selection, Plotly trends, YoY/QoQ KPIs, and three financial-statement tabs
+- Risk-factor and press-release narrative extraction with explicit missing-data states
+- Per-period browser print/PDF export with a dated snapshot footer
+- Focused tests for XBRL, filing extraction, and the financials service
+
+Phase 3 adds the company universe, global search, watchlist, Range/Compare modes, and ZIP downloads.
 
 ## Source Of Truth
 
