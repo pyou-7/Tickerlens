@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from tickerlens.data.yahoo import PriceHistory, PriceRange
 from tickerlens.services.financials import CompanyNotFoundError, FinancialsService, DetailContext
 
 router = APIRouter()
@@ -90,6 +91,15 @@ def company_detail_data(
         name="partials/detail_data.html",
         context={"ctx": ctx},
     )
+
+
+@router.get("/company/{ticker}/price-history", response_model=PriceHistory)
+def company_price_history(
+    ticker: str,
+    range_key: PriceRange = "1y",
+) -> PriceHistory:
+    """Return adjusted Yahoo price history for the interactive stock chart."""
+    return _svc.price_history(ticker.upper(), range_key)
 
 
 @router.post("/company/{ticker}/refresh", response_class=HTMLResponse)

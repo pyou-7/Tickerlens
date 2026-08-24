@@ -29,14 +29,16 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 ### User interface
 
 - Overview: company header/description, latest-quarter KPIs with YoY, TTM snapshot, and link to detail.
-- Detail: quarterly/yearly single-period selectors, HTMX swaps, Plotly Revenue/EPS trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs.
+- Detail: quarterly/yearly single-period selectors, HTMX swaps, a configurable one-metric Plotly trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs.
+- A separate stock-price chart lazy-loads adjusted Yahoo history from `GET /company/{ticker}/price-history` and supports Today through Max ranges without blocking initial detail-page rendering.
+- The trend selector covers Revenue, Net Income, FCF, EPS Basic/Diluted, Assets, Liabilities, Equity, and Cash. Its x values are unique period-end dates; month/year labels are display-only.
 - Disclosures: per-quarter press-release text, latest-company risk factors, and explicit unavailable states for guidance/transcripts.
 - Sticky Download PDF action: invokes browser print for the selected period, uses print-specific styling, and includes the required dated “As of” footer.
 - Full Range/Compare and ZIP export are deliberately Phase 3 work.
 
 ### Tests and migrations
 
-- 56 tests pass at Phase 2 closeout.
+- 60 tests pass currently (56 at Phase 2 closeout plus Yahoo history coverage).
 - Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, and press-release enrichment.
 - Latest migration: `6b81522c5e05_add_press_release_columns_to_quarterly_*.py`.
 

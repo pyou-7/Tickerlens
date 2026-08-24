@@ -31,6 +31,11 @@ Goal: expand beyond one-company browsing with a company universe, global search,
   - Collapsible press-release highlights, guidance, transcript, and risk-factor sections with explicit missing-data states
   - Per-period sticky Download PDF action using the browser print dialog and a dated snapshot footer
   - 56 tests passing at Phase 2 closeout
+- **Phase 3 in progress:**
+  - Replaced the congested Revenue/EPS dual-axis chart with a configurable single-metric trend chart covering nine core performance, per-share, and balance-sheet metrics
+  - Trend x-axis now uses unique period-end dates, preventing duplicate fiscal labels from collapsing separate quarters
+  - Added a lazy-loaded adjusted stock-price chart with Today, 5D, 1M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, and Max ranges
+  - 60 tests currently passing
 
 ---
 
@@ -62,6 +67,8 @@ Do NOT build AI analysis, calendar/alerts, or the news feed — those remain Pha
 
 | Date | Decision |
 |---|---|
+| 2026-07-27 | Added a separate adjusted stock-price chart backed by a validated lazy-loaded Yahoo history endpoint; financial and market trends remain independent |
+| 2026-07-27 | Replaced the Revenue/EPS dual-axis chart with a one-metric-at-a-time selector; use period-end dates for chronological chart positioning |
 | 2026-07-27 | Closed Phase 2 after integrating press-release highlights and adding a per-period browser print/PDF action; advanced the project to Phase 3 |
 | 2026-07-10 | Deferred the revenue breakdown card past Phase 2 because `companyfacts` lacks dimensional segment data; period selectors remain detail-only |
 | 2026-06-29 | Reconciled `PROJECT_STATUS.md` with actual state: Phase 1 complete, Phase 2 (Overview + Time Slicer detail) in progress. Set up a daily scheduled cloud agent that picks one Phase 2 task and opens a PR for review |

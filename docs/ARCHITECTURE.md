@@ -88,6 +88,12 @@ The Phase 2 detail view uses the browser print dialog for a lightweight per-peri
 Print-only CSS removes app controls, adds company/period context, and includes the required
 dated “As of” footer. Multi-document ZIP generation remains a separate Phase 3 workflow.
 
+### Lazy-loaded stock price history
+The detail page loads adjusted Yahoo price history after the financial page renders. A validated
+JSON endpoint (`GET /company/{ticker}/price-history`) routes through `FinancialsService` to
+`data/yahoo.py`; range changes fetch only the selected window. This keeps unreliable market-data
+requests out of the initial EDGAR-backed page path and separate from quarterly financial state.
+
 ---
 
 ## Data Flow — Fetch and Persist One Company
@@ -108,7 +114,7 @@ EdgarClient.fetch_companyfacts(cik)
 | SEC EDGAR `data.sec.gov` | Company facts, submissions, filings | ≤10 req/sec (enforced in `edgar.py`) |
 | SEC EDGAR `archive.sec.gov` | Filing HTML/PDF downloads | ~150ms spacing |
 | Wikipedia | Company metadata fallback | polite crawl |
-| Yahoo Finance | Price data | unofficial API |
+| Yahoo Finance | Latest quote, market cap, and adjusted price history | unofficial API |
 | Finnhub (free tier) | Supplemental data | per-plan limits |
 | Anthropic Claude API | AI factor signals | per-account limits |
 

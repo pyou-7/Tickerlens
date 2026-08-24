@@ -101,9 +101,39 @@
   </div>
 </div>
 
-<!-- Trend chart -->
+<!-- Configurable single-metric trend chart. Keeping one active series avoids
+     dual-axis ambiguity and works for metrics with very different scales. -->
 <div class="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-8">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-4">Revenue &amp; EPS Trend</h2>
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h2 class="text-xs uppercase tracking-widest text-gray-500">Financial Trend</h2>
+      <p class="mt-1 text-xs text-gray-600">Quarterly values · one metric at a time</p>
+    </div>
+    <label class="flex items-center gap-2 text-xs text-gray-500 print:hidden">
+      Metric
+      <select
+        id="trend-metric-select"
+        onchange="renderTrendChart(this.value)"
+        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        <optgroup label="Performance">
+          <option value="revenue">Revenue</option>
+          <option value="net_income">Net Income</option>
+          <option value="free_cash_flow">Free Cash Flow</option>
+        </optgroup>
+        <optgroup label="Per Share">
+          <option value="eps_diluted">EPS (Diluted)</option>
+          <option value="eps_basic">EPS (Basic)</option>
+        </optgroup>
+        <optgroup label="Balance Sheet">
+          <option value="total_assets">Total Assets</option>
+          <option value="total_liabilities">Total Liabilities</option>
+          <option value="total_equity">Total Equity</option>
+          <option value="cash_and_equivalents">Cash &amp; Equivalents</option>
+        </optgroup>
+      </select>
+    </label>
+  </div>
   <div id="trend-chart" style="height: 280px;"></div>
 </div>
 
@@ -289,8 +319,9 @@
 <!-- Chart data payload — read by renderTrendChart() in detail.html -->
 <script type="application/json" id="chart-data-json">
 {
-  "labels":  {{ ctx.chart_labels  | tojson }},
-  "revenue": {{ ctx.chart_revenue | tojson }},
-  "eps":     {{ ctx.chart_eps     | tojson }}
+  "dates": {{ ctx.chart_dates | tojson }},
+  "labels": {{ ctx.chart_labels | tojson }},
+  "selectedDate": {{ (ctx.current.period_end.isoformat() if ctx.current.period_end else none) | tojson }},
+  "metrics": {{ ctx.chart_metrics | tojson }}
 }
 </script>

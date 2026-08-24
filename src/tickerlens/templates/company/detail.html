@@ -58,6 +58,40 @@
   </div>
 </div>
 
+<!-- Stock price history — loaded independently from Yahoo so quarterly
+     financial navigation never blocks on market-data requests. -->
+<section class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4 print:hidden" aria-labelledby="stock-price-heading">
+  <div class="flex flex-wrap items-start justify-between gap-4 mb-3">
+    <div>
+      <h2 id="stock-price-heading" class="text-xs uppercase tracking-widest text-gray-500">Stock Price</h2>
+      <div class="mt-1 flex flex-wrap items-baseline gap-2">
+        <span id="price-chart-latest" class="text-2xl font-bold text-white">—</span>
+        <span id="price-chart-change" class="text-sm font-medium text-gray-500"></span>
+        <span id="price-chart-range-label" class="text-xs text-gray-600">1Y</span>
+      </div>
+    </div>
+    <div class="max-w-full overflow-x-auto pb-1" aria-label="Stock price range">
+      <div class="flex min-w-max rounded-lg border border-gray-700 bg-gray-950/40 p-1 text-xs" role="group">
+        {% for value, label in [
+          ("1d", "Today"), ("5d", "5D"), ("1mo", "1M"), ("6mo", "6M"),
+          ("ytd", "YTD"), ("1y", "1Y"), ("3y", "3Y"), ("5y", "5Y"),
+          ("10y", "10Y"), ("max", "Max")
+        ] %}
+        <button
+          type="button"
+          data-price-range="{{ value }}"
+          onclick="loadStockPrice('{{ value }}')"
+          aria-pressed="{{ 'true' if value == '1y' else 'false' }}"
+          class="price-range-btn rounded-md px-3 py-1.5 font-medium transition {{ 'bg-indigo-600 text-white' if value == '1y' else 'text-gray-400 hover:bg-gray-800 hover:text-white' }}"
+        >{{ label }}</button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div id="price-chart-status" class="h-5 text-xs text-gray-500" role="status">Loading price history…</div>
+  <div id="price-chart" style="height: 320px;"></div>
+</section>
+
 <!-- Time slicer controls -->
 <div
   x-data="{ gran: '{{ ctx.granularity }}' }"
@@ -182,54 +216,249 @@
 </style>
 
 <script>
-  function renderTrendChart() {
+  var activePriceRange = '1y';
+  var priceChartRequest = null;
+
+  function setActivePriceRange(rangeKey) {
+    activePriceRange = rangeKey;
+    document.querySelectorAll('.price-range-btn').forEach(function(button) {
+      var isActive = button.dataset.priceRange === rangeKey;
+      button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+      button.classList.toggle('bg-indigo-600', isActive);
+      button.classList.toggle('text-white', isActive);
+      button.classList.toggle('text-gray-400', !isActive);
+    });
+  }
+
+  function formatPrice(value, currency) {
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: currency || 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch (error) {
+      return '$' + value.toFixed(2);
+    }
+  }
+
+  function renderEmptyPriceChart(message) {
+    Plotly.react('price-chart', [], {
+      paper_bgcolor: '#111827',
+      plot_bgcolor: '#111827',
+      margin: { t: 8, r: 24, b: 45, l: 60 },
+      xaxis: { visible: false },
+      yaxis: { visible: false },
+      annotations: [{
+        text: message,
+        x: 0.5, y: 0.5, xref: 'paper', yref: 'paper',
+        showarrow: false, font: { color: '#9ca3af', size: 13 },
+      }],
+    }, { displayModeBar: false, responsive: true });
+  }
+
+  async function loadStockPrice(rangeKey) {
+    setActivePriceRange(rangeKey);
+    if (priceChartRequest) priceChartRequest.abort();
+    priceChartRequest = new AbortController();
+
+    var statusEl = document.getElementById('price-chart-status');
+    var latestEl = document.getElementById('price-chart-latest');
+    var changeEl = document.getElementById('price-chart-change');
+    var rangeEl = document.getElementById('price-chart-range-label');
+    statusEl.textContent = 'Loading price history…';
+
+    try {
+      var response = await fetch(
+        '/company/{{ ctx.ticker }}/price-history?range_key=' + encodeURIComponent(rangeKey),
+        { signal: priceChartRequest.signal }
+      );
+      if (!response.ok) throw new Error('Price history request failed');
+      var data = await response.json();
+      if (rangeKey !== activePriceRange) return;
+
+      rangeEl.textContent = data.range_label;
+      if (!data.timestamps.length) {
+        latestEl.textContent = '—';
+        changeEl.textContent = '';
+        statusEl.textContent = 'Price history is not available for this range.';
+        renderEmptyPriceChart('Price history is not available for this range.');
+        return;
+      }
+
+      var latest = data.prices[data.prices.length - 1];
+      var positive = data.change_pct === null || data.change_pct >= 0;
+      var lineColor = positive ? '#34d399' : '#f87171';
+      latestEl.textContent = formatPrice(latest, data.currency);
+      if (data.change_pct !== null && data.change_amount !== null) {
+        var sign = data.change_amount >= 0 ? '+' : '';
+        changeEl.textContent =
+          sign + formatPrice(data.change_amount, data.currency) +
+          ' (' + sign + data.change_pct.toFixed(2) + '%)';
+        changeEl.className = 'text-sm font-medium ' + (positive ? 'text-green-400' : 'text-red-400');
+      } else {
+        changeEl.textContent = '';
+      }
+      statusEl.textContent = 'Adjusted price · ' + data.range_label;
+
+      var tickFormat = '%b %Y';
+      var hoverFormat = '%b %e, %Y';
+      if (rangeKey === '1d') {
+        tickFormat = '%I:%M %p';
+        hoverFormat = '%b %e, %Y %I:%M %p';
+      } else if (rangeKey === '5d') {
+        tickFormat = '%a %I:%M';
+        hoverFormat = '%b %e, %Y %I:%M %p';
+      } else if (rangeKey === '1mo' || rangeKey === '6mo' || rangeKey === 'ytd') {
+        tickFormat = '%b %e';
+      }
+
+      var trace = {
+        x: data.timestamps,
+        y: data.prices,
+        type: 'scattergl',
+        mode: 'lines',
+        line: { color: lineColor, width: 2.5 },
+        hovertemplate: '%{x|' + hoverFormat + '}<br>Price: %{y:$,.2f}<extra></extra>',
+      };
+      var layout = {
+        paper_bgcolor: '#111827',
+        plot_bgcolor: '#111827',
+        margin: { t: 8, r: 24, b: 45, l: 60 },
+        font: { color: '#9ca3af', size: 11 },
+        showlegend: false,
+        hovermode: 'x unified',
+        xaxis: {
+          type: 'date',
+          tickformat: tickFormat,
+          nticks: 8,
+          gridcolor: '#1f2937',
+          linecolor: '#1f2937',
+          tickfont: { size: 10 },
+        },
+        yaxis: {
+          title: { text: 'Adjusted Price (' + (data.currency || 'USD') + ')', font: { color: lineColor, size: 11 } },
+          tickprefix: '$',
+          gridcolor: '#1f2937',
+          linecolor: '#1f2937',
+          zeroline: false,
+          tickfont: { size: 10 },
+        },
+      };
+      Plotly.react('price-chart', [trace], layout, { displayModeBar: false, responsive: true });
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      statusEl.textContent = 'Price history could not be loaded.';
+      renderEmptyPriceChart('Price history could not be loaded.');
+    }
+  }
+
+  var activeTrendMetric = 'revenue';
+
+  var trendMetricMeta = {
+    revenue:             { label: 'Revenue',             kind: 'currency', color: '#6366f1' },
+    net_income:          { label: 'Net Income',          kind: 'currency', color: '#34d399' },
+    free_cash_flow:      { label: 'Free Cash Flow',      kind: 'currency', color: '#22d3ee' },
+    eps_diluted:         { label: 'EPS (Diluted)',       kind: 'perShare', color: '#a78bfa' },
+    eps_basic:           { label: 'EPS (Basic)',         kind: 'perShare', color: '#c084fc' },
+    total_assets:        { label: 'Total Assets',        kind: 'currency', color: '#60a5fa' },
+    total_liabilities:   { label: 'Total Liabilities',   kind: 'currency', color: '#f87171' },
+    total_equity:        { label: 'Total Equity',        kind: 'currency', color: '#fbbf24' },
+    cash_and_equivalents:{ label: 'Cash & Equivalents', kind: 'currency', color: '#2dd4bf' },
+  };
+
+  function metricDisplayScale(values, kind) {
+    if (kind === 'perShare') {
+      return { divisor: 1, suffix: '', axis: 'USD per share' };
+    }
+    var finite = values.filter(function(v) { return v !== null && Number.isFinite(v); });
+    var maxAbs = finite.length ? Math.max.apply(null, finite.map(Math.abs)) : 0;
+    if (maxAbs >= 1e12) return { divisor: 1e12, suffix: 'T', axis: 'USD trillions' };
+    if (maxAbs >= 1e9)  return { divisor: 1e9,  suffix: 'B', axis: 'USD billions' };
+    if (maxAbs >= 1e6)  return { divisor: 1e6,  suffix: 'M', axis: 'USD millions' };
+    if (maxAbs >= 1e3)  return { divisor: 1e3,  suffix: 'K', axis: 'USD thousands' };
+    return { divisor: 1, suffix: '', axis: 'USD' };
+  }
+
+  function renderTrendChart(requestedMetric) {
     var dataEl = document.getElementById('chart-data-json');
     if (!dataEl || !window.Plotly) return;
 
-    var data    = JSON.parse(dataEl.textContent);
-    var labels  = data.labels;
-    var revenue = data.revenue;
-    var eps     = data.eps;
-    var revenueB = revenue.map(function(v) { return v === null ? null : v / 1e9; });
+    var data = JSON.parse(dataEl.textContent);
+    if (requestedMetric && trendMetricMeta[requestedMetric]) {
+      activeTrendMetric = requestedMetric;
+    }
+    if (!data.metrics[activeTrendMetric]) {
+      activeTrendMetric = 'revenue';
+    }
 
-    var darkBg  = '#111827';
+    var selectEl = document.getElementById('trend-metric-select');
+    if (selectEl) selectEl.value = activeTrendMetric;
+
+    var meta = trendMetricMeta[activeTrendMetric];
+    var rawValues = data.metrics[activeTrendMetric];
+    var hasData = rawValues.some(function(v) { return v !== null && Number.isFinite(v); });
+    var scale = metricDisplayScale(rawValues, meta.kind);
+    var values = rawValues.map(function(v) { return v === null ? null : v / scale.divisor; });
+    var markerColors = data.dates.map(function(date) {
+      return date === data.selectedDate ? '#fbbf24' : meta.color;
+    });
+    var markerSizes = data.dates.map(function(date) {
+      return date === data.selectedDate ? 10 : 6;
+    });
+
+    var hoverSuffix = scale.suffix;
+    var trace = {
+      x: data.dates,
+      y: values,
+      name: meta.label,
+      type: 'scatter', mode: 'lines+markers',
+      line: { color: meta.color, width: 3 },
+      marker: { color: markerColors, size: markerSizes, line: { color: '#111827', width: 1 } },
+      connectgaps: false,
+      hovertemplate: '%{x|%b %e, %Y}<br>' + meta.label + ': $%{y:,.2f}' + hoverSuffix + '<extra></extra>',
+    };
+
+    var darkBg = '#111827';
     var gridCol = '#1f2937';
     var textCol = '#9ca3af';
-
-    var traceRevenue = {
-      x: labels, y: revenueB, name: 'Revenue (B)',
-      type: 'scatter', mode: 'lines+markers',
-      line: { color: '#6366f1', width: 2 }, marker: { size: 5 },
-      connectgaps: false, yaxis: 'y',
-    };
-    var traceEPS = {
-      x: labels, y: eps, name: 'EPS Diluted',
-      type: 'scatter', mode: 'lines+markers',
-      line: { color: '#34d399', width: 2 }, marker: { size: 5 },
-      connectgaps: false, yaxis: 'y2',
-    };
     var layout = {
       paper_bgcolor: darkBg, plot_bgcolor: darkBg,
-      margin: { t: 10, r: 60, b: 60, l: 60 },
+      margin: { t: 10, r: 24, b: 52, l: 72 },
       font: { color: textCol, size: 11 },
-      legend: { orientation: 'h', x: 0, y: -0.25, font: { color: textCol } },
-      xaxis: { tickangle: -35, gridcolor: gridCol, linecolor: gridCol, tickfont: { size: 10 } },
-      yaxis: {
-        title: { text: 'Revenue ($B)', font: { color: '#6366f1', size: 11 } },
-        gridcolor: gridCol, linecolor: gridCol,
-        tickprefix: '$', ticksuffix: 'B', tickfont: { size: 10 },
+      showlegend: false,
+      hovermode: 'x unified',
+      annotations: hasData ? [] : [{
+        text: 'Not available for the displayed periods.',
+        x: 0.5, y: 0.5, xref: 'paper', yref: 'paper',
+        showarrow: false, font: { color: textCol, size: 13 },
+      }],
+      xaxis: {
+        type: 'date',
+        tickmode: 'array',
+        tickvals: data.dates,
+        ticktext: data.labels,
+        tickangle: -35,
+        gridcolor: gridCol,
+        linecolor: gridCol,
+        tickfont: { size: 10 },
       },
-      yaxis2: {
-        title: { text: 'EPS ($)', font: { color: '#34d399', size: 11 } },
-        overlaying: 'y', side: 'right', showgrid: false,
-        tickprefix: '$', tickfont: { size: 10 },
+      yaxis: {
+        title: { text: meta.label + ' (' + scale.axis + ')', font: { color: meta.color, size: 11 } },
+        gridcolor: gridCol, linecolor: gridCol,
+        zeroline: true, zerolinecolor: '#4b5563',
+        tickprefix: '$', ticksuffix: scale.suffix, tickfont: { size: 10 },
       },
     };
-    Plotly.newPlot('trend-chart', [traceRevenue, traceEPS], layout, { displayModeBar: false, responsive: true });
+    Plotly.react('trend-chart', [trace], layout, { displayModeBar: false, responsive: true });
   }
 
   // Initial page load
-  document.addEventListener('DOMContentLoaded', renderTrendChart);
+  document.addEventListener('DOMContentLoaded', function() {
+    loadStockPrice('1y');
+    renderTrendChart();
+  });
 
   // After every HTMX swap into #detail-data
   document.body.addEventListener('htmx:afterSettle', function(evt) {

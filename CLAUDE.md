@@ -58,6 +58,7 @@ src/tickerlens/
   - Plotly trends, YoY/QoQ KPIs, and Income/Cash Flow/Balance Sheet tabs
   - Stored 10-K risk factors and per-quarter 8-K ex-99 press-release text
   - Sticky per-period browser print/PDF action with a dated snapshot footer
+- Phase 3 UI additions include a configurable single-metric financial trend and a lazy-loaded adjusted stock-price chart with Today-through-Max ranges.
 - XBRL joins are anchored by period `end` date, not `fy/fp`, because comparative facts can carry misleading fiscal labels.
 - The current build phase is Phase 3: company-universe ingestion, search, watchlist, Range/Compare modes, and ZIP downloads.
 

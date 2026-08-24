@@ -18,7 +18,7 @@ from tickerlens.data.filings import (
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
-from tickerlens.data.yahoo import get_quote
+from tickerlens.data.yahoo import PriceHistory, PriceRange, get_price_history, get_quote
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
@@ -117,10 +117,12 @@ class DetailContext(BaseModel):
     selected_year: int          # e.g. 2025
     # Current period
     current: PeriodData
-    # Chart data — all available quarters in chronological order
+    # Chart data — unique period-end dates in chronological order. Dates, rather
+    # than fiscal labels, prevent duplicate/misreported labels from collapsing
+    # multiple quarters onto the same Plotly x position.
+    chart_dates: list[str]
     chart_labels: list[str]
-    chart_revenue: list[float | None]
-    chart_eps: list[float | None]
+    chart_metrics: dict[str, list[float | None]]
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
@@ -152,6 +154,14 @@ class FinancialsService:
             fiscal_year_end=submissions.get("fiscalYearEnd"),
             periods=periods,
         )
+
+    def price_history(
+        self,
+        ticker: str,
+        range_key: PriceRange = "1y",
+    ) -> PriceHistory:
+        """Return normalized adjusted prices for the detail-page stock chart."""
+        return get_price_history(ticker, range_key)
 
     def fetch_and_persist(
         self,
@@ -408,10 +418,22 @@ class FinancialsService:
                     all_rows, selected_quarter, latest
                 )
 
-            # Chart data — chronological order across all quarters
-            chart_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
-            chart_revenue = [r.revenue for r in all_rows]
-            chart_eps = [r.eps_diluted for r in all_rows]
+            # Chart data — chronological order across all quarters. Use the
+            # actual period end as the x value because upstream fiscal labels
+            # can be duplicated or inconsistent across comparative facts.
+            chart_dates = [r.period_end.isoformat() for r in all_rows]
+            chart_labels = [r.period_end.strftime("%b '%y") for r in all_rows]
+            chart_metrics = {
+                "revenue": [r.revenue for r in all_rows],
+                "net_income": [r.net_income for r in all_rows],
+                "free_cash_flow": [r.free_cash_flow for r in all_rows],
+                "eps_diluted": [r.eps_diluted for r in all_rows],
+                "eps_basic": [r.eps_basic for r in all_rows],
+                "total_assets": [r.total_assets for r in all_rows],
+                "total_liabilities": [r.total_liabilities for r in all_rows],
+                "total_equity": [r.total_equity for r in all_rows],
+                "cash_and_equivalents": [r.cash_and_equivalents for r in all_rows],
+            }
 
             return DetailContext(
                 cik=cik,
@@ -426,9 +448,9 @@ class FinancialsService:
                 selected_quarter=selected_quarter,
                 selected_year=selected_year,
                 current=current,
+                chart_dates=chart_dates,
                 chart_labels=chart_labels,
-                chart_revenue=chart_revenue,
-                chart_eps=chart_eps,
+                chart_metrics=chart_metrics,
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
             )

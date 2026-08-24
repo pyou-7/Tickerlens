@@ -531,9 +531,18 @@ def test_get_detail_chart_data_is_chronological(session: Session) -> None:
     cik = "0000320193"
     session.add(_company(cik=cik))
     rows = [
-        _row(cik=cik, period_end=dt.date(2024, 3, 31), fiscal_year=2024, fiscal_period="Q1", revenue=90_000),
-        _row(cik=cik, period_end=dt.date(2024, 6, 30), fiscal_year=2024, fiscal_period="Q2", revenue=80_000),
-        _row(cik=cik, period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95_000),
+        _row(
+            cik=cik, period_end=dt.date(2024, 12, 28), fiscal_year=2025,
+            fiscal_period="Q4", revenue=90_000, net_income=10_000, eps_diluted=0.50,
+            total_assets=200_000,
+        ),
+        # A duplicated upstream fiscal label must not collapse this point onto
+        # the prior quarter's x position.
+        _row(
+            cik=cik, period_end=dt.date(2025, 12, 27), fiscal_year=2025,
+            fiscal_period="Q4", revenue=95_000, net_income=12_000, eps_diluted=0.60,
+            total_assets=220_000,
+        ),
     ]
     for r in rows:
         session.add(r)
@@ -544,8 +553,23 @@ def test_get_detail_chart_data_is_chronological(session: Session) -> None:
     svc = FinancialsService(edgar_client=mock_edgar, session=session)
 
     ctx = svc.get_detail("AAPL")
-    assert ctx.chart_labels == ["Q1 FY2024", "Q2 FY2024", "Q1 FY2025"]
-    assert ctx.chart_revenue == [pytest.approx(90_000), pytest.approx(80_000), pytest.approx(95_000)]
+    assert ctx.chart_dates == ["2024-12-28", "2025-12-27"]
+    assert ctx.chart_labels == ["Dec '24", "Dec '25"]
+    assert ctx.chart_metrics["revenue"] == [pytest.approx(90_000), pytest.approx(95_000)]
+    assert ctx.chart_metrics["net_income"] == [pytest.approx(10_000), pytest.approx(12_000)]
+    assert ctx.chart_metrics["eps_diluted"] == [pytest.approx(0.50), pytest.approx(0.60)]
+    assert ctx.chart_metrics["total_assets"] == [pytest.approx(200_000), pytest.approx(220_000)]
+    assert set(ctx.chart_metrics) == {
+        "revenue",
+        "net_income",
+        "free_cash_flow",
+        "eps_diluted",
+        "eps_basic",
+        "total_assets",
+        "total_liabilities",
+        "total_equity",
+        "cash_and_equivalents",
+    }
 
 
 def test_get_detail_quarter_options_most_recent_first(session: Session) -> None:

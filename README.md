@@ -14,6 +14,7 @@ The current app includes:
 - SQLAlchemy models + Alembic migrations (Company + QuarterlyFinancials)
 - Company overview and single-period Time Slicer detail views
 - Quarterly/yearly selection, Plotly trends, YoY/QoQ KPIs, and three financial-statement tabs
+- Configurable financial trends plus adjusted stock-price history from Today through Max
 - Risk-factor and press-release narrative extraction with explicit missing-data states
 - Per-period browser print/PDF export with a dated snapshot footer
 - Focused tests for XBRL, filing extraction, and the financials service

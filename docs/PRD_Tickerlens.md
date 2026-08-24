@@ -94,14 +94,15 @@ When you open a company page, you land on the Overview by default. Contents:
 1. **Company header** (persistent)
 2. **Time slicer** — Quarterly + Yearly selectors + mode picker
 3. **Hero KPI row** — Revenue, EPS, Net Income, FCF with color-coded YoY change arrows (QoQ toggle available)
-4. **Trend chart** — Revenue + EPS line chart across selected period(s)
-5. **Tabbed financial tables** — Income Statement | Balance Sheet | Cash Flow with YoY comparison columns
-6. **Collapsible sections** (closed by default):
+4. **Stock price history** — adjusted-price line chart with Today, 5D, 1M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, and Max ranges. Show the latest price plus absolute and percentage change over the active range.
+5. **Configurable financial trend chart** — one metric at a time to avoid dual-axis congestion. Available metrics: Revenue, Net Income, Free Cash Flow, EPS Basic/Diluted, Total Assets, Total Liabilities, Total Equity, and Cash & Equivalents. The x-axis uses actual period-end dates so duplicate or inconsistent filing labels cannot collapse separate quarters.
+6. **Tabbed financial tables** — Income Statement | Balance Sheet | Cash Flow with YoY comparison columns
+7. **Collapsible sections** (closed by default):
    - Press release highlights
    - Management guidance
    - Transcript excerpts (when freely available)
    - Risk factors (from 10-K/10-Q)
-7. **Sticky "Download" button**
+8. **Sticky "Download" button**
 
 **Missing data UX:** Show "Not available for this period" — section stays visible, you'll know to look elsewhere.
 

@@ -100,3 +100,11 @@ Format:
 **What:** The Time Slicer’s sticky Download PDF action invokes the browser print dialog with a print-specific company/period header, readable light styling, a useful filename, and a dated “As of” footer.
 **Why:** Phase 2 needs a lightweight export for the currently selected period, while the multi-document ZIP workflow belongs to Phase 3. Browser print produces a local PDF without adding a premature server-side generation pipeline.
 **Alternatives considered:** Server-side WeasyPrint PDF generation (deferred: unnecessary duplication for the current page); reusing Chrome headless filing conversion (rejected: that pipeline converts SEC source documents, not the Tickerlens detail view); building ZIP export now (deferred to Phase 3).
+
+---
+
+## 2026-07-27 — Lazy-loaded adjusted stock price history
+
+**What:** Added a validated `GET /company/{ticker}/price-history` JSON endpoint and a separate Plotly stock chart supporting Today, 5D, 1M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, and Max. The Yahoo adapter returns adjusted-close data in a Pydantic model; range requests load only after the detail page renders.
+**Why:** Stock performance is a different time series from quarterly fundamentals and needs independent ranges. Lazy loading prevents Yahoo latency or failure from blocking the EDGAR-backed company page, while adjusted prices preserve continuity across splits and distributions.
+**Alternatives considered:** Persisting daily prices immediately (deferred until ingestion/storage requirements are clearer); loading every range up front (rejected: unnecessary data and latency); combining price with financial metrics (rejected: mismatched frequencies and scales recreate the chart-congestion problem).
