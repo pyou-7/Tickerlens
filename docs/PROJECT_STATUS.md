@@ -35,18 +35,27 @@ Goal: expand beyond one-company browsing with a company universe, global search,
   - Replaced the congested Revenue/EPS dual-axis chart with a configurable single-metric trend chart covering nine core performance, per-share, and balance-sheet metrics
   - Trend x-axis now uses unique period-end dates, preventing duplicate fiscal labels from collapsing separate quarters
   - Added a lazy-loaded adjusted stock-price chart with Today, 5D, 1M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, and Max ranges
-  - 60 tests currently passing
+  - Implemented PRD §4.10 all-company universe indexing and global combobox search (`CompanySearchService`, `GET /api/search`, and Alpine.js combobox component in hero and persistent nav) with ranked matching, market-cap tie breaking, and keyboard shortcuts (`Cmd+K`, `↑`/`↓`/`Enter`/`Esc`)
+  - **Financial Data & Universal Extraction Hardening:**
+    - Corrected `infer_fiscal_year` for January-May fiscal year end filers (e.g. ORCL `0531`), preventing duplicate labels and chronological distortion.
+    - Updated `concept_facts` tag selection to automatically pick the candidate tag with the most recent `end` date (e.g. NVDA transitioning to `Revenues` and AMZN/NVDA transitioning to `PaymentsToAcquireProductiveAssets`).
+    - Added universal `TOTAL_LIABILITIES` fallback (`Assets - StockholdersEquity`) blended with `LiabilitiesCurrent + LiabilitiesNoncurrent`, eliminating missing balance sheet data.
+    - Added `operating_cash_flow` and `capex` to schema, models, financial service, cash flow table, and trend chart.
+    - Added regex extractors for `extract_guidance` and `extract_executive_commentary` from 8-K Ex-99 exhibits and wired them into detail disclosures alongside risk factors and press releases.
+    - Broadened 8-K exhibit pattern matching in `ir_download.py` to support all filing conventions (`exhibit991`, `q2fy27pr`, `ex99_1`).
+    - Added local caching and resilient fallback in `yahoo.py` and `wikipedia.py`.
+    - Automated ingestion and validation across 10 US public companies: `AAPL`, `MSFT`, `ORCL`, `NVDA`, `TSLA`, `AMZN`, `GOOGL`, `INTC`, `MRVL`, `META` — 100% passed.
+  - 73 tests currently passing in test suite.
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Build the all-company CIK/ticker/name universe and an incremental ingest workflow.
-2. Implement global ticker/company-name search using the PRD §4.10 combobox pattern.
-3. Add the single-user watchlist and pinned-company home state.
-4. Add Time Slicer Range and Compare modes.
-5. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
-6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+1. Add the single-user watchlist and pinned-company home state.
+2. Add Time Slicer Range and Compare modes.
+3. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
+4. Build batch ingestion/refresh tooling for universe watchlist coverage.
+5. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
 

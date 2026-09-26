@@ -173,11 +173,12 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
     Find the earnings-release 8-K that corresponds to a 10-Q/10-K.
 
     The 8-K is typically filed 1–14 days before the 10-Q/10-K (companies
-    announce results before the formal filing is ready).
+    announce results before the formal filing is ready), but can extend up to
+    45 days for annual 10-K filings.
     """
     candidates = [
         er for er in er_8ks
-        if 0 <= (filing["filing_date"] - er["filing_date"]).days <= 21
+        if -2 <= (filing["filing_date"] - er["filing_date"]).days <= 45
     ]
     if not candidates:
         return None
@@ -187,12 +188,17 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
 
 # ── ex-99 exhibit discovery ───────────────────────────────────────────────────
 
+_EX99_PAT = re.compile(
+    r"(?i)(?:ex(?:hibit)?[\s._-]*99|pr\.htm|press[-_]?release|earnings|cfo[-_]?commentary)"
+)
+
+
 def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str | None:
     """
-    Fetch the 8-K filing index and return the ex-99 exhibit filename.
+    Fetch the 8-K filing index and return the earnings release exhibit filename.
 
-    Returns None if no ex-99 file is found (some companies embed the press
-    release directly in the primary 8-K document).
+    Supports various exhibit conventions (ex99, exhibit991, q2fy27pr, etc.),
+    falling back to the primary 8-K document if no standalone exhibit was attached.
     """
     url = edgar_client.filing_index_url(cik, accession)
     try:
@@ -200,17 +206,29 @@ def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str |
     except Exception:
         return None
 
-    # Look for links that indicate an exhibit 99 file
-    # Patterns: ex99, ex-99, ex991, EX-99.1, etc.
     links = re.findall(r'href="([^"]+\.htm[l]?)"', html, re.IGNORECASE)
-    ex99_candidates = [
+    clean_acc = accession.replace("-", "")
+    filenames = [
         lnk.split("/")[-1]
         for lnk in links
-        if re.search(r'ex.?99', lnk, re.IGNORECASE)
-        and not lnk.startswith("http")
-        and not lnk.startswith("/cgi")
+        if not lnk.startswith("/cgi")
+        and not lnk.endswith("-index.html")
+        and not lnk.endswith("-index-headers.html")
+        and lnk.split("/")[-1].lower() not in {"r1.htm", "index.htm", "index.html"}
+        and (clean_acc in lnk or not lnk.startswith("/"))
     ]
-    return ex99_candidates[0] if ex99_candidates else None
+
+    # Preference 1: Explicit Exhibit 99 / press release files
+    for fn in filenames:
+        if _EX99_PAT.search(fn):
+            return fn
+
+    # Preference 2: Primary 8-K HTML document
+    for fn in filenames:
+        if not fn.startswith("0") and not fn.startswith("R"):
+            return fn
+
+    return None
 
 
 # ── result builder ────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
 from tickerlens.data.filings import (
+    extract_executive_commentary,
+    extract_guidance,
     extract_press_release_text,
     extract_risk_factors,
     filing_doc_url,
@@ -39,6 +41,8 @@ class KPISnapshot(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    operating_cash_flow: float | None = None
+    capex: float | None = None
 
 
 class KPIChange(BaseModel):
@@ -48,6 +52,8 @@ class KPIChange(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    operating_cash_flow: float | None = None
+    capex: float | None = None
 
 
 class BalanceSheet(BaseModel):
@@ -99,6 +105,8 @@ class PeriodData(BaseModel):
     # Narrative (per-quarter, from the earnings 8-K ex-99; None = not available)
     press_release: str | None = None
     press_release_source: str | None = None
+    guidance: str | None = None
+    executive_commentary: str | None = None
 
 
 class DetailContext(BaseModel):
@@ -281,13 +289,15 @@ class FinancialsService:
                 try:
                     html = self.edgar_client.fetch_text(url)
                     text = extract_press_release_text(html)
+                    guidance = extract_guidance(html)
+                    commentary = extract_executive_commentary(html)
                 except Exception:
                     logger.warning(
                         "Press-release fetch/extract failed for %s %s",
                         ticker, period.quarter_label, exc_info=True,
                     )
                     continue
-                if text is None:
+                if text is None and guidance is None and commentary is None:
                     continue
 
                 row = db.execute(
@@ -299,7 +309,12 @@ class FinancialsService:
                 if row is None:
                     continue  # exhibit for a quarter we don't have financials for
 
-                row.press_release_highlights = text
+                if text is not None:
+                    row.press_release_highlights = text
+                if guidance is not None:
+                    row.guidance = guidance
+                if commentary is not None:
+                    row.executive_commentary = commentary
                 row.press_release_source = f"8-K ex-99, {period.quarter_label}"
                 row.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
                 updated += 1
@@ -377,6 +392,13 @@ class FinancialsService:
             if company is None:
                 raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
 
+            if company.risk_factors is None:
+                rf_text, rf_source = self._fetch_risk_factors(cik)
+                if rf_text is not None:
+                    company.risk_factors = rf_text
+                    company.risk_factors_source = rf_source
+                    db.commit()
+
             all_rows: list[QuarterlyFinancial] = (
                 db.execute(
                     select(QuarterlyFinancial)
@@ -427,6 +449,8 @@ class FinancialsService:
                 "revenue": [r.revenue for r in all_rows],
                 "net_income": [r.net_income for r in all_rows],
                 "free_cash_flow": [r.free_cash_flow for r in all_rows],
+                "operating_cash_flow": [r.operating_cash_flow for r in all_rows],
+                "capex": [r.capex for r in all_rows],
                 "eps_diluted": [r.eps_diluted for r in all_rows],
                 "eps_basic": [r.eps_basic for r in all_rows],
                 "total_assets": [r.total_assets for r in all_rows],
@@ -468,6 +492,8 @@ def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
         eps_basic=row.eps_basic,
         eps_diluted=row.eps_diluted,
         free_cash_flow=row.free_cash_flow,
+        operating_cash_flow=row.operating_cash_flow,
+        capex=row.capex,
     )
 
 
@@ -501,6 +527,8 @@ def _compute_ttm(rows: list[QuarterlyFinancial]) -> KPISnapshot:
         eps_basic=_sum_nullable(*[r.eps_basic for r in rows]),
         eps_diluted=_sum_nullable(*[r.eps_diluted for r in rows]),
         free_cash_flow=_sum_nullable(*[r.free_cash_flow for r in rows]),
+        operating_cash_flow=_sum_nullable(*[r.operating_cash_flow for r in rows]),
+        capex=_sum_nullable(*[r.capex for r in rows]),
     )
 
 
@@ -519,6 +547,14 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         ),
         None,
     )
+    if prior is None and latest.period_end is not None:
+        prior = next(
+            (
+                r for r in rows
+                if r.period_end is not None and 320 <= (latest.period_end - r.period_end).days <= 410
+            ),
+            None,
+        )
     if prior is None:
         return KPIChange()
     return KPIChange(
@@ -527,6 +563,8 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         eps_basic=_pct_change(latest.eps_basic, prior.eps_basic),
         eps_diluted=_pct_change(latest.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(latest.free_cash_flow, prior.free_cash_flow),
+        operating_cash_flow=_pct_change(latest.operating_cash_flow, prior.operating_cash_flow),
+        capex=_pct_change(latest.capex, prior.capex),
     )
 
 
@@ -541,6 +579,14 @@ def _compute_bs_yoy(
         ),
         None,
     )
+    if prior is None and latest.period_end is not None:
+        prior = next(
+            (
+                r for r in rows
+                if r.period_end is not None and 320 <= (latest.period_end - r.period_end).days <= 410
+            ),
+            None,
+        )
     if prior is None:
         return BalanceSheetChange()
     return _bs_change(_to_bs(latest), _to_bs(prior))
@@ -562,12 +608,15 @@ def _is_prior_quarter(
         return False
     _prev = {"Q2": ("Q1", 0), "Q3": ("Q2", 0), "Q4": ("Q3", 0), "Q1": ("Q4", -1)}
     expected_fp, fy_delta = _prev.get(current.fiscal_period, (None, None))
-    if expected_fp is None:
-        return False
-    return (
+    if expected_fp is not None and (
         candidate.fiscal_period == expected_fp
         and candidate.fiscal_year == current.fiscal_year + fy_delta
-    )
+    ):
+        return True
+    if candidate.period_end is not None and current.period_end is not None:
+        days = (current.period_end - candidate.period_end).days
+        return 60 <= days <= 130
+    return False
 
 
 def _compute_qoq(
@@ -581,6 +630,8 @@ def _compute_qoq(
         eps_basic=_pct_change(current.eps_basic, prior.eps_basic),
         eps_diluted=_pct_change(current.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(current.free_cash_flow, prior.free_cash_flow),
+        operating_cash_flow=_pct_change(current.operating_cash_flow, prior.operating_cash_flow),
+        capex=_pct_change(current.capex, prior.capex),
     )
 
 
@@ -591,6 +642,8 @@ def _compute_kpi_yoy(current_kpi: KPISnapshot, prior_kpi: KPISnapshot) -> KPICha
         eps_basic=_pct_change(current_kpi.eps_basic, prior_kpi.eps_basic),
         eps_diluted=_pct_change(current_kpi.eps_diluted, prior_kpi.eps_diluted),
         free_cash_flow=_pct_change(current_kpi.free_cash_flow, prior_kpi.free_cash_flow),
+        operating_cash_flow=_pct_change(current_kpi.operating_cash_flow, prior_kpi.operating_cash_flow),
+        capex=_pct_change(current_kpi.capex, prior_kpi.capex),
     )
 
 
@@ -641,6 +694,8 @@ def _build_quarterly_period(
             balance_sheet_qoq=_compute_bs_qoq(row, prior_qoq),
             press_release=row.press_release_highlights,
             press_release_source=row.press_release_source,
+            guidance=row.guidance,
+            executive_commentary=row.executive_commentary,
         ),
         corrected_label,
     )
@@ -726,6 +781,8 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             eps_basic=row.eps_basic,
             eps_diluted=row.eps_diluted,
             free_cash_flow=row.free_cash_flow,
+            operating_cash_flow=row.operating_cash_flow,
+            capex=row.capex,
             total_assets=row.total_assets,
             total_liabilities=row.total_liabilities,
             total_equity=row.total_equity,
@@ -742,6 +799,8 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "eps_basic": row.eps_basic,
                 "eps_diluted": row.eps_diluted,
                 "free_cash_flow": row.free_cash_flow,
+                "operating_cash_flow": row.operating_cash_flow,
+                "capex": row.capex,
                 "total_assets": row.total_assets,
                 "total_liabilities": row.total_liabilities,
                 "total_equity": row.total_equity,

@@ -31,6 +31,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
         try:
             _svc.fetch_and_persist(ticker, periods=8)
             _svc.enrich_company(ticker)
+            _svc.enrich_press_releases(ticker, periods=8)
             overview = _svc.get_overview(ticker)
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}: {exc}") from exc
@@ -58,6 +59,7 @@ def company_detail(
         try:
             _svc.fetch_and_persist(ticker, periods=8)
             _svc.enrich_company(ticker)
+            _svc.enrich_press_releases(ticker, periods=8)
             ctx = _svc.get_detail(
                 ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
             )
@@ -85,7 +87,15 @@ def company_detail_data(
             ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
         )
     except CompanyNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            _svc.fetch_and_persist(ticker, periods=8)
+            _svc.enrich_company(ticker)
+            _svc.enrich_press_releases(ticker, periods=8)
+            ctx = _svc.get_detail(
+                ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+            )
+        except Exception:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     return templates.TemplateResponse(
         request=request,
         name="partials/detail_data.html",

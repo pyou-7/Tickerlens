@@ -64,6 +64,8 @@ class QuarterlyFinancials(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    operating_cash_flow: float | None = None
+    capex: float | None = None
     # Balance sheet (instant, as of period end)
     total_assets: float | None = None
     total_liabilities: float | None = None
@@ -94,7 +96,11 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         unit="USD",
     ),
     Metric.CAPEX: ConceptSpec(
-        tags=("PaymentsToAcquirePropertyPlantAndEquipment",),
+        tags=(
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            "PaymentsToAcquireProductiveAssets",
+            "PaymentsForProceedsFromProductiveAssets",
+        ),
         unit="USD",
     ),
     Metric.TOTAL_ASSETS: ConceptSpec(tags=("Assets",), unit="USD"),
@@ -183,6 +189,8 @@ def extract_recent_quarterly_financials(
                 eps_basic=_value_for_end(by_end[Metric.EPS_BASIC], item.end),
                 eps_diluted=_value_for_end(by_end[Metric.EPS_DILUTED], item.end),
                 free_cash_flow=free_cash_flow,
+                operating_cash_flow=operating_cash_flow.value if operating_cash_flow else None,
+                capex=capital_expenditure.value if capital_expenditure else None,
                 total_assets=balance_sheet[Metric.TOTAL_ASSETS].get(item.end),
                 total_liabilities=balance_sheet[Metric.TOTAL_LIABILITIES].get(item.end),
                 total_equity=balance_sheet[Metric.TOTAL_EQUITY].get(item.end),
@@ -260,9 +268,15 @@ def concept_facts(
     latter, which would otherwise be filtered out by the ``start`` requirement.
     """
     spec = CONCEPTS[metric]
-    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    best_tag: str | None = None
+    best_facts: list[XbrlFact] = []
+    best_max_end: dt.date | None = None
+
     for tag in spec.tags:
-        units = us_gaap.get(tag, {}).get("units", {})
+        if tag not in us_gaap:
+            continue
+        units = us_gaap[tag].get("units", {})
         raw_facts = units.get(spec.unit, [])
         facts = [
             XbrlFact.model_validate(raw)
@@ -272,8 +286,42 @@ def concept_facts(
             and (instant or raw.get("start"))
         ]
         if facts:
-            return tag, facts
+            max_end = max(f.end for f in facts)
+            # Pick the tag covering the most recent reporting periods
+            if best_max_end is None or max_end > best_max_end:
+                best_tag = tag
+                best_facts = facts
+                best_max_end = max_end
+
+    if best_tag is not None and best_facts:
+        return best_tag, best_facts
+
     raise KeyError(f"No XBRL facts found for metric {metric.value}")
+
+
+def _safe_instant_metric(
+    companyfacts: dict[str, Any],
+    tags: tuple[str, ...],
+    fiscal_year_end: str | None,
+) -> dict[dt.date, float]:
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    for tag in tags:
+        units = us_gaap.get(tag, {}).get("units", {})
+        raw_facts = units.get("USD", [])
+        facts = [
+            XbrlFact.model_validate(raw)
+            for raw in raw_facts
+            if raw.get("form") in {"10-Q", "10-K"} and raw.get("end")
+        ]
+        if facts:
+            grouped: dict[dt.date, list[XbrlFact]] = {}
+            for fact in facts:
+                grouped.setdefault(fact.end, []).append(fact)
+            return {
+                end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
+                for end, candidates in grouped.items()
+            }
+    return {}
 
 
 def balance_sheet_metric(
@@ -288,23 +336,50 @@ def balance_sheet_metric(
     in a 10-K); keep the latest-filed one, preferring the fact whose fiscal-year
     label matches the fiscal year inferred for that end date.
     """
-    source_tag, facts = concept_facts(companyfacts, metric, instant=True)
-    grouped: dict[dt.date, list[XbrlFact]] = {}
-    for fact in facts:
-        grouped.setdefault(fact.end, []).append(fact)
-    return {
-        end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
-        for end, candidates in grouped.items()
-    }
+    try:
+        source_tag, facts = concept_facts(companyfacts, metric, instant=True)
+        grouped: dict[dt.date, list[XbrlFact]] = {}
+        for fact in facts:
+            grouped.setdefault(fact.end, []).append(fact)
+        return {
+            end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
+            for end, candidates in grouped.items()
+        }
+    except KeyError:
+        if metric == Metric.TOTAL_LIABILITIES:
+            # Fallback 1: Assets - StockholdersEquity (universal accounting identity)
+            derived: dict[dt.date, float] = {}
+            try:
+                assets = balance_sheet_metric(companyfacts, Metric.TOTAL_ASSETS, fiscal_year_end)
+                equity = balance_sheet_metric(companyfacts, Metric.TOTAL_EQUITY, fiscal_year_end)
+                derived = {end: assets[end] - equity[end] for end in set(assets) & set(equity)}
+            except Exception:
+                pass
+
+            # Fallback 2: Blend/override with LiabilitiesCurrent + LiabilitiesNoncurrent where available
+            curr = _safe_instant_metric(companyfacts, ("LiabilitiesCurrent",), fiscal_year_end)
+            noncurr = _safe_instant_metric(companyfacts, ("LiabilitiesNoncurrent",), fiscal_year_end)
+            if curr and noncurr:
+                for end in set(curr) & set(noncurr):
+                    derived[end] = curr[end] + noncurr[end]
+
+            if derived:
+                return derived
+        raise
 
 
 def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:
     """Infer the fiscal-year label from a period end date and SEC MMDD year-end."""
-
     month = int(fiscal_year_end[:2])
     day = int(fiscal_year_end[2:])
-    if month <= 5:
-        return end.year
+
+    # 52/53-week filers whose calendar year ends in early January (e.g. 0103 like JNJ)
+    # A period ending in late December belongs to that calendar year's FY (e.g. Dec 2025 -> FY 2025).
+    if month == 1 and day <= 15:
+        if end.month == 12:
+            return end.year
+        return end.year if (end.month, end.day) <= (month, day) else end.year
+
     return end.year if (end.month, end.day) <= (month, day) else end.year + 1
 
 

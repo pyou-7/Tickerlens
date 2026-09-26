@@ -120,6 +120,8 @@
           <option value="revenue">Revenue</option>
           <option value="net_income">Net Income</option>
           <option value="free_cash_flow">Free Cash Flow</option>
+          <option value="operating_cash_flow">Operating Cash Flow</option>
+          <option value="capex">Capital Expenditures</option>
         </optgroup>
         <optgroup label="Per Share">
           <option value="eps_diluted">EPS (Diluted)</option>
@@ -220,8 +222,20 @@
       </thead>
       <tbody class="divide-y divide-gray-800/50">
         <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Free Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
+          <td class="py-3 pr-4 text-gray-400">Operating Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.operating_cash_flow) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.operating_cash_flow) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.operating_cash_flow) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-400">Capital Expenditures (Capex)</td>
+          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.capex) }}</td>
+          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.capex) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.capex) }}</td>{% endif %}
+        </tr>
+        <tr class="hover:bg-gray-800/30">
+          <td class="py-3 pr-4 text-gray-300 font-medium">Free Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-white font-bold">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
           <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
         </tr>
@@ -311,8 +325,8 @@
 <div class="mt-8 space-y-3">
   <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-1">Disclosures</h2>
   {{ disclosure("Press release highlights", ctx.current.press_release, ctx.current.press_release_source) }}
-  {{ disclosure("Management guidance", none) }}
-  {{ disclosure("Transcript excerpts", none) }}
+  {{ disclosure("Management guidance & outlook", ctx.current.guidance, ctx.current.press_release_source) }}
+  {{ disclosure("Executive commentary & remarks", ctx.current.executive_commentary, ctx.current.press_release_source) }}
   {{ disclosure("Risk factors", ctx.risk_factors, ctx.risk_factors_source) }}
 </div>
 

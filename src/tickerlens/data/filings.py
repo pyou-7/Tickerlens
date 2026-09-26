@@ -35,11 +35,17 @@ class AnnualFiling:
 # The real Item 1A section is bounded below by the next item heading. Different
 # filers jump to 1B (Unresolved Staff Comments) or straight to 2 (Properties);
 # some recent filings also use "1C" (Cybersecurity).
-_RISK_START_RE = re.compile(r"item\s*1a\.?\s*[:.\-–]*\s*risk\s+factors", re.IGNORECASE)
+_RISK_START_RE = re.compile(
+    r"(?:item\s*1a\.?\s*[:.\-–]*\s*r\s*i\s*s\s*k\s+factors?|\bitem\s*1a\.?\s*[:.\-–]*\s*risk\s+factors?|^\s*risk\s+factors\s*$)",
+    re.IGNORECASE | re.MULTILINE,
+)
 _RISK_END_RE = re.compile(
     r"item\s*1b\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1c\.?\s*[:.\-–]*\s*cybersecurity"
-    r"|item\s*2\.?\s*[:.\-–]*\s*properties",
+    r"|item\s*2\.?\s*[:.\-–]*\s*properties"
+    r"|\bitem\s*1b\b"
+    r"|\bitem\s*1c\b"
+    r"|\bitem\s*2\b",
     re.IGNORECASE,
 )
 
@@ -100,12 +106,106 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
             best_section = section
 
     if best_section is None or len(best_section) < _MIN_SECTION_CHARS:
+        # Fallback for filers who only have 'Risk Factors' heading before Item 1B/1C
+        for match in re.finditer(r"(?i)\brisk\s+factors\b", text):
+            start = match.end()
+            end_match = _RISK_END_RE.search(text, start)
+            if end_match:
+                end = end_match.start()
+                section = text[start:end].strip(" .:-–")
+                if best_section is None or len(section) > len(best_section):
+                    best_section = section
+
+    if best_section is None or len(best_section) < _MIN_SECTION_CHARS:
         logger.info("Risk Factors section not confidently located in filing")
         return None
 
     if len(best_section) > max_chars:
         best_section = best_section[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
     return best_section
+
+
+_GUIDANCE_HEADINGS = [
+    r"guidance\s+for\s+[^\n]+",
+    r"business\s+outlook",
+    r"financial\s+outlook",
+    r"forward-looking\s+guidance",
+    r"financial\s+guidance",
+    r"outlook\s+for\s+[^\n]+",
+    r"q[1-4]\s+(?:fy\d+|\d{4})?\s*guidance",
+    r"fy\d+\s+guidance",
+    r"first\s+quarter\s+outlook",
+    r"second\s+quarter\s+outlook",
+    r"third\s+quarter\s+outlook",
+    r"fourth\s+quarter\s+outlook",
+    r"full\s+year\s+outlook",
+    r"outlook",
+]
+_GUIDANCE_RE = re.compile(r"(?i)^\s*(?:" + "|".join(_GUIDANCE_HEADINGS) + r")\s*$", re.MULTILINE)
+
+_SECTION_END_RE = re.compile(
+    r"(?i)^\s*(?:conference\s+call|webcast|non-gaap\s+financial|gaap\s+to\s+non-gaap|about\s+[a-z0-9\s]+|condensed\s+consolidated|consolidated\s+balance|consolidated\s+statements|forward-looking\s+statements|use\s+of\s+non-gaap)\b",
+    re.MULTILINE,
+)
+
+
+def extract_guidance(document_html: str, max_chars: int = 4000) -> str | None:
+    """Best-effort extract forward-looking business outlook and guidance."""
+    text = _html_to_text(document_html)
+    m = _GUIDANCE_RE.search(text)
+    if not m:
+        m = re.search(
+            r"(?i)(?:business\s+outlook|financial\s+outlook|forward-looking\s+guidance|guidance\s+for\s+[^\n]+)",
+            text,
+        )
+    if not m:
+        return None
+    start = m.start()
+    end_m = _SECTION_END_RE.search(text, start + len(m.group(0)))
+    end = end_m.start() if end_m else start + 3000
+    section = text[start:end].strip()
+    if len(section) < 80:
+        return None
+    if len(section) > max_chars:
+        section = section[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return section
+
+
+def extract_executive_commentary(document_html: str, max_chars: int = 4000) -> str | None:
+    """Best-effort extract executive commentary and quotes from earnings releases."""
+    text = _html_to_text(document_html)
+    quotes: list[str] = []
+    paragraphs = text.split("\n\n")
+    for p in paragraphs:
+        p_clean = p.strip()
+        if len(p_clean) < 80:
+            continue
+        has_quote = ("“" in p_clean and "”" in p_clean) or ('"' in p_clean)
+        has_speaker = bool(
+            re.search(r"\b(said|stated|commented|noted)\b", p_clean, re.I)
+            and re.search(
+                r"\b(CEO|CFO|Chief Executive|Chief Financial|Chairman|President|Officer)\b",
+                p_clean,
+                re.I,
+            )
+        )
+        if has_quote and has_speaker:
+            quotes.append(p_clean)
+    if not quotes:
+        for p in paragraphs:
+            p_clean = p.strip()
+            if (
+                len(p_clean) >= 100
+                and re.search(r"\b(CEO|Chief Executive Officer)\b", p_clean, re.I)
+                and "said" in p_clean.lower()
+            ):
+                quotes.append(p_clean)
+    if not quotes:
+        return None
+    combined = "\n\n".join(quotes[:4])
+    if len(combined) > max_chars:
+        combined = combined[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return combined
 
 
 def extract_press_release_text(document_html: str, max_chars: int = 4000) -> str | None:

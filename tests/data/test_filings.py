@@ -2,6 +2,8 @@ from datetime import date
 
 from tickerlens.data.filings import (
     AnnualFiling,
+    extract_executive_commentary,
+    extract_guidance,
     extract_press_release_text,
     extract_risk_factors,
     filing_doc_url,
@@ -165,3 +167,36 @@ def test_filing_doc_url_builds_archive_path() -> None:
         "https://www.sec.gov/Archives/edgar/data/320193/"
         "000032019324000123/aapl-20240928.htm"
     )
+
+
+def test_extract_guidance() -> None:
+    html = """
+    <html><body>
+    <h1>Q3 Financial Results</h1>
+    <p>Revenue reached $10 billion for the quarter.</p>
+    <h2>Business Outlook</h2>
+    <p>For the fourth quarter of fiscal 2026, the company expects revenue between $11 billion and $12 billion, representing year-over-year growth of 15% to 20%.</p>
+    <h2>Conference Call</h2>
+    <p>The company will host a conference call today at 5:00 PM ET.</p>
+    </body></html>
+    """
+    guidance = extract_guidance(html)
+    assert guidance is not None
+    assert "Business Outlook" in guidance
+    assert "revenue between $11 billion" in guidance
+    assert "Conference Call" not in guidance
+
+
+def test_extract_executive_commentary() -> None:
+    html = """
+    <html><body>
+    <h1>Results Overview</h1>
+    <p>“We delivered exceptional performance across all business units,” said Jane Doe, Chief Executive Officer. “Our strategic investments in cloud infrastructure continue to drive accelerated customer adoption and margin expansion.”</p>
+    <p>“Free cash flow reached record levels,” commented John Smith, CFO. “We remain committed to disciplined capital allocation.”</p>
+    </body></html>
+    """
+    commentary = extract_executive_commentary(html)
+    assert commentary is not None
+    assert "Jane Doe, Chief Executive Officer" in commentary
+    assert "John Smith, CFO" in commentary
+

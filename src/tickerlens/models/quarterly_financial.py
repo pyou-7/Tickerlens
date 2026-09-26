@@ -20,6 +20,8 @@ class QuarterlyFinancial(Base):
     eps_basic: Mapped[float | None] = mapped_column(Float)
     eps_diluted: Mapped[float | None] = mapped_column(Float)
     free_cash_flow: Mapped[float | None] = mapped_column(Float)
+    operating_cash_flow: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capex: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Balance sheet (instant, as of period_end)
     total_assets: Mapped[float | None] = mapped_column(Float)
     total_liabilities: Mapped[float | None] = mapped_column(Float)
@@ -27,6 +29,8 @@ class QuarterlyFinancial(Base):
     cash_and_equivalents: Mapped[float | None] = mapped_column(Float)
     press_release_highlights: Mapped[str | None] = mapped_column(Text)
     press_release_source: Mapped[str | None] = mapped_column(String(64))  # e.g. "8-K ex-99 filed 2026-05-01"
+    guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executive_commentary: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )

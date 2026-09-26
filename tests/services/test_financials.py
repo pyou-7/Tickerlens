@@ -563,6 +563,8 @@ def test_get_detail_chart_data_is_chronological(session: Session) -> None:
         "revenue",
         "net_income",
         "free_cash_flow",
+        "operating_cash_flow",
+        "capex",
         "eps_diluted",
         "eps_basic",
         "total_assets",

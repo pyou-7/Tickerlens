@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Tickerlens{% endblock %}</title>
+  <style>
+    [x-cloak] { display: none !important; }
+  </style>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -24,9 +27,15 @@
 <body class="h-full text-gray-100 font-sans antialiased">
 
   <!-- Nav -->
-  <nav class="border-b border-gray-800 bg-gray-950">
-    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center h-14 gap-6">
-      <a href="/" class="text-indigo-400 font-bold tracking-tight text-lg">Tickerlens</a>
+  <nav class="border-b border-gray-800 bg-gray-950 sticky top-0 z-40">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
+      <a href="/" class="text-indigo-400 font-bold tracking-tight text-lg hover:text-indigo-300 transition shrink-0">Tickerlens</a>
+
+      <div class="{% block nav_search_class %}{% endblock %}">
+        {% with mode="nav", input_id="nav-search-input" %}
+          {% include "partials/search_combobox.html" %}
+        {% endwith %}
+      </div>
     </div>
   </nav>
 
@@ -35,5 +44,19 @@
     {% block content %}{% endblock %}
   </main>
 
+  <script>
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const hero = document.getElementById('hero-search-input');
+        const nav = document.getElementById('nav-search-input');
+        const target = hero || nav;
+        if (target) {
+          target.focus();
+          target.select();
+        }
+      }
+    });
+  </script>
 </body>
 </html>

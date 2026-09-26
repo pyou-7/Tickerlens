@@ -22,12 +22,16 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 ### Services and routes
 
 - `services/financials.py` — fetch/persist, company enrichment, press-release enrichment, overview context, and detail context.
+- `services/search.py` — SEC universe indexing, multi-tier ranking (exact ticker, prefix ticker, prefix company, word prefix, contains), market-cap tie breaking, and search query execution.
 - `services/ir_download.py` — earnings filing discovery, fiscal labeling, and 8-K ex-99 matching.
 - `routes/company.py` — home, overview, detail, HTMX detail fragment, and refresh handlers.
+- `routes/search.py` — `GET /api/search` JSON suggestions endpoint.
 - The refresh route performs financial, company, and press-release enrichment. First-visit auto-fetch stays lighter and does not fetch press releases.
 
 ### User interface
 
+- Home page: centered hero search combobox with ranked suggestions, debounced input, keyboard navigation, and quick links.
+- Global navigation: persistent compact search combobox in header on all pages with `Cmd+K` / `Ctrl+K` shortcut.
 - Overview: company header/description, latest-quarter KPIs with YoY, TTM snapshot, and link to detail.
 - Detail: quarterly/yearly single-period selectors, HTMX swaps, a configurable one-metric Plotly trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs.
 - A separate stock-price chart lazy-loads adjusted Yahoo history from `GET /company/{ticker}/price-history` and supports Today through Max ranges without blocking initial detail-page rendering.
@@ -38,8 +42,8 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ### Tests and migrations
 
-- 60 tests pass currently (56 at Phase 2 closeout plus Yahoo history coverage).
-- Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, and press-release enrichment.
+- 71 tests pass currently (56 at Phase 2 closeout, 4 Yahoo history tests, 7 search service unit tests, 4 search route/template tests).
+- Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, press-release enrichment, and search ranking.
 - Latest migration: `6b81522c5e05_add_press_release_columns_to_quarterly_*.py`.
 
 ## Findings To Preserve
@@ -55,11 +59,9 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ## Next Recommended Work
 
-1. Design the all-company CIK/ticker/name universe and incremental ingestion workflow.
-2. Implement PRD §4.10 global company search using the specified combobox pattern.
-3. Add the single-user watchlist/pinned-company state.
-4. Add Time Slicer Range and Compare modes.
-5. Add the PRD §4.8 ZIP download workflow.
+1. Add the single-user watchlist/pinned-company state.
+2. Add Time Slicer Range and Compare modes.
+3. Add the PRD §4.8 ZIP download workflow.
 
 ## Guardrails
 

@@ -18,12 +18,14 @@ Expand the proven single-company experience into a searchable, watchlist-driven 
 - [x] Phases 0–2 are complete.
 - [x] Single-company EDGAR ingestion, persistence, enrichment, overview, and detail views are working.
 - [x] Lightweight per-period PDF export exists; Phase 3 ZIP export remains separate.
+- [x] Configurable financial trend chart and lazy-loaded adjusted stock-price chart.
+- [x] All-company universe indexing and global combobox search (PRD §4.10) with keyboard navigation and Cmd+K shortcut.
 
 ---
 
 ## What's In-Flight
 
-- [ ] Nothing yet; begin with the company-universe and ingestion design.
+- [ ] Watchlist and pinned-company home state.
 
 ---
 

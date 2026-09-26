@@ -79,6 +79,39 @@ def get_quote(ticker: str) -> QuoteSnapshot:
         return QuoteSnapshot(ticker=ticker, last_price=None, market_cap=None, currency=None)
 
 
+import json
+from pathlib import Path
+
+_YAHOO_CACHE_DIR = Path(".edgar_cache/yahoo")
+
+
+def _get_cache_path(ticker: str, range_key: str) -> Path:
+    _YAHOO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _YAHOO_CACHE_DIR / f"{ticker.upper()}_{range_key}.json"
+
+
+def _load_cached_history(ticker: str, range_key: PriceRange) -> PriceHistory | None:
+    cache_path = _get_cache_path(ticker, range_key)
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        return PriceHistory(**data)
+    except Exception:
+        logger.warning("Failed to read cached price history for %s (%s)", ticker, range_key, exc_info=True)
+        return None
+
+
+def _save_cached_history(history: PriceHistory) -> None:
+    if not history.prices:
+        return
+    try:
+        cache_path = _get_cache_path(history.ticker, history.range_key)
+        cache_path.write_text(history.model_dump_json(), encoding="utf-8")
+    except Exception:
+        logger.warning("Failed to save price history cache for %s (%s)", history.ticker, history.range_key, exc_info=True)
+
+
 def get_price_history(ticker: str, range_key: PriceRange = "1y") -> PriceHistory:
     """Fetch adjusted price history for a supported chart range.
 
@@ -108,11 +141,13 @@ def get_price_history(ticker: str, range_key: PriceRange = "1y") -> PriceHistory
         yahoo_ticker = yf.Ticker(ticker)
         frame = yahoo_ticker.history(**history_kwargs)
         if frame.empty or "Close" not in frame:
-            return _empty_price_history(ticker, range_key)
+            cached = _load_cached_history(ticker, range_key)
+            return cached if cached is not None else _empty_price_history(ticker, range_key)
 
         close = frame["Close"].dropna()
         if close.empty:
-            return _empty_price_history(ticker, range_key)
+            cached = _load_cached_history(ticker, range_key)
+            return cached if cached is not None else _empty_price_history(ticker, range_key)
 
         timestamps = [timestamp.isoformat() for timestamp in close.index]
         prices = [float(value) for value in close.tolist()]
@@ -135,7 +170,7 @@ def get_price_history(ticker: str, range_key: PriceRange = "1y") -> PriceHistory
             if comparison_price not in (0, None)
             else None
         )
-        return PriceHistory(
+        res = PriceHistory(
             ticker=ticker,
             range_key=range_key,
             range_label=_RANGE_LABELS[range_key],
@@ -146,6 +181,8 @@ def get_price_history(ticker: str, range_key: PriceRange = "1y") -> PriceHistory
             change_pct=change_pct,
             is_intraday=range_key in {"1d", "5d"},
         )
+        _save_cached_history(res)
+        return res
     except Exception:
         logger.warning(
             "Yahoo Finance price history failed for %s (%s)",
@@ -153,7 +190,8 @@ def get_price_history(ticker: str, range_key: PriceRange = "1y") -> PriceHistory
             range_key,
             exc_info=True,
         )
-        return _empty_price_history(ticker, range_key)
+        cached = _load_cached_history(ticker, range_key)
+        return cached if cached is not None else _empty_price_history(ticker, range_key)
 
 
 def _empty_price_history(ticker: str, range_key: PriceRange) -> PriceHistory:

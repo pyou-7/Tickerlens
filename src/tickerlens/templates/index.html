@@ -1,19 +1,35 @@
 {% extends "base.html" %}
-{% block title %}Tickerlens{% endblock %}
+{% block title %}Tickerlens — US Public Company Research{% endblock %}
+
+{% block nav_search_class %}hidden{% endblock %}
+
 {% block content %}
-<div class="flex flex-col items-center justify-center min-h-[60vh] gap-6">
-  <h1 class="text-4xl font-bold text-white">Tickerlens</h1>
-  <p class="text-gray-400">Enter a ticker to get started.</p>
-  <form action="" method="get" id="ticker-form"
-        onsubmit="window.location='/company/'+document.getElementById('ticker-input').value.toUpperCase();return false;"
-        class="flex gap-2">
-    <input id="ticker-input" type="text" placeholder="AAPL"
-           class="w-40 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 uppercase"
-           autofocus />
-    <button type="submit"
-            class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2 font-semibold text-white transition">
-      Go
-    </button>
-  </form>
+<div class="flex flex-col items-center justify-center min-h-[65vh] gap-6 px-4">
+  <div class="text-center space-y-2">
+    <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight">
+      Tickerlens
+    </h1>
+    <p class="text-gray-400 text-base max-w-md mx-auto">
+      Instant earnings analysis and historical fundamentals across 10,000+ US public companies.
+    </p>
+  </div>
+
+  <!-- Hero Combobox Search -->
+  <div class="w-full flex justify-center mt-2">
+    {% with mode="hero", input_id="hero-search-input" %}
+      {% include "partials/search_combobox.html" %}
+    {% endwith %}
+  </div>
+
+  <!-- Quick Access Tickers -->
+  <div class="flex items-center gap-2 flex-wrap justify-center text-xs text-gray-500 mt-2">
+    <span>Popular:</span>
+    {% for sym in ["AAPL", "MSFT", "NVDA", "ORCL", "TSLA", "INTC"] %}
+      <a href="/company/{{ sym }}"
+         class="rounded-lg bg-gray-900 border border-gray-800 hover:border-indigo-500/50 hover:text-indigo-300 px-2.5 py-1 font-mono transition">
+        {{ sym }}
+      </a>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}
