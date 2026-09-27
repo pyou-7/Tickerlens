@@ -167,32 +167,47 @@
       <h2 class="text-xs uppercase tracking-widest text-slate-500 dark:text-gray-400 font-bold">Financial Trend</h2>
       <p class="mt-1 text-xs text-slate-400 dark:text-gray-500">Quarterly values · one metric at a time</p>
     </div>
-    <label class="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 print:hidden font-medium">
-      Metric
-      <select
-        id="trend-metric-select"
-        onchange="renderTrendChart(this.value)"
-        class="rounded-lg bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+    <div class="flex items-center gap-3 print:hidden">
+      <!-- Milestone Annotations Toggle (Earnings Beats/Misses & Filing Dates) -->
+      <button
+        type="button"
+        id="trend-milestones-toggle"
+        onclick="toggleTrendMilestones()"
+        title="Toggle earnings surprise badges (beats/misses) and SEC filing date milestones"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 shadow-sm"
       >
-        <optgroup label="Performance">
-          <option value="revenue">Revenue</option>
-          <option value="net_income">Net Income</option>
-          <option value="free_cash_flow">Free Cash Flow</option>
-          <option value="operating_cash_flow">Operating Cash Flow</option>
-          <option value="capex">Capital Expenditures</option>
-        </optgroup>
-        <optgroup label="Per Share">
-          <option value="eps_diluted">EPS (Diluted)</option>
-          <option value="eps_basic">EPS (Basic)</option>
-        </optgroup>
-        <optgroup label="Balance Sheet">
-          <option value="total_assets">Total Assets</option>
-          <option value="total_liabilities">Total Liabilities</option>
-          <option value="total_equity">Total Equity</option>
-          <option value="cash_and_equivalents">Cash &amp; Equivalents</option>
-        </optgroup>
-      </select>
-    </label>
+        <span>✨</span>
+        <span>Milestones</span>
+        <span id="milestone-badge-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+      </button>
+
+      <label class="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 font-medium">
+        Metric
+        <select
+          id="trend-metric-select"
+          onchange="renderTrendChart(this.value)"
+          class="rounded-lg bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+        >
+          <optgroup label="Performance">
+            <option value="revenue">Revenue</option>
+            <option value="net_income">Net Income</option>
+            <option value="free_cash_flow">Free Cash Flow</option>
+            <option value="operating_cash_flow">Operating Cash Flow</option>
+            <option value="capex">Capital Expenditures</option>
+          </optgroup>
+          <optgroup label="Per Share">
+            <option value="eps_diluted">EPS (Diluted)</option>
+            <option value="eps_basic">EPS (Basic)</option>
+          </optgroup>
+          <optgroup label="Balance Sheet">
+            <option value="total_assets">Total Assets</option>
+            <option value="total_liabilities">Total Liabilities</option>
+            <option value="total_equity">Total Equity</option>
+            <option value="cash_and_equivalents">Cash &amp; Equivalents</option>
+          </optgroup>
+        </select>
+      </label>
+    </div>
   </div>
   <div id="trend-chart" style="height: 280px;"></div>
 </div>
@@ -521,6 +536,8 @@
   "dates": {{ ctx.chart_dates | tojson }},
   "labels": {{ ctx.chart_labels | tojson }},
   "selectedDate": {{ (ctx.current.period_end.isoformat() if ctx.current.period_end else none) | tojson }},
-  "metrics": {{ ctx.chart_metrics | tojson }}
+  "metrics": {{ ctx.chart_metrics | tojson }},
+  "filingDates": {{ ctx.chart_filing_dates | tojson }},
+  "surprises": {{ ctx.chart_surprises | tojson }}
 }
 </script>

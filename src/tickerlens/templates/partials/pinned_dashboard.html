@@ -43,29 +43,49 @@
     </div>
 
     {% if pinned_companies %}
-      <!-- View Mode Toggle: Cards vs Table -->
-      <div class="flex items-center gap-1 bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 p-0.5 rounded-lg text-xs">
-        <button type="button"
-                @click="viewMode = 'grid'; localStorage.setItem('tickerlens_view_mode', 'grid')"
-                :class="viewMode === 'grid' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
-                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+      <div class="flex items-center gap-2.5">
+        <!-- Automated SEC Filing Watcher Scan Button -->
+        <button hx-post="/watcher/check"
+                hx-target="#watcher-alert-container"
+                hx-swap="innerHTML"
+                hx-indicator="#watcher-spinner"
+                title="Scan SEC EDGAR for newly filed 10-Q, 10-K, or 8-K reports across your pinned companies"
+                class="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg bg-slate-100 dark:bg-gray-800/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 border border-slate-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700/60 text-slate-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer">
+          <svg id="watcher-spinner" class="w-3.5 h-3.5 animate-spin htmx-indicator text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
           </svg>
-          <span>Cards</span>
+          <span class="htmx-indicator-none">⚡</span>
+          <span>Scan Filings</span>
         </button>
-        <button type="button"
-                @click="viewMode = 'table'; localStorage.setItem('tickerlens_view_mode', 'table')"
-                :class="viewMode === 'table' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
-                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
-          </svg>
-          <span>Table</span>
-        </button>
+
+        <!-- View Mode Toggle: Cards vs Table -->
+        <div class="flex items-center gap-1 bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 p-0.5 rounded-lg text-xs">
+          <button type="button"
+                  @click="viewMode = 'grid'; localStorage.setItem('tickerlens_view_mode', 'grid')"
+                  :class="viewMode === 'grid' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+                  class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+            </svg>
+            <span>Cards</span>
+          </button>
+          <button type="button"
+                  @click="viewMode = 'table'; localStorage.setItem('tickerlens_view_mode', 'table')"
+                  :class="viewMode === 'table' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+                  class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+            </svg>
+            <span>Table</span>
+          </button>
+        </div>
       </div>
     {% endif %}
   </div>
+
+  <!-- Notification Banner target container for SEC filing updates -->
+  <div id="watcher-alert-container"></div>
 
   {% if pinned_companies %}
     <!-- 1. Card Grid View -->

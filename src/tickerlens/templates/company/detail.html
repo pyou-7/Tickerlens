@@ -500,6 +500,24 @@
     return { divisor: 1, suffix: '', axis: 'USD' };
   }
 
+  var showMilestones = true;
+
+  function toggleTrendMilestones() {
+    showMilestones = !showMilestones;
+    var btn = document.getElementById('trend-milestones-toggle');
+    var dot = document.getElementById('milestone-badge-dot');
+    if (btn && dot) {
+      if (showMilestones) {
+        btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 shadow-sm';
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-500';
+      } else {
+        btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border-slate-200 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700';
+        dot.className = 'w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-gray-600';
+      }
+    }
+    renderTrendChart();
+  }
+
   function renderTrendChart(requestedMetric) {
     var dataEl = document.getElementById('chart-data-json');
     if (!dataEl || !window.Plotly) return;
@@ -528,15 +546,32 @@
     });
 
     var hoverSuffix = scale.suffix;
+    var hoverDetails = data.dates.map(function(date, i) {
+      var s = (data.surprises && data.surprises[i]) ? data.surprises[i] : null;
+      var f = (data.filingDates && data.filingDates[i]) ? data.filingDates[i] : null;
+      var lines = [];
+      if (s && s.surprise_str) {
+        var icon = s.is_beat ? '🟢 Beat: ' : '🔴 Miss: ';
+        var est = s.eps_estimate !== null && s.eps_estimate !== undefined ? '$' + Number(s.eps_estimate).toFixed(2) : '—';
+        var act = s.eps_actual !== null && s.eps_actual !== undefined ? '$' + Number(s.eps_actual).toFixed(2) : '—';
+        lines.push('<br>' + icon + s.surprise_str + ' (Est ' + est + ' vs Act ' + act + ')');
+      }
+      if (f) {
+        lines.push('<br><span style="color:#94a3b8">📅 Filed: ' + f + '</span>');
+      }
+      return lines.join('');
+    });
+
     var trace = {
       x: data.dates,
       y: values,
+      customdata: hoverDetails,
       name: meta.label,
       type: 'scatter', mode: 'lines+markers',
       line: { color: meta.color, width: 3 },
       marker: { color: markerColors, size: markerSizes, line: { color: '#111827', width: 1 } },
       connectgaps: false,
-      hovertemplate: '%{x|%b %e, %Y}<br>' + meta.label + ': $%{y:,.2f}' + hoverSuffix + '<extra></extra>',
+      hovertemplate: '%{x|%b %e, %Y}<br>' + meta.label + ': $%{y:,.2f}' + hoverSuffix + '%{customdata}<extra></extra>',
     };
 
     var isDark = document.documentElement.classList.contains('dark');
@@ -545,17 +580,59 @@
     var textCol = isDark ? '#9ca3af' : '#64748b';
     var zeroCol = isDark ? '#4b5563' : '#cbd5e1';
 
-    var layout = {
-      paper_bgcolor: darkBg, plot_bgcolor: darkBg,
-      margin: { t: 10, r: 24, b: 52, l: 72 },
-      font: { color: textCol, size: 11 },
-      showlegend: false,
-      hovermode: 'x unified',
-      annotations: hasData ? [] : [{
+    var annotations = [];
+    var hasMilestones = false;
+    if (!hasData) {
+      annotations.push({
         text: 'Not available for the displayed periods.',
         x: 0.5, y: 0.5, xref: 'paper', yref: 'paper',
         showarrow: false, font: { color: textCol, size: 13 },
-      }],
+      });
+    } else if (showMilestones && data.surprises) {
+      for (var i = 0; i < data.dates.length; i++) {
+        var val = values[i];
+        if (val === null || !Number.isFinite(val)) continue;
+
+        var surp = data.surprises[i];
+        if (surp && surp.surprise_str) {
+          hasMilestones = true;
+          var isBeat = surp.is_beat;
+          var badgeColor = isBeat ? '#10b981' : '#ef4444';
+          var badgeBg = isDark
+            ? (isBeat ? 'rgba(6, 78, 59, 0.85)' : 'rgba(127, 29, 29, 0.85)')
+            : (isBeat ? '#ecfdf5' : '#fef2f2');
+          var arrowSymbol = isBeat ? '▲' : '▼';
+
+          annotations.push({
+            x: data.dates[i],
+            y: val,
+            text: '<b style="color:' + badgeColor + '">' + arrowSymbol + ' ' + surp.surprise_str + '</b>',
+            showarrow: true,
+            arrowhead: 6,
+            arrowsize: 0.8,
+            arrowwidth: 1.5,
+            arrowcolor: badgeColor,
+            ax: 0,
+            ay: -28,
+            bordercolor: badgeColor,
+            borderwidth: 1,
+            borderpad: 3,
+            bgcolor: badgeBg,
+            font: { size: 9, family: 'monospace', color: badgeColor },
+          });
+        }
+      }
+    }
+
+    var topMargin = (hasMilestones && showMilestones) ? 36 : 12;
+
+    var layout = {
+      paper_bgcolor: darkBg, plot_bgcolor: darkBg,
+      margin: { t: topMargin, r: 24, b: 52, l: 72 },
+      font: { color: textCol, size: 11 },
+      showlegend: false,
+      hovermode: 'x unified',
+      annotations: annotations,
       xaxis: {
         type: 'date',
         tickmode: 'array',

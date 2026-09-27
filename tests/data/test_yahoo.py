@@ -95,3 +95,27 @@ def test_price_history_failure_returns_empty_series(
     assert result.timestamps == []
     assert result.prices == []
     assert result.is_intraday is True
+
+
+def test_get_earnings_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    df = pd.DataFrame(
+        {
+            "epsActual": [2.22, 1.87],
+            "epsEstimate": [2.09, 1.77],
+            "epsDifference": [0.13, 0.10],
+            "surprisePercent": [0.0616, 0.0554],
+        },
+        index=[pd.Timestamp("2026-07-31"), pd.Timestamp("2026-04-30")],
+    )
+    fake = _FakeTicker(pd.DataFrame())
+    fake.earnings_history = df
+    monkeypatch.setattr(yahoo.yf, "Ticker", lambda ticker: fake)
+    monkeypatch.setattr(yahoo, "_load_cached_surprises", lambda t: None)
+
+    surprises = yahoo.get_earnings_history("NVDA")
+    assert len(surprises) == 2
+    assert surprises[-1].quarter_date == "2026-07-31"
+    assert surprises[-1].eps_actual == 2.22
+    assert surprises[-1].surprise_pct == pytest.approx(0.0616)
+    assert surprises[-1].is_beat is True
+

@@ -210,4 +210,26 @@ Added export buttons to the slicer toolbar and floating action pill on company d
 3. Clean model timestamps ensure full forward-compatibility with Python 3.12+ and prevent noisy console warnings during test runs and migrations.
 **Alternatives considered:** Direct bash script calling curl/uvicorn endpoints (rejected: fragile, lacks structured failure recovery, bypasses ORM validation, and doesn't support dry-run inspection).
 
+---
+
+## 2026-09-27 — Automated SEC Filing Watcher Service & Daemon (PRD §4.6)
+
+**What:** Added `FilingEvent` model (`models/filing_event.py`) with CIK foreign key, unique constraint on `(cik, accession_number)`, migration `440259fd9128`, `FilingWatcherService` (`services/filing_watcher.py`), `scripts/poll_filings.py` CLI daemon, and watcher endpoints (`POST /watcher/check`, `GET /watcher/status`). The watcher discovers new 10-Q, 10-K, and 8-K filings from `edgar.submissions()`, records them, and triggers auto-refresh for changed companies.
+**Why:**
+1. Investors need prompt updates when companies release earnings reports (8-K press release or 10-Q/10-K quarterly filings) without manually refreshing or visiting EDGAR.
+2. Initial scan seeds existing historical filings (`is_processed=True`) so that starting the watcher or pinning a company does not generate an overwhelming deluge of false alerts.
+3. Provides both an HTMX-driven UI check button ("⚡ Scan Filings") with animated alerts on the dashboard and a standalone daemon (`scripts/poll_filings.py --daemon --interval 300`) suitable for background systemd/supervisor execution.
+**Alternatives considered:** Polling `companyfacts` API directly (rejected: `companyfacts` caches or lags behind `submissions()` which indexes filings immediately upon publication; 8-K press releases have no companyfacts).
+
+---
+
+## 2026-09-27 — Plotly Milestone Annotations & Earnings Surprises
+
+**What:** Integrated Yahoo Finance historical quarterly earnings surprise estimates (`yfinance.Ticker.earnings_history`) into `data/yahoo.py` with local caching. Added `_match_surprises_to_dates` in `services/financials.py` to reconcile EDGAR fiscal period ends with calendar earnings dates (within 40 days). Extended single/range detail contexts with `chart_filing_dates` and `chart_surprises`, and updated Plotly detail charts with high-contrast milestone badge pills (green beat `▲ +X.X%`, red miss `▼ -X.X%`), custom tooltips showing EPS actual vs estimate, and a "✨ Milestones" toggle.
+**Why:**
+1. Contextualizing revenue and margin trends with quarterly earnings sentiment (beat or miss) directly explains stock price volatility and earnings momentum without switching platforms.
+2. Plotly badge pills provide immediate visual cues at milestone inflection points while preserving clean readability via an on/off toolbar toggle.
+**Alternatives considered:** Scraping Zacks or paid earnings calendars (rejected: Yahoo Finance provides free earnings history with EPS estimate, actual, and percentage surprise through yfinance with zero API fees).
+
+
 

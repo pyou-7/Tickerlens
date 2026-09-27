@@ -82,15 +82,36 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - Created executable CLI `scripts/refresh_universe.py` with multi-target selection (`--watchlist`, `--all-db`, `--tickers`, `--top N`), configurable quarter depths (`--periods 12`), optional 8-K disclosure extraction (`--include-disclosures`), automatic watchlist pinning (`--pin`), polite SEC rate limiting (`--delay`), dry-run preview mode (`--dry-run`), and JSON machine-readable output (`--json`).
     - Updated models `company.py` and `quarterly_financial.py` with timezone-aware UTC datetime defaults (`lambda: dt.datetime.now(dt.timezone.utc)`), eliminating Python 3.12 deprecation warnings.
     - Added unit test suite in `tests/services/test_ingestion.py`.
-  - 105 tests currently passing in test suite (100% pass rate).
+  - **Automated SEC Filing Watcher & Daemon (PRD §4.6 / Phase 3):**
+    - Created `FilingEvent` model (`src/tickerlens/models/filing_event.py`) with CIK foreign key, unique constraint on `(cik, accession_number)`, and bidirectional relationship on `Company`.
+    - Generated and applied Alembic migration `440259fd9128_create_filing_events_table.py`.
+    - Built `FilingWatcherService` (`src/tickerlens/services/filing_watcher.py`):
+      - Initial scan automatically seeds existing historical filings to prevent false-positive alert floods.
+      - Discovers new `10-Q`, `10-K`, and `8-K` filings from `edgar.submissions()`.
+      - Automatically triggers `fetch_and_persist(ticker, periods=12)`, `enrich_company(ticker)`, and `enrich_press_releases(ticker, periods=12)` upon discovering new filings.
+      - Supports batch watchlist polling and retrieving recent filing event audits.
+    - Built CLI/Daemon tool `scripts/poll_filings.py`: supports one-shot (`--once`), background daemon polling (`--daemon --interval 300`), `--no-refresh`, `--tickers`, and `--json`.
+    - Added route `src/tickerlens/routes/watcher.py` with `POST /watcher/check` and `GET /watcher/status`.
+    - Registered `watcher.router` in `src/tickerlens/main.py`.
+    - Created `src/tickerlens/templates/partials/watcher_alert.html` and added "⚡ Scan Filings" button + notification banner target in `src/tickerlens/templates/partials/pinned_dashboard.html`.
+  - **Chart Annotations & Visual Surprises (Earnings Beats/Misses & Filing Dates):**
+    - Added `EarningsSurprise` model, cache helpers, and `get_earnings_history(ticker)` to `src/tickerlens/data/yahoo.py` using `yfinance.Ticker.earnings_history`.
+    - Added `_get_filing_date(r)` and `_match_surprises_to_dates(dates, ticker)` in `src/tickerlens/services/financials.py` (matches within 40 days of fiscal quarter end).
+    - Extended `DetailContext` with `chart_filing_dates: list[str | None] = []` and `chart_surprises: list[dict | None] = []`.
+    - Updated `_build_range_data` and single-mode `get_detail()` to pass filing dates and surprises.
+    - Updated `chart-data-json` in `src/tickerlens/templates/partials/detail_data.html` to output `filingDates` and `surprises`.
+    - Added "✨ Milestones" toggle button in the financial trend toolbar in `detail_data.html`.
+    - Updated `renderTrendChart()` and added `toggleTrendMilestones()` in `src/tickerlens/templates/company/detail.html`:
+      - Renders high-contrast milestone badge pills (green `▲ +X.X%` for beats, red `▼ -X.X%` for misses) pointing directly to markers with dynamic dark/light mode styles.
+      - Renders rich hover details showing metric values, EPS estimate vs actual surprise, and `📅 Filed YYYY-MM-DD`.
+  - 112 tests currently passing in test suite (100% pass rate).
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
-2. Automated SEC filing poller / background scheduler checking for newly filed 10-Q/10-K/8-K reports across the user's watchlist.
-3. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+1. Advanced Export customization (custom CSV deltas, user-configurable metrics).
+2. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
 

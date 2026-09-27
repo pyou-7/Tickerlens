@@ -1,0 +1,44 @@
+{% if summary %}
+<div x-data="{ show: true }" x-show="show" x-transition.opacity.duration.300ms class="mb-5 p-4 rounded-xl border {% if summary.new_filings_count > 0 %}bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200{% else %}bg-slate-50 dark:bg-gray-800/40 border-slate-200 dark:border-gray-800 text-slate-800 dark:text-gray-300{% endif %} flex items-start justify-between shadow-sm">
+  <div class="flex items-start gap-3">
+    {% if summary.new_filings_count > 0 %}
+      <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-lg">
+        ⚡
+      </div>
+      <div>
+        <h4 class="text-sm font-semibold text-emerald-900 dark:text-emerald-300">
+          {{ summary.new_filings_count }} New SEC Filing{% if summary.new_filings_count > 1 %}s{% endif %} Detected & Refreshed
+        </h4>
+        <p class="text-xs text-emerald-700 dark:text-emerald-400 mt-0.5">
+          Scanned {{ summary.checked_count }} watched companies at {{ summary.checked_at }}.
+        </p>
+        <div class="mt-2 flex flex-wrap gap-2">
+          {% for f in summary.new_filings %}
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300/40 dark:border-emerald-700/40">
+              <span class="font-bold">{{ f.ticker }}</span>
+              <span class="opacity-75">{{ f.form }}</span>
+              <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">{{ f.filing_date }}</span>
+            </span>
+          {% endfor %}
+        </div>
+      </div>
+    {% else %}
+      <div class="p-2 rounded-lg bg-slate-200/60 dark:bg-gray-700/50 text-slate-600 dark:text-gray-400 text-base">
+        ✓
+      </div>
+      <div>
+        <h4 class="text-sm font-semibold text-slate-900 dark:text-white">
+          All Watched Companies Up to Date
+        </h4>
+        <p class="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+          Checked {{ summary.checked_count }} pinned companies against SEC EDGAR. No new 10-Q, 10-K, or 8-K filings found.
+          <span class="text-slate-400 dark:text-gray-500 font-mono text-[11px] ml-1">({{ summary.checked_at }})</span>
+        </p>
+      </div>
+    {% endif %}
+  </div>
+  <button @click="show = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 text-sm font-semibold p-1 transition">
+    ✕
+  </button>
+</div>
+{% endif %}

@@ -23,7 +23,13 @@ from tickerlens.data.filings import (
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
-from tickerlens.data.yahoo import PriceHistory, PriceRange, get_price_history, get_quote
+from tickerlens.data.yahoo import (
+    PriceHistory,
+    PriceRange,
+    get_earnings_history,
+    get_price_history,
+    get_quote,
+)
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
@@ -156,6 +162,8 @@ class DetailContext(BaseModel):
     chart_dates: list[str]
     chart_labels: list[str]
     chart_metrics: dict[str, list[float | None]]
+    chart_filing_dates: list[str | None] = []
+    chart_surprises: list[dict | None] = []
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
@@ -472,6 +480,8 @@ class FinancialsService:
                     chart_dates,
                     chart_labels,
                     chart_metrics,
+                    chart_filing_dates,
+                    chart_surprises,
                 ) = _build_range_data(
                     all_rows,
                     granularity,
@@ -480,6 +490,7 @@ class FinancialsService:
                     quarter_options,
                     year_options,
                     latest,
+                    ticker=company.ticker,
                 )
             else:
                 # Build current period data
@@ -506,6 +517,8 @@ class FinancialsService:
                     "total_equity": [r.total_equity for r in all_rows],
                     "cash_and_equivalents": [r.cash_and_equivalents for r in all_rows],
                 }
+                chart_filing_dates = [_get_filing_date(r) for r in all_rows]
+                chart_surprises = _match_surprises_to_dates([r.period_end for r in all_rows], company.ticker)
 
             return DetailContext(
                 cik=cik,
@@ -528,6 +541,8 @@ class FinancialsService:
                 chart_dates=chart_dates,
                 chart_labels=chart_labels,
                 chart_metrics=chart_metrics,
+                chart_filing_dates=chart_filing_dates,
+                chart_surprises=chart_surprises,
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
             )
@@ -855,6 +870,65 @@ def _compute_kpi_yoy(current_kpi: KPISnapshot, prior_kpi: KPISnapshot) -> KPICha
     )
 
 
+def _get_filing_date(r: QuarterlyFinancial) -> str | None:
+    """Best-effort extraction of SEC filing date for a quarterly financial row."""
+    val = getattr(r, "filing_date", None)
+    if val:
+        return val.isoformat() if hasattr(val, "isoformat") else str(val)
+    src = getattr(r, "press_release_source", None)
+    if src and "filed " in src:
+        date_part = src.split("filed ")[-1].strip()
+        if len(date_part) >= 10:
+            return date_part[:10]
+    return None
+
+
+def _match_surprises_to_dates(
+    dates: list[dt.date],
+    ticker: str | None,
+) -> list[dict | None]:
+    """Match quarterly dates to earnings surprises (beats/misses) from Yahoo Finance."""
+    if not ticker:
+        return [None] * len(dates)
+
+    try:
+        surprises = get_earnings_history(ticker)
+    except Exception:
+        return [None] * len(dates)
+
+    if not surprises:
+        return [None] * len(dates)
+
+    result: list[dict | None] = []
+    for d in dates:
+        matched = None
+        min_diff = 40  # within 35-40 days of quarter end
+        for s in surprises:
+            try:
+                s_dt = dt.date.fromisoformat(s.quarter_date)
+                diff = abs((d - s_dt).days)
+                if diff <= min_diff:
+                    min_diff = diff
+                    matched = {
+                        "quarter_date": s.quarter_date,
+                        "eps_actual": s.eps_actual,
+                        "eps_estimate": s.eps_estimate,
+                        "eps_diff": s.eps_difference,
+                        "surprise_pct": s.surprise_pct,
+                        "surprise_str": (
+                            f"{'+' if s.surprise_pct and s.surprise_pct > 0 else ''}{s.surprise_pct * 100:.1f}%"
+                            if s.surprise_pct is not None
+                            else None
+                        ),
+                        "is_beat": s.is_beat,
+                    }
+            except Exception:
+                continue
+        result.append(matched)
+
+    return result
+
+
 def _build_range_data(
     all_rows: list[QuarterlyFinancial],
     granularity: str,
@@ -863,6 +937,7 @@ def _build_range_data(
     quarter_options: list[str],
     year_options: list[int],
     latest: QuarterlyFinancial,
+    ticker: str | None = None,
 ) -> tuple[
     RangeSummary,
     list[PeriodData],
@@ -872,6 +947,8 @@ def _build_range_data(
     list[str],
     list[str],
     dict[str, list[float | None]],
+    list[str | None],
+    list[dict | None],
 ]:
     """Build RangeSummary and list of PeriodData for consecutive multi-period ranges."""
     if granularity == "yearly":
@@ -948,7 +1025,20 @@ def _build_range_data(
             "total_equity": [p.balance_sheet.total_equity for p in range_periods],
             "cash_and_equivalents": [p.balance_sheet.cash_and_equivalents for p in range_periods],
         }
-        return summary, range_periods, current, start_lbl, end_lbl, chart_dates, chart_labels, chart_metrics
+        chart_filing_dates: list[str | None] = [None] * len(range_periods)
+        chart_surprises: list[dict | None] = [None] * len(range_periods)
+        return (
+            summary,
+            range_periods,
+            current,
+            start_lbl,
+            end_lbl,
+            chart_dates,
+            chart_labels,
+            chart_metrics,
+            chart_filing_dates,
+            chart_surprises,
+        )
     else:
         labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
         if range_start is None or range_start not in labels:
@@ -1015,7 +1105,20 @@ def _build_range_data(
             "total_equity": [r.total_equity for r in range_rows],
             "cash_and_equivalents": [r.cash_and_equivalents for r in range_rows],
         }
-        return summary, range_periods, current, start_lbl, end_lbl, chart_dates, chart_labels, chart_metrics
+        chart_filing_dates = [_get_filing_date(r) for r in range_rows]
+        chart_surprises = _match_surprises_to_dates([r.period_end for r in range_rows], ticker)
+        return (
+            summary,
+            range_periods,
+            current,
+            start_lbl,
+            end_lbl,
+            chart_dates,
+            chart_labels,
+            chart_metrics,
+            chart_filing_dates,
+            chart_surprises,
+        )
 
 
 def _parse_quarter_label(label: str) -> tuple[str, int] | None:

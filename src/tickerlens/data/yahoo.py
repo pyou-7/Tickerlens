@@ -203,3 +203,81 @@ def _empty_price_history(ticker: str, range_key: PriceRange) -> PriceHistory:
         prices=[],
         is_intraday=range_key in {"1d", "5d"},
     )
+
+
+class EarningsSurprise(BaseModel):
+    quarter_date: str  # YYYY-MM-DD
+    eps_actual: float | None = None
+    eps_estimate: float | None = None
+    eps_difference: float | None = None
+    surprise_pct: float | None = None  # e.g. 0.0616 (6.16%)
+    is_beat: bool = True
+
+
+def _load_cached_surprises(ticker: str) -> list[EarningsSurprise] | None:
+    cache_path = _YAHOO_CACHE_DIR / f"{ticker.upper()}_surprises.json"
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        return [EarningsSurprise(**item) for item in data]
+    except Exception:
+        return None
+
+
+def _save_cached_surprises(ticker: str, surprises: list[EarningsSurprise]) -> None:
+    if not surprises:
+        return
+    try:
+        _YAHOO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _YAHOO_CACHE_DIR / f"{ticker.upper()}_surprises.json"
+        cache_path.write_text(json.dumps([s.model_dump() for s in surprises]), encoding="utf-8")
+    except Exception:
+        logger.warning("Failed to save surprises cache for %s", ticker, exc_info=True)
+
+
+def get_earnings_history(ticker: str) -> list[EarningsSurprise]:
+    """Fetch quarterly earnings consensus vs actual and surprise percentages."""
+    clean_ticker = ticker.strip().upper()
+    cached = _load_cached_surprises(clean_ticker)
+    if cached is not None:
+        return cached
+
+    try:
+        yahoo_ticker = yf.Ticker(clean_ticker)
+        df = yahoo_ticker.earnings_history
+        if df is None or df.empty:
+            return []
+
+        surprises: list[EarningsSurprise] = []
+        for idx, row in df.iterrows():
+            q_date_str = str(idx)[:10]
+            val_act = row.get("epsActual")
+            val_est = row.get("epsEstimate")
+            val_diff = row.get("epsDifference")
+            val_surp = row.get("surprisePercent")
+
+            actual = float(val_act) if val_act is not None and str(val_act) != "nan" else None
+            estimate = float(val_est) if val_est is not None and str(val_est) != "nan" else None
+            diff = float(val_diff) if val_diff is not None and str(val_diff) != "nan" else None
+            surprise = float(val_surp) if val_surp is not None and str(val_surp) != "nan" else None
+            is_beat = (surprise is not None and surprise >= 0) or (diff is not None and diff >= 0)
+
+            surprises.append(
+                EarningsSurprise(
+                    quarter_date=q_date_str,
+                    eps_actual=actual,
+                    eps_estimate=estimate,
+                    eps_difference=diff,
+                    surprise_pct=surprise,
+                    is_beat=is_beat,
+                )
+            )
+
+        surprises.sort(key=lambda s: s.quarter_date)
+        _save_cached_surprises(clean_ticker, surprises)
+        return surprises
+    except Exception:
+        logger.warning("Failed to fetch earnings surprises for %s", clean_ticker, exc_info=True)
+        return []
+

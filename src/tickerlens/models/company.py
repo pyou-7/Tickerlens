@@ -31,4 +31,7 @@ class Company(Base):
     watchlist_item: Mapped["WatchlistItem | None"] = relationship(  # noqa: F821
         "WatchlistItem", back_populates="company", uselist=False, cascade="all, delete-orphan"
     )
+    filing_events: Mapped[list["FilingEvent"]] = relationship(  # noqa: F821
+        "FilingEvent", back_populates="company", cascade="all, delete-orphan"
+    )
 

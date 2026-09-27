@@ -816,3 +816,44 @@ def test_export_zip(session: Session) -> None:
         assert "Revenue ($)" in csv_content
         assert "110000" in csv_content
 
+
+def test_match_surprises_to_dates(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tickerlens.data.yahoo import EarningsSurprise
+    from tickerlens.services.financials import _match_surprises_to_dates
+
+    mock_surprises = [
+        EarningsSurprise(
+            quarter_date="2026-07-31",
+            eps_actual=2.22,
+            eps_estimate=2.09,
+            eps_difference=0.13,
+            surprise_pct=0.0616,
+            is_beat=True,
+        ),
+        EarningsSurprise(
+            quarter_date="2026-04-30",
+            eps_actual=1.87,
+            eps_estimate=1.92,
+            eps_difference=-0.05,
+            surprise_pct=-0.026,
+            is_beat=False,
+        ),
+    ]
+
+    monkeypatch.setattr("tickerlens.services.financials.get_earnings_history", lambda t: mock_surprises)
+
+    dates = [dt.date(2026, 4, 27), dt.date(2026, 7, 26), dt.date(2025, 1, 15)]
+    results = _match_surprises_to_dates(dates, "NVDA")
+
+    assert len(results) == 3
+    assert results[0] is not None
+    assert results[0]["is_beat"] is False
+    assert results[0]["surprise_str"] == "-2.6%"
+
+    assert results[1] is not None
+    assert results[1]["is_beat"] is True
+    assert results[1]["surprise_str"] == "+6.2%"
+
+    assert results[2] is None
+
+
