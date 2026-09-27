@@ -33,6 +33,28 @@ def _mock_submissions(accessions: list[str], forms: list[str]) -> dict:
     }
 
 
+def test_pending_filings_retry_after_refresh_failure(session):
+    cik = "0001045810"
+    session.add(Company(cik=cik, ticker="NVDA", name="NVIDIA"))
+    session.add(FilingEvent(cik=cik, ticker="NVDA", form="10-Q",
+                           accession_number="pending", filing_date=dt.date(2026, 8, 20),
+                           is_processed=False))
+    session.commit()
+    edgar = MagicMock()
+    edgar.submissions.return_value = _mock_submissions(["pending"], ["10-Q"])
+    financials = MagicMock()
+    financials.fetch_and_persist.side_effect = [RuntimeError("temporary outage"), None]
+    watcher = FilingWatcherService(session=session, edgar_client=edgar, financials_service=financials)
+    with pytest.raises(RuntimeError):
+        watcher.check_company_for_new_filings("NVDA")
+    assert not session.query(FilingEvent).one().is_processed
+    retried = watcher.check_company_for_new_filings("NVDA")
+    assert len(retried) == 1 and not retried[0].is_new
+    assert retried[0].refreshed_metrics
+    assert session.query(FilingEvent).one().is_processed
+    edgar.submissions.assert_called_with(cik, force_refresh=True)
+
+
 def test_check_company_initial_seeding(session: Session) -> None:
     cik = "0001045810"
     comp = Company(cik=cik, ticker="NVDA", name="NVIDIA CORP")

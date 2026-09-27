@@ -586,7 +586,7 @@
 
           <!-- Debt-to-Equity -->
           <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
-            <td class="py-3 px-5 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Debt-to-Equity Ratio</td>
+            <td title="Total liabilities divided by shareholder equity; not interest-bearing debt." class="py-3 px-5 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Liabilities-to-Equity Ratio</td>
             {% for peer in ctx.peers %}
               <td :class="hoveredCol === '{{ peer.ticker }}' ? 'bg-indigo-50/50 dark:bg-indigo-950/20' : ''"
                   class="py-3 px-4 text-right tabular-nums text-slate-700 dark:text-gray-300 transition-colors">

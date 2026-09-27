@@ -155,6 +155,8 @@ def company_export_zip(
     ticker = ticker.upper()
     try:
         zip_bytes = _svc.export_zip(ticker, range_start=range_start, range_end=range_end)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except CompanyNotFoundError:
         try:
             _svc.fetch_and_persist(ticker, periods=8)

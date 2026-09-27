@@ -7,6 +7,10 @@ For the *why* behind decisions, see `docs/DECISIONS.md`.
 
 ## Overview
 
+September 27 reliability behavior: mutable EDGAR JSON has a 15-minute TTL, filing scans force submissions refresh, and companyfacts ingestion always fetches fresh data. Ticker-map and archive-text caches remain persistent. HTTP failures propagate without replacing valid cache contents. Filing events are durable pending work until refresh succeeds; failed work is retried on subsequent scans. Partial scan failures are surfaced in the HTML summary.
+
+Time Slicer uses full-page GET form navigation so server-resolved selection controls the URL, statements, ZIP links and print snapshot together. The existing detail fragment route remains available but is no longer the slicer form target. Compare charts use calendar dates by default and relative lag labels in aligned mode.
+
 Tickerlens is a single-user research tool for analyzing US public companies.
 It extracts earnings data from SEC EDGAR, stores it locally, and produces AI-driven
 factor signals (Invest / Swing / Watch / Avoid) with reasoning.

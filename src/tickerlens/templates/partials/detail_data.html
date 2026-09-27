@@ -1,3 +1,12 @@
+{% if ctx.granularity == 'yearly' %}
+<p class="mb-4 text-sm text-amber-700 dark:text-amber-300" role="note">
+  Fiscal-year totals use available quarters, not estimates.
+  {% for period in (ctx.range_periods if ctx.mode == 'range' else [ctx.current]) %}
+    {{ period.label }}: {{ period.quarter_count }}/4 quarters{% if period.quarter_count < 4 %} (partial){% endif %}{% if not loop.last %}; {% endif %}
+  {% endfor %}.
+  Growth is omitted when coverage is not comparable.
+</p>
+{% endif %}
 {% macro fmt_large(val) -%}
   {%- if val is none -%}—
   {%- else -%}
@@ -165,7 +174,7 @@
   <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
     <div>
       <h2 class="text-xs uppercase tracking-widest text-slate-500 dark:text-gray-400 font-bold">Financial Trend</h2>
-      <p class="mt-1 text-xs text-slate-400 dark:text-gray-500">Quarterly values · one metric at a time</p>
+      <p class="mt-1 text-xs text-slate-400 dark:text-gray-500">{{ 'Fiscal-year totals (available quarters)' if ctx.granularity == 'yearly' and ctx.mode == 'range' else 'Quarterly values' }} · one metric at a time</p>
     </div>
     <div class="flex items-center gap-3 print:hidden">
       <!-- Milestone Annotations Toggle (Earnings Beats/Misses & Filing Dates) -->

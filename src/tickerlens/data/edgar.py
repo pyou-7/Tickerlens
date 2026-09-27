@@ -35,9 +35,12 @@ class EdgarClient:
         self._last_request_at = 0.0
         self._http_client = http_client
 
-    def fetch_json(self, url: str) -> dict[str, Any]:
+    def fetch_json(self, url: str, max_age_seconds: float | None = 900) -> dict[str, Any]:
         cache_file = self._cache_file(url)
-        if cache_file.exists():
+        if cache_file.exists() and (
+            max_age_seconds is None
+            or time.time() - cache_file.stat().st_mtime < max_age_seconds
+        ):
             return json.loads(cache_file.read_text())
 
         self._throttle()
@@ -71,7 +74,8 @@ class EdgarClient:
         return f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_clean}/"
 
     def company_tickers(self) -> dict[str, Any]:
-        return self.fetch_json(SEC_TICKERS_URL)
+        # Identity lookup must remain available while browsing stored financials offline.
+        return self.fetch_json(SEC_TICKERS_URL, max_age_seconds=None)
 
     def cik_for_ticker(self, ticker: str) -> str:
         ticker_upper = ticker.upper()
@@ -80,11 +84,13 @@ class EdgarClient:
                 return normalize_cik(item["cik_str"])
         raise KeyError(f"Ticker not found in SEC company_tickers.json: {ticker}")
 
-    def submissions(self, cik: str | int) -> dict[str, Any]:
-        return self.fetch_json(SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)))
+    def submissions(self, cik: str | int, *, force_refresh: bool = False) -> dict[str, Any]:
+        return self.fetch_json(SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)),
+                               max_age_seconds=0 if force_refresh else 900)
 
     def companyfacts(self, cik: str | int) -> dict[str, Any]:
-        return self.fetch_json(SEC_COMPANYFACTS_URL.format(cik=normalize_cik(cik)))
+        # Called during ingestion/refresh, never on a stored-data page read.
+        return self.fetch_json(SEC_COMPANYFACTS_URL.format(cik=normalize_cik(cik)), max_age_seconds=0)
 
     def _cache_file(self, url: str) -> Path:
         key = hashlib.sha256(url.encode()).hexdigest()[:16]

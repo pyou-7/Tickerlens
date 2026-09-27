@@ -23,6 +23,9 @@
 {%- endmacro %}
 
 {% block content %}
+{% set snapshot_label = (ctx.range_start ~ ' to ' ~ ctx.range_end) if ctx.mode == 'range' else ctx.current.label %}
+{% set export_start = ctx.range_start if ctx.mode == 'range' else ctx.current.label %}
+{% set export_end = ctx.range_end if ctx.mode == 'range' else ctx.current.label %}
 
 <!-- Breadcrumb -->
 <div class="mb-6 text-sm text-gray-500 print:hidden">
@@ -32,7 +35,7 @@
 <!-- Print-only header (company + period), shown in place of the app chrome -->
 <div class="hidden print:block mb-6">
   <h1 class="text-2xl font-bold text-black">{{ ctx.name }}{% if ctx.ticker %} ({{ ctx.ticker }}){% endif %}</h1>
-  <p class="text-sm text-gray-700">{{ ctx.current.label }}{% if ctx.current.period_end %} — as of {{ ctx.current.period_end }}{% endif %}</p>
+  <p class="text-sm text-gray-700">{{ snapshot_label }}{% if ctx.current.period_end %} — as of {{ ctx.current.period_end }}{% endif %}</p>
 </div>
 
 <!-- Company header -->
@@ -109,11 +112,9 @@
 >
   <form
     id="slicer-form"
-    hx-get="/company/{{ ctx.ticker }}/detail/data"
-    hx-target="#detail-data"
-    hx-swap="innerHTML"
-    hx-trigger="change"
-    hx-indicator="#slicer-spinner"
+    action="/company/{{ ctx.ticker }}/detail"
+    method="get"
+    @change="$nextTick(() => $el.requestSubmit())"
     class="flex flex-wrap items-center justify-between gap-4"
   >
     <div class="flex flex-wrap items-center gap-3">
@@ -243,7 +244,7 @@
 
     <!-- Quick Export ZIP Button in Slicer Toolbar -->
     <a
-      href="/company/{{ ctx.ticker }}/export-zip{% if ctx.mode == 'range' %}?range_start={{ ctx.range_start }}&range_end={{ ctx.range_end }}{% endif %}"
+      href="/company/{{ ctx.ticker }}/export-zip?range_start={{ export_start | urlencode }}&range_end={{ export_end | urlencode }}"
       download
       class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-800 shadow-sm transition"
       title="Download complete financial data & filings ZIP archive"
@@ -266,7 +267,7 @@
   <button
     type="button"
     onclick="window.print()"
-    aria-label="Download {{ ctx.current.label }} as PDF"
+    aria-label="Download {{ snapshot_label }} as PDF"
     class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full font-medium hover:bg-slate-800 dark:hover:bg-gray-800 text-slate-200 hover:text-white transition cursor-pointer"
   >
     <svg aria-hidden="true" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-indigo-400">
@@ -277,7 +278,7 @@
   </button>
   <span class="w-px h-4 bg-slate-700 dark:bg-gray-700 mx-1"></span>
   <a
-    href="/company/{{ ctx.ticker }}/export-zip{% if ctx.mode == 'range' %}?range_start={{ ctx.range_start }}&range_end={{ ctx.range_end }}{% endif %}"
+    href="/company/{{ ctx.ticker }}/export-zip?range_start={{ export_start | urlencode }}&range_end={{ export_end | urlencode }}"
     download
     class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition"
   >
@@ -606,7 +607,7 @@
           annotations.push({
             x: data.dates[i],
             y: val,
-            text: '<b style="color:' + badgeColor + '">' + arrowSymbol + ' ' + surp.surprise_str + '</b>',
+            text: '<b style="color:' + badgeColor + '">EPS ' + arrowSymbol + ' ' + surp.surprise_str + '</b>',
             showarrow: true,
             arrowhead: 6,
             arrowsize: 0.8,
@@ -675,7 +676,7 @@
   // Give browser-generated PDFs a useful per-period filename.
   var screenTitle = document.title;
   window.addEventListener('beforeprint', function() {
-    document.title = {{ (((ctx.ticker or ctx.name) ~ "_" ~ ctx.current.label ~ "_Tickerlens") | replace(" ", "_")) | tojson }};
+    document.title = {{ (((ctx.ticker or ctx.name) ~ "_" ~ snapshot_label ~ "_Tickerlens") | replace(" ", "_")) | tojson }};
   });
   window.addEventListener('afterprint', function() {
     document.title = screenTitle;

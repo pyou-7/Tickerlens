@@ -2,7 +2,7 @@
 
 **Product name:** Tickerlens
 **Version:** 1.0 (Personal-Use Scope)
-**Last Updated:** May 27, 2026
+**Last Updated:** September 27, 2026
 **Status:** Personal project — single user (founder)
 
 ---
@@ -26,6 +26,20 @@ If the tool proves useful in practice, commercialization is a possible future di
 ---
 
 ## 3. Scope
+
+### Phase 3 reliability increment — September 27, 2026
+
+Current implementation priority is trustworthy existing workflows before new product modules:
+
+- SEC submissions expire after 15 minutes; explicit filing scans always bypass that cache. Companyfacts ingestion always fetches fresh data. Failed HTTP refreshes must not replace good cached files or claim success.
+- Unprocessed filing events are retried on subsequent scans, including events outside the recent scan window. Retries are not counted as new filings. Partial scan failures must be visible.
+- Time Slicer selections, URL, ZIP boundaries, PDF label and print title must agree. Full-page GET navigation is acceptable to keep one authoritative server-rendered snapshot.
+- Year ranges export only quarters belonging to the selected fiscal years; invalid boundaries return validation errors instead of silently exporting everything.
+- Single-period ZIPs filter to the selected quarter/year. Annual views disclose partial quarter coverage and suppress growth when coverage is not comparable.
+- Peer charts default to calendar dates. Relative alignment uses lag labels ending at Latest, with each peer's true quarter/date retained in tooltips.
+- Total liabilities/equity is labeled Liabilities-to-Equity, not Debt-to-Equity. Earnings surprise annotations explicitly identify EPS.
+
+Follow-up backlog, not delivered by this increment: persistent refresh-health timestamps, near-zero/sign-changing growth explanations, valuation multiples, saved research views/notes, benchmark returns, earnings inbox/calendar and segment/geographic revenue. Do not describe these as implemented. Phase 4 AI remains deferred.
 
 ### In Scope
 - US public companies only (SEC EDGAR as primary source)

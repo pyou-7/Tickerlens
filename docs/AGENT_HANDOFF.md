@@ -4,6 +4,14 @@ This project is built iteratively across Codex, Claude Code, Gemini, and the fou
 
 ## Current Phase
 
+### Latest handoff — September 27 reliability increment
+
+Read `docs/progress/2026-09-27-reliability.md` before continuing. All changes committed and verified in the test suite (120/120 tests passing). Time Slicer now uses full-page GET navigation (the fragment route remains supported); this deliberately keeps exports, print labels and URL synchronized. Calendar dates are the peer-chart default. The legacy internal `debt_to_equity` field is retained for compatibility but represents total liabilities/equity and is labeled accordingly. Do not reintroduce the old UI label.
+
+SEC scans bypass submissions cache and companyfacts ingestion bypasses cache. Generic JSON TTL is 15 minutes; the ticker identity map and immutable archive text retain their existing persistent cache. Pending filing events retry on every subsequent scan; no exponential backoff or daemon-health persistence is implemented. Scan summaries now expose failed_tickers; failures must never be reported as all data current.
+
+Remaining priorities: refresh-health persistence, clearer growth denominators, genuine valuation metrics, saved research views, benchmark returns. Do not assume these are shipped.
+
 **Phase 3: scale to all US public companies.**
 
 Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch through XBRL normalization and SQLite persistence to the FastAPI Overview and Time Slicer pages.
@@ -58,7 +66,7 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ### Tests and migrations
 
-- 112 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, comparison, routes, range mode, zip export, batch ingestion, and filing watcher).
+- 120 tests passed at the September 27 reliability handoff. See the progress record for tested workflows and limits; passing tests are not exhaustive verification of every provider or UI state.
 - Comprehensive end-to-end automation scripts: `scripts/validate_range_and_zip.py`, `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
 - Latest migrations: `440259fd9128_create_filing_events_table.py` (filing events), `cf9ad233f7f8_create_watchlist_items_table.py` (watchlist items).
 
@@ -88,4 +96,3 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 - Do not start Phase 4+ AI, calendar/alerts, or news features.
 - Do not commit `.env`, caches, the virtual environment, generated output, or the local database.
 - Run focused tests and `/review` before significant commits.
-

@@ -34,6 +34,7 @@ class DiscoveredFiling(BaseModel):
 
 
 class WatcherCheckSummary(BaseModel):
+    failed_tickers: list[str] = []
     checked_count: int = 0
     new_filings_count: int = 0
     refreshed_companies_count: int = 0
@@ -97,10 +98,8 @@ class FilingWatcherService:
                     ticker = clean_input
 
             # Fetch recent submissions from EDGAR
-            submissions = self.edgar.submissions(cik)
+            submissions = self.edgar.submissions(cik, force_refresh=True)
             recent = submissions.get("filings", {}).get("recent", {})
-            if not recent:
-                return []
 
             forms = recent.get("form", [])
             filing_dates = recent.get("filingDate", [])
@@ -121,7 +120,18 @@ class FilingWatcherService:
             )
 
             discovered: list[DiscoveredFiling] = []
-            should_refresh = False
+            pending = db.execute(select(FilingEvent).where(
+                FilingEvent.cik == cik, FilingEvent.is_processed.is_(False)
+            )).scalars().all()
+            for event in pending:
+                discovered.append(DiscoveredFiling(
+                    ticker=ticker, cik=cik, form=event.form,
+                    accession_number=event.accession_number,
+                    filing_date=event.filing_date.isoformat(),
+                    report_date=event.report_date.isoformat() if event.report_date else None,
+                    description=event.description, is_new=False,
+                ))
+            should_refresh = bool(pending)
 
             # Scan the most recent N filings
             scan_limit = min(max_scan_filings, len(forms))
@@ -252,6 +262,7 @@ class FilingWatcherService:
             cards = self.watchlist_svc.get_watchlist(pinned_only=pinned_only, session=db)
             all_discovered: list[DiscoveredFiling] = []
             refreshed_count = 0
+            failed_tickers: list[str] = []
 
             for card in cards:
                 if not card.ticker:
@@ -270,11 +281,14 @@ class FilingWatcherService:
                     if progress_callback:
                         progress_callback(card.ticker, discovered)
                 except Exception:
+                    db.rollback()
+                    failed_tickers.append(card.ticker)
                     logger.warning("Error polling filings for %s", card.ticker, exc_info=True)
 
             return WatcherCheckSummary(
+                failed_tickers=failed_tickers,
                 checked_count=len(cards),
-                new_filings_count=len(all_discovered),
+                new_filings_count=sum(d.is_new for d in all_discovered),
                 refreshed_companies_count=refreshed_count,
                 new_filings=all_discovered,
                 checked_at=now_str,

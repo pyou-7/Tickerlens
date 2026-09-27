@@ -817,6 +817,41 @@ def test_export_zip(session: Session) -> None:
         assert "110000" in csv_content
 
 
+@pytest.mark.parametrize('start,end,expected', [
+    ('Q1 FY2025', 'Q1 FY2025', ['Q1 FY2025']),
+    ('FY2025', 'FY2025', ['Q1 FY2025', 'Q2 FY2025']),
+    ('Q2 FY2025', 'Q1 FY2025', ['Q1 FY2025', 'Q2 FY2025']),
+])
+def test_export_selected_periods(session, start, end, expected):
+    import csv
+    import io
+    import zipfile
+    session.add(_company())
+    for year, quarter, month in [(2024, 'Q4', 12), (2025, 'Q1', 3), (2025, 'Q2', 6)]:
+        session.add(_row(period_end=dt.date(year, month, 28), fiscal_year=year,
+                         fiscal_period=quarter, revenue=100))
+    session.commit()
+    edgar = MagicMock()
+    edgar.cik_for_ticker.return_value = '0000320193'
+    svc = FinancialsService(edgar_client=edgar, session=session)
+    archive = svc.export_zip('AAPL', range_start=start, range_end=end)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        rows = list(csv.DictReader(io.StringIO(zf.read('aapl_financials.csv').decode())))
+    assert [r['Period Label'] for r in rows] == expected
+    with pytest.raises(ValueError):
+        svc.export_zip('AAPL', range_start='invalid', range_end=end)
+
+
+def test_yearly_partial_coverage_is_explicit_and_not_compared_to_full_year():
+    rows = [_row(period_end=dt.date(2024, m, 28), fiscal_year=2024,
+                 fiscal_period=f'Q{i}', revenue=100) for i, m in enumerate([3, 6, 9, 12], 1)]
+    rows.append(_row(period_end=dt.date(2025, 3, 28), fiscal_year=2025,
+                     fiscal_period='Q1', revenue=150))
+    period = _build_yearly_period(rows, 2025, 2025)
+    assert period.quarter_count == 1
+    assert period.yoy.revenue is None
+
+
 def test_match_surprises_to_dates(monkeypatch: pytest.MonkeyPatch) -> None:
     from tickerlens.data.yahoo import EarningsSurprise
     from tickerlens.services.financials import _match_surprises_to_dates
@@ -855,5 +890,3 @@ def test_match_surprises_to_dates(monkeypatch: pytest.MonkeyPatch) -> None:
     assert results[1]["surprise_str"] == "+6.2%"
 
     assert results[2] is None
-
-

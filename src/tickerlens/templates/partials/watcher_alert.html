@@ -1,7 +1,14 @@
 {% if summary %}
 <div x-data="{ show: true }" x-show="show" x-transition.opacity.duration.300ms class="mb-5 p-4 rounded-xl border {% if summary.new_filings_count > 0 %}bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200{% else %}bg-slate-50 dark:bg-gray-800/40 border-slate-200 dark:border-gray-800 text-slate-800 dark:text-gray-300{% endif %} flex items-start justify-between shadow-sm">
   <div class="flex items-start gap-3">
-    {% if summary.new_filings_count > 0 %}
+    {% if summary.failed_tickers %}
+      <div role="alert">
+        <h4 class="text-sm font-semibold">Scan incomplete — retry needed</h4>
+        <p class="text-xs mt-1">Could not complete checks for {{ summary.failed_tickers | join(', ') }}.
+          Pending filings will be retried on the next scan. {{ summary.refreshed_companies_count }} companies refreshed successfully.</p>
+        <p class="text-xs mt-1">Checked at {{ summary.checked_at }}. This is not confirmation that all data is current.</p>
+      </div>
+    {% elif summary.new_filings_count > 0 %}
       <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-lg">
         ⚡
       </div>
@@ -28,10 +35,11 @@
       </div>
       <div>
         <h4 class="text-sm font-semibold text-slate-900 dark:text-white">
-          All Watched Companies Up to Date
+          Scan complete — no new filings detected
         </h4>
         <p class="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
           Checked {{ summary.checked_count }} pinned companies against SEC EDGAR. No new 10-Q, 10-K, or 8-K filings found.
+          {{ summary.refreshed_companies_count }} companies refreshed, including pending retries. First scans establish a baseline; they do not refresh historical data.
           <span class="text-slate-400 dark:text-gray-500 font-mono text-[11px] ml-1">({{ summary.checked_at }})</span>
         </p>
       </div>

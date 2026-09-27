@@ -6,6 +6,10 @@ This file is a living document. Update it as decisions are made or phases shift.
 
 ## Current Phase
 
+September 27 reliability update: see [validation and handoff record](progress/2026-09-27-reliability.md). SEC cache freshness, pending-filing retries, partial-scan warnings, synchronized slicer exports/print labels, yearly export filtering, honest leverage labels and calendar-first peer charts are implemented. The larger feature roadmap remains pending.
+
+Latest validation: 120 automated tests passed; browser navigation and downloaded range ZIP contents verified. Annual views now expose partial quarter coverage and omit incomparable growth. See the record for verification limits.
+
 **Phase 3 — Scale to all US public companies**
 
 Goal: expand beyond one-company browsing with a company universe, global search, watchlist, Range/Compare modes, and ZIP downloads.

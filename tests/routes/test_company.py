@@ -29,6 +29,15 @@ def test_company_detail_range_mode():
     assert "Cumulative Net Income" in text
     assert "Cumulative Free Cash Flow" in text
     assert "Cumulative Total" in text
+    assert 'action="/company/AAPL/detail"' in text
+    assert 'method="get"' in text
+    assert 'Download Q' in text and ' to Q' in text
+    assert 'export-zip?range_start=Q' in text
+
+
+def test_export_invalid_range_returns_validation_error():
+    response = client.get('/company/AAPL/export-zip?range_start=invalid&range_end=invalid')
+    assert response.status_code == 422
 
 
 def test_company_detail_data_range_htmx():

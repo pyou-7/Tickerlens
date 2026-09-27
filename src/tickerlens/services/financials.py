@@ -102,6 +102,7 @@ class CompanyOverview(BaseModel):
 class PeriodData(BaseModel):
     """Data for a single selected period (quarterly or yearly aggregate)."""
     label: str                  # "Q2 FY2025" or "FY2025"
+    quarter_count: int = 1
     period_end: dt.date | None  # None for yearly aggregates
     fiscal_year: int
     fiscal_period: str | None   # "Q1"–"Q4" for quarterly; None for yearly
@@ -585,6 +586,16 @@ class FinancialsService:
                 if s_idx > e_idx:
                     s_idx, e_idx = e_idx, s_idx
                 rows = all_rows[s_idx : e_idx + 1]
+            elif range_start and range_end and range_start.startswith('FY') and range_end.startswith('FY'):
+                start_year, end_year = sorted((int(range_start[2:]), int(range_end[2:])))
+                available_years = {r.fiscal_year for r in all_rows}
+                if start_year not in available_years or end_year not in available_years:
+                    raise ValueError('Export fiscal years must be available in the stored data')
+                rows = [r for r in all_rows if start_year <= r.fiscal_year <= end_year]
+                if not rows:
+                    raise ValueError('No financial periods in the requested export range')
+            elif range_start or range_end:
+                raise ValueError('Both export boundaries must identify available quarters or fiscal years')
 
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -991,6 +1002,8 @@ def _build_range_data(
         c_fcf_margin = (total_fcf / total_rev * 100) if (total_fcf is not None and total_rev and total_rev > 0) else None
         rev_growth = _pct_change(range_periods[-1].kpi.revenue, range_periods[0].kpi.revenue)
         ni_growth = _pct_change(range_periods[-1].kpi.net_income, range_periods[0].kpi.net_income)
+        if range_periods[0].quarter_count != 4 or range_periods[-1].quarter_count != 4:
+            rev_growth = ni_growth = None
 
         start_lbl = f"FY{start_yr}"
         end_lbl = f"FY{end_yr}"
@@ -1190,6 +1203,8 @@ def _build_yearly_period(
 
     prior_rows = [r for r in all_rows if r.fiscal_year == selected_year - 1]
     yoy = _compute_kpi_yoy(kpi, _compute_ttm(prior_rows)) if prior_rows else KPIChange()
+    if {r.fiscal_period for r in year_rows} != {r.fiscal_period for r in prior_rows}:
+        yoy = KPIChange()
 
     # Balance sheet is a point-in-time value — use the year's last quarter (year end),
     # not a sum, and compare against the prior year's last quarter.
@@ -1202,6 +1217,7 @@ def _build_yearly_period(
 
     return PeriodData(
         label=f"FY{selected_year}",
+        quarter_count=len({r.fiscal_period for r in year_rows}),
         period_end=year_rows[-1].period_end if year_rows else None,
         fiscal_year=selected_year,
         fiscal_period=None,

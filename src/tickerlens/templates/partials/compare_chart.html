@@ -96,7 +96,7 @@
     function compareChart() {
       return {
         activeMetric: '{{ ctx.metric or "revenue_yoy" }}',
-        alignment: 'quarters', // 'quarters' | 'dates'
+        alignment: 'dates', // Calendar dates avoid implying identical fiscal calendars.
         hiddenPeers: [],
         payload: { peers: [] },
         metricOptions: [
@@ -227,8 +227,10 @@
           if (alignByQuarters) {
             // Pick the longest or first peer's labels
             if (this.payload.peers.length > 0) {
-              quarterCategories = this.payload.peers[0].quarters.map(function(q, i) {
-                return q.label || ('Q' + (i + 1));
+              var maxQuarters = Math.max.apply(null, this.payload.peers.map(function(p) { return p.quarters.length; }));
+              quarterCategories = Array.from({length: maxQuarters}, function(q, i) {
+                var lag = maxQuarters - i - 1;
+                return lag === 0 ? 'Latest' : lag + ' quarters ago';
               });
             }
           }
@@ -245,7 +247,8 @@
             peer.quarters.forEach(function(q, idx) {
               if (alignByQuarters) {
                 // Use quarter label (or fallback to index)
-                xVals.push(quarterCategories[idx] || q.label);
+                var lag = peer.quarters.length - idx - 1;
+                xVals.push(lag === 0 ? 'Latest' : lag + ' quarters ago');
               } else {
                 xVals.push(q.date);
               }

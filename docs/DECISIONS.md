@@ -232,4 +232,11 @@ Added export buttons to the slicer toolbar and floating action pill on company d
 **Alternatives considered:** Scraping Zacks or paid earnings calendars (rejected: Yahoo Finance provides free earnings history with EPS estimate, actual, and percentage surprise through yfinance with zero API fees).
 
 
+# September 27, 2026 — Reliability before expansion
+
+- Keep the current single-user architecture; no migrations or new dependencies in this increment.
+- Prefer a coherent full-page Time Slicer snapshot over independent HTMX fragments with stale export and print state. The tradeoff is a page navigation and chart reinitialization per selection.
+- Use calendar-date comparison by default; relative alignment is explicitly lag-based, not a shared fiscal year.
+- Preserve legacy ratio field names for compatibility, but correct the user-facing liabilities/equity label.
+- A failed scan is incomplete, never evidence that companies are up to date. Retain pending events for retry.
 

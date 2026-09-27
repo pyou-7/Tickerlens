@@ -82,4 +82,7 @@ Expand the proven single-company experience into a searchable, watchlist-driven 
 3. Keep CIK as the canonical company key across all persistence.
 4. Do not start Phase 4+ AI, calendar/alerts, or news work.
 
+# September 27 reliability follow-up
+
+See [reliability implementation and validation record](2026-09-27-reliability.md) for the latest local, uncommitted changes. 120 tests pass; browser checks verified calendar/relative comparisons, synchronized ranges and export controls, partial-year warnings, and the downloaded ZIP's selected rows. This supersedes earlier current-state test counts and HTMX-only slicer descriptions below. Valuation and other new modules remain backlog.
 
