@@ -77,15 +77,19 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - In-memory streaming ZIP generation (`FinancialsService.export_zip(ticker, range_start, range_end)`) served via `GET /company/{ticker}/export-zip`.
     - Packages complete financial statements CSV (`{ticker}_financials.csv`), all primary-source disclosures extracted from EDGAR (`disclosures/` folder with 8-K press release exhibits, guidance, executive commentary), Item 1A Risk Factors (`{ticker}_risk_factors.txt`), and `README.txt`.
     - Added quick-action ZIP download buttons in slicer toolbar and floating action pill on company detail page.
-    - Validated with end-to-end automation script `scripts/validate_range_and_zip.py` across all 10 tracked companies.
-  - 100 tests currently passing in test suite (100% pass rate).
+  - **Universe & Watchlist Batch Ingestion CLI Tooling (PRD §4.6 / §4.10):**
+    - Created `IngestionService` (`services/ingestion.py`) with single-ticker and batch orchestration (`refresh_ticker`, `refresh_tickers`, `refresh_watchlist`, `refresh_all_db`).
+    - Created executable CLI `scripts/refresh_universe.py` with multi-target selection (`--watchlist`, `--all-db`, `--tickers`, `--top N`), configurable quarter depths (`--periods 12`), optional 8-K disclosure extraction (`--include-disclosures`), automatic watchlist pinning (`--pin`), polite SEC rate limiting (`--delay`), dry-run preview mode (`--dry-run`), and JSON machine-readable output (`--json`).
+    - Updated models `company.py` and `quarterly_financial.py` with timezone-aware UTC datetime defaults (`lambda: dt.datetime.now(dt.timezone.utc)`), eliminating Python 3.12 deprecation warnings.
+    - Added unit test suite in `tests/services/test_ingestion.py`.
+  - 105 tests currently passing in test suite (100% pass rate).
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Build batch ingestion/refresh tooling and CLI for universe watchlist coverage (e.g. `scripts/refresh_universe.py` or background worker).
-2. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
+1. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
+2. Automated SEC filing poller / background scheduler checking for newly filed 10-Q/10-K/8-K reports across the user's watchlist.
 3. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
@@ -107,6 +111,7 @@ Do NOT build AI analysis, calendar/alerts, or the news feed — those remain Pha
 
 | Date | Decision |
 |---|---|
+| 2026-09-27 | Implemented Universe & Watchlist Batch Ingestion Service and CLI tooling (PRD §4.6 / §4.10) with multi-target selection and rate limiting |
 | 2026-09-27 | Implemented Time Slicer Range Mode (PRD §4.2 / §4.3) with multi-period comparative tables and cumulative fundamentals |
 | 2026-09-27 | Implemented One-Click Earnings ZIP Export Archive (PRD §4.8) packaging CSV financials, EDGAR disclosures, risk factors, and manifest |
 | 2026-09-27 | Implemented full Dark/Light/System Theme engine and overhauled Compare Mode to client-side Alpine/Plotly controller |

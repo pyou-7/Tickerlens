@@ -32,7 +32,9 @@ class QuarterlyFinancial(Base):
     guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
     executive_commentary: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
+        DateTime,
+        default=lambda: dt.datetime.now(dt.timezone.utc),
+        onupdate=lambda: dt.datetime.now(dt.timezone.utc),
     )
 
     company: Mapped["Company"] = relationship(back_populates="financials")  # noqa: F821

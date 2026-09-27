@@ -26,11 +26,13 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 - `services/search.py` — SEC universe indexing, multi-tier ranking (exact ticker, prefix ticker, prefix company, word prefix, contains), market-cap tie breaking, and search query execution.
 - `services/watchlist.py` — watchlist card generation, pin/toggle/remove logic, and auto-ingest for watched tickers.
 - `services/comparison.py` — multi-company peer benchmarking, ratio/margin calculations, outperformer leaderboard, and chronological Plotly multi-trace dataset generation.
+- `services/ingestion.py` — batch orchestration for single tickers, watchlists, DB universe, and curated tech leaders with rate limiting and progress callbacks.
 - `services/ir_download.py` — earnings filing discovery, fiscal labeling, and 8-K ex-99 matching.
-- `routes/company.py` — home, overview, detail, HTMX detail fragment, and refresh handlers.
+- `routes/company.py` — home, overview, detail, HTMX detail fragment, refresh, and ZIP export handlers.
 - `routes/search.py` — `GET /api/search` JSON suggestions endpoint.
 - `routes/watchlist.py` — `POST /watchlist/pin/{ticker}`, `POST /watchlist/toggle/{ticker}`, `DELETE /watchlist/{ticker}`, and `GET /watchlist/dashboard`.
 - `routes/comparison.py` — `GET /compare` full-page view and `GET /compare/chart` HTMX fragment.
+- `scripts/refresh_universe.py` — CLI for batch universe updates, watchlist maintenance, dry-run inspection, and JSON output.
 - The refresh route performs financial, company, and press-release enrichment. First-visit auto-fetch stays lighter and does not fetch press releases.
 
 ### User interface
@@ -51,7 +53,7 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ### Tests and migrations
 
-- 100 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, comparison, routes, range mode, and zip export).
+- 105 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, comparison, routes, range mode, zip export, and batch ingestion).
 - Comprehensive end-to-end automation scripts: `scripts/validate_range_and_zip.py`, `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
 - Latest migration: `cf9ad233f7f8_create_watchlist_items_table.py`.
 
@@ -69,9 +71,8 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ## Next Recommended Work
 
-1. Build batch ingestion/refresh tooling and CLI for universe watchlist coverage.
-2. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
-3. Investigate and implement automated SEC filing webhook/poller for real-time earnings detection.
+1. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
+2. Automated SEC filing poller / background scheduler checking for newly filed 10-Q/10-K/8-K reports across the user's watchlist.
 
 
 ## Guardrails

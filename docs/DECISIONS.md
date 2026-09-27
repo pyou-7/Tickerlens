@@ -199,3 +199,15 @@ Added export buttons to the slicer toolbar and floating action pill on company d
 **Why:** Analysts require raw fundamental data and primary source earnings commentary bundled together for offline modeling, archival, and deep analysis without having to download multiple documents individually from SEC EDGAR.
 **Alternatives considered:** Disk-based temporary file caching (rejected: in-memory `io.BytesIO` generation is fast (<50ms), eliminates cleanup cron jobs and orphaned files, and streams cleanly via FastAPI `StreamingResponse`).
 
+---
+
+## 2026-09-27 — Universe & Watchlist Batch Ingestion Service and CLI Tooling (PRD §4.6 / §4.10)
+
+**What:** Created `IngestionService` (`services/ingestion.py`) and a comprehensive CLI utility `scripts/refresh_universe.py`. Supports batch target selection (`--watchlist`, `--all-db`, `--tickers`, `--top N`), configurable quarter depths (`--periods N`, default 12), optional 8-K disclosure extraction (`--include-disclosures`), automatic watchlist pinning (`--pin`), polite inter-ticker SEC rate limiting (`--delay S`), non-destructive dry-run inspection (`--dry-run`), and machine-readable JSON output (`--json`). Concurrently migrated model timestamp defaults in `company.py` and `quarterly_financial.py` to timezone-aware UTC datetime callables (`lambda: dt.datetime.now(dt.timezone.utc)`), eliminating Python 3.12 deprecation warnings.
+**Why:**
+1. Manually visiting web pages to ingest or refresh company fundamentals one by one is inefficient when maintaining an active investment universe or watchlist.
+2. Background cron jobs, shell automations, and command-line workflows require a resilient, headless tool that reports per-ticker metrics, catches and logs individual failures without halting the batch, and respects SEC EDGAR 10 req/s guidelines.
+3. Clean model timestamps ensure full forward-compatibility with Python 3.12+ and prevent noisy console warnings during test runs and migrations.
+**Alternatives considered:** Direct bash script calling curl/uvicorn endpoints (rejected: fragile, lacks structured failure recovery, bypasses ORM validation, and doesn't support dry-run inspection).
+
+

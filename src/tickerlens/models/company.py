@@ -20,7 +20,9 @@ class Company(Base):
     risk_factors: Mapped[str | None] = mapped_column(Text)
     risk_factors_source: Mapped[str | None] = mapped_column(String(64))  # e.g. "10-K filed 2024-11-01"
     updated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
+        DateTime,
+        default=lambda: dt.datetime.now(dt.timezone.utc),
+        onupdate=lambda: dt.datetime.now(dt.timezone.utc),
     )
 
     financials: Mapped[list["QuarterlyFinancial"]] = relationship(  # noqa: F821
