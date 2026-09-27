@@ -1,0 +1,557 @@
+{% extends "base.html" %}
+{% block title %}Compare Peers — Tickerlens{% endblock %}
+
+{% block extra_head %}
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+{% endblock %}
+
+{% macro fmt_large(val) -%}
+  {%- if val is none -%}—
+  {%- else -%}
+    {%- set abs = val | abs -%}
+    {%- set sign = "-" if val < 0 else "" -%}
+    {%- if abs >= 1_000_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+    {%- elif abs >= 1_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000) }}B
+    {%- elif abs >= 1_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000) }}M
+    {%- else -%}{{ sign }}${{ "%.0f"|format(abs) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_price(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_eps(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_pct(val) -%}
+  {%- if val is none -%}—
+  {%- elif val >= 0 -%}+{{ "%.1f"|format(val) }}%
+  {%- else -%}{{ "%.1f"|format(val) }}%
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro change_badge(pct) %}
+  {%- if pct is not none -%}
+    {%- if pct >= 0 -%}
+      <span class="inline-flex items-center gap-0.5 text-emerald-400 font-medium">
+        +{{ "%.1f"|format(pct) }}%
+      </span>
+    {%- else -%}
+      <span class="inline-flex items-center gap-0.5 text-rose-400 font-medium">
+        {{ "%.1f"|format(pct) }}%
+      </span>
+    {%- endif -%}
+  {%- else -%}
+    <span class="text-gray-600">—</span>
+  {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<div class="space-y-8" x-data="{ newTicker: '' }">
+  <!-- Top Breadcrumb & Title -->
+  <div>
+    <div class="flex items-center gap-2 text-xs text-gray-500 mb-2 font-mono">
+      <a href="/" class="hover:text-gray-300 transition">Dashboard</a>
+      <span>/</span>
+      <span class="text-indigo-400">Compare Mode</span>
+    </div>
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-extrabold text-white tracking-tight flex items-center gap-3">
+          <span>Peer Benchmarking &amp; Compare</span>
+          <span class="rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs px-3 py-1 font-mono font-medium">
+            Time Slicer Mode
+          </span>
+        </h1>
+        <p class="text-sm text-gray-400 mt-1 max-w-3xl">
+          Side-by-side quarterly financial performance, valuation, growth rates, and margins across competing public companies.
+        </p>
+      </div>
+
+      <!-- Quick Preset Group Pills -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-500 font-medium mr-1">Presets:</span>
+        {% for preset in ctx.presets %}
+          <a href="/compare?tickers={{ preset.tickers | join(',') }}&metric={{ ctx.metric }}"
+             class="px-2.5 py-1 text-xs rounded-lg border border-gray-800 bg-gray-900/80 text-gray-300 hover:text-indigo-300 hover:border-indigo-500/40 hover:bg-gray-800 transition">
+            {{ preset.name }}
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Peer Management Bar -->
+  <div class="rounded-2xl border border-gray-800/80 bg-gray-900/40 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 backdrop-blur-sm">
+    <!-- Active Peers Pills -->
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-xs font-medium text-gray-400">Active Peers ({{ ctx.peers | length }}/5):</span>
+      {% for peer in ctx.peers %}
+        <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-gray-950 border border-gray-800 shadow-sm text-xs">
+          <span class="w-2.5 h-2.5 rounded-full" style="background-color: {{ peer.color }};"></span>
+          <a href="/company/{{ peer.ticker }}" class="font-mono font-bold text-white hover:text-indigo-300 transition">
+            {{ peer.ticker }}
+          </a>
+          <span class="text-gray-400 text-[11px] truncate max-w-[120px]">{{ peer.name }}</span>
+          {% if ctx.peers | length > 1 %}
+            {# Generate URL without this ticker #}
+            {% set remaining = [] %}
+            {% for other in ctx.peers %}
+              {% if other.ticker != peer.ticker %}
+                {% set _ = remaining.append(other.ticker) %}
+              {% endif %}
+            {% endfor %}
+            <a href="/compare?tickers={{ remaining | join(',') }}&metric={{ ctx.metric }}"
+               class="text-gray-500 hover:text-rose-400 transition ml-1 p-0.5 rounded hover:bg-gray-800"
+               title="Remove {{ peer.ticker }}">
+              ✕
+            </a>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <!-- Add Peer Input -->
+    {% if ctx.peers | length < 5 %}
+      <form @submit.prevent="if (newTicker.trim()) { window.location.href = '/compare?tickers=' + encodeURIComponent('{{ ctx.tickers_str }},' + newTicker.trim().toUpperCase()) + '&metric={{ ctx.metric }}'; }"
+            class="flex items-center gap-2">
+        <div class="relative">
+          <input type="text"
+                 x-model="newTicker"
+                 placeholder="Add ticker (e.g. MSFT)..."
+                 class="w-48 rounded-xl bg-gray-950 border border-gray-800 px-3 py-1.5 text-xs text-white uppercase placeholder:normal-case placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono">
+        </div>
+        <button type="submit"
+                class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition cursor-pointer flex items-center gap-1 shadow-sm">
+          <span>+ Add</span>
+        </button>
+      </form>
+    {% endif %}
+  </div>
+
+  <!-- Outperformance Leaderboard Highlights -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+    <!-- Top Growth -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Top YoY Growth</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-emerald-400">
+          {{ ctx.leaderboard.top_revenue_growth or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Revenue</span>
+      </div>
+    </div>
+
+    <!-- Top Net Margin -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Top Net Margin</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-indigo-400">
+          {{ ctx.leaderboard.top_net_margin or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Profit</span>
+      </div>
+    </div>
+
+    <!-- Top FCF Margin -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Top FCF Margin</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-cyan-400">
+          {{ ctx.leaderboard.top_fcf_margin or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Cash Flow</span>
+      </div>
+    </div>
+
+    <!-- Top FCF Growth -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Top FCF Growth</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-amber-400">
+          {{ ctx.leaderboard.top_fcf_growth or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">YoY</span>
+      </div>
+    </div>
+
+    <!-- Largest Market Cap -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Largest Market Cap</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-purple-400">
+          {{ ctx.leaderboard.top_market_cap or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Valuation</span>
+      </div>
+    </div>
+
+    <!-- Strongest Cash Reserve -->
+    <div class="rounded-xl border border-gray-800/80 bg-gray-900/60 p-3.5 flex flex-col justify-between">
+      <div class="text-[11px] font-medium text-gray-400">Top Cash Reserves</div>
+      <div class="mt-2 flex items-baseline justify-between">
+        <span class="font-mono text-base font-bold text-emerald-400">
+          {{ ctx.leaderboard.top_cash or '—' }}
+        </span>
+        <span class="text-[10px] text-gray-500 uppercase tracking-wider">Liquidity</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Multi-Company Trend Overlay Chart -->
+  {% include "partials/compare_chart.html" %}
+
+  <!-- Side-by-Side Benchmarking Table -->
+  <div class="rounded-2xl border border-gray-800 bg-gray-900/60 backdrop-blur-sm overflow-hidden shadow-xl">
+    <div class="p-5 border-b border-gray-800/80 flex items-center justify-between">
+      <div>
+        <h3 class="text-base font-semibold text-white">Side-by-Side Financial Benchmarking</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Comprehensive latest quarter metrics, growth trajectories, and balance sheet strength</p>
+      </div>
+      <span class="text-xs text-gray-500 font-mono">Quarterly SEC XBRL Data</span>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs text-left">
+        <!-- Table Column Headers -->
+        <thead class="bg-gray-950/80 border-b border-gray-800 text-gray-400 uppercase tracking-wider text-[11px]">
+          <tr>
+            <th scope="col" class="py-4 px-5 min-w-[200px] w-1/4">Financial Indicator</th>
+            {% for peer in ctx.peers %}
+              <th scope="col" class="py-4 px-4 text-right min-w-[160px]">
+                <div class="flex flex-col items-end gap-1">
+                  <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full" style="background-color: {{ peer.color }};"></span>
+                    <a href="/company/{{ peer.ticker }}" class="font-mono font-bold text-sm text-white hover:text-indigo-400 transition">
+                      {{ peer.ticker }}
+                    </a>
+                  </div>
+                  <div class="text-[11px] text-gray-400 font-normal truncate max-w-[150px] font-sans">
+                    {{ peer.name }}
+                  </div>
+                  <div class="text-[10px] text-gray-500 font-mono">
+                    {{ peer.latest_period }}
+                  </div>
+                </div>
+              </th>
+            {% endfor %}
+          </tr>
+        </thead>
+
+        <tbody class="divide-y divide-gray-800/50 font-mono">
+          <!-- ── CATEGORY 1: Market & Valuation ─────────────────────── -->
+          <tr class="bg-gray-950/50 font-sans font-semibold text-gray-400 text-[11px]">
+            <td colspan="{{ (ctx.peers | length) + 1 }}" class="py-2 px-5 tracking-wider uppercase text-indigo-400 bg-indigo-950/20">
+              1. Market &amp; Valuation
+            </td>
+          </tr>
+
+          <!-- Stock Price -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Last Stock Price</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-medium">
+                {{ fmt_price(peer.last_price) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Market Cap -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Market Capitalization</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-semibold">
+                {{ fmt_large(peer.market_cap) }}
+                {% if peer.ticker == ctx.leaderboard.top_market_cap %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/60">Top</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Sector -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Sector</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right text-gray-400 font-sans truncate">
+                {{ peer.sector or '—' }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- ── CATEGORY 2: Growth Rates (YoY) ─────────────────────── -->
+          <tr class="bg-gray-950/50 font-sans font-semibold text-gray-400 text-[11px]">
+            <td colspan="{{ (ctx.peers | length) + 1 }}" class="py-2 px-5 tracking-wider uppercase text-emerald-400 bg-emerald-950/20">
+              2. Growth Trajectory (Latest Q vs Prior Year)
+            </td>
+          </tr>
+
+          <!-- Revenue YoY -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Revenue Growth (YoY)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums">
+                {{ change_badge(peer.revenue_yoy) }}
+                {% if peer.ticker == ctx.leaderboard.top_revenue_growth %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">Leader</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Net Income YoY -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Net Income Growth (YoY)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums">
+                {{ change_badge(peer.net_income_yoy) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- EPS Diluted YoY -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Diluted EPS Growth (YoY)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums">
+                {{ change_badge(peer.eps_yoy) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- FCF YoY -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Free Cash Flow Growth (YoY)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums">
+                {{ change_badge(peer.free_cash_flow_yoy) }}
+                {% if peer.ticker == ctx.leaderboard.top_fcf_growth %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">Leader</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- ── CATEGORY 3: Margins & Profitability ─────────────────── -->
+          <tr class="bg-gray-950/50 font-sans font-semibold text-gray-400 text-[11px]">
+            <td colspan="{{ (ctx.peers | length) + 1 }}" class="py-2 px-5 tracking-wider uppercase text-cyan-400 bg-cyan-950/20">
+              3. Profitability &amp; Margin Structure (Latest Q)
+            </td>
+          </tr>
+
+          <!-- Net Profit Margin -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Net Profit Margin (%)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-medium">
+                {% if peer.net_margin is not none %}
+                  {% if peer.net_margin >= 0 %}
+                    <span class="text-emerald-400">{{ "%.1f"|format(peer.net_margin) }}%</span>
+                  {% else %}
+                    <span class="text-rose-400">{{ "%.1f"|format(peer.net_margin) }}%</span>
+                  {% endif %}
+                {% else %}—{% endif %}
+                {% if peer.ticker == ctx.leaderboard.top_net_margin %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">Leader</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- FCF Margin -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Free Cash Flow Margin (%)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-medium">
+                {% if peer.fcf_margin is not none %}
+                  {% if peer.fcf_margin >= 0 %}
+                    <span class="text-emerald-400">{{ "%.1f"|format(peer.fcf_margin) }}%</span>
+                  {% else %}
+                    <span class="text-rose-400">{{ "%.1f"|format(peer.fcf_margin) }}%</span>
+                  {% endif %}
+                {% else %}—{% endif %}
+                {% if peer.ticker == ctx.leaderboard.top_fcf_margin %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-cyan-950/60 text-cyan-300 border border-cyan-800/60">Leader</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Operating Cash Flow Margin -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Operating Cash Flow Margin (%)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-300">
+                {% if peer.ocf_margin is not none %}
+                  {{ "%.1f"|format(peer.ocf_margin) }}%
+                {% else %}—{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- ── CATEGORY 4: Core Financials (Latest Q) ──────────────── -->
+          <tr class="bg-gray-950/50 font-sans font-semibold text-gray-400 text-[11px]">
+            <td colspan="{{ (ctx.peers | length) + 1 }}" class="py-2 px-5 tracking-wider uppercase text-amber-400 bg-amber-950/20">
+              4. Income &amp; Cash Flow Scale (Latest Q)
+            </td>
+          </tr>
+
+          <!-- Revenue -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Quarterly Revenue</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-semibold">
+                {{ fmt_large(peer.revenue) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Net Income -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Net Income</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white">
+                {{ fmt_large(peer.net_income) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Diluted EPS -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Diluted EPS</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-200">
+                {{ fmt_eps(peer.eps_diluted) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Operating Cash Flow -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Operating Cash Flow</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-300">
+                {{ fmt_large(peer.operating_cash_flow) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Capex -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Capital Expenditures (Capex)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-400">
+                {{ fmt_large(peer.capex) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Free Cash Flow -->
+          <tr class="hover:bg-gray-800/30 transition bg-indigo-950/15">
+            <td class="py-3 px-5 text-indigo-300 font-sans font-semibold">Free Cash Flow</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-bold">
+                {{ fmt_large(peer.free_cash_flow) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- ── CATEGORY 5: Balance Sheet & Solvency ────────────────── -->
+          <tr class="bg-gray-950/50 font-sans font-semibold text-gray-400 text-[11px]">
+            <td colspan="{{ (ctx.peers | length) + 1 }}" class="py-2 px-5 tracking-wider uppercase text-purple-400 bg-purple-950/20">
+              5. Balance Sheet &amp; Liquidity (Latest Q End)
+            </td>
+          </tr>
+
+          <!-- Cash & Equivalents -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Cash &amp; Short-Term Equivalents</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-white font-semibold">
+                {{ fmt_large(peer.cash_and_equivalents) }}
+                {% if peer.ticker == ctx.leaderboard.top_cash %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">Top</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Total Assets -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Total Assets</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-300">
+                {{ fmt_large(peer.total_assets) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Total Liabilities -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Total Liabilities</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-400">
+                {{ fmt_large(peer.total_liabilities) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Total Stockholders Equity -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Total Stockholders' Equity</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-300">
+                {{ fmt_large(peer.total_equity) }}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Debt-to-Equity -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-300 font-sans font-medium">Debt-to-Equity Ratio</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-300">
+                {% if peer.debt_to_equity is not none %}
+                  {{ "%.2f"|format(peer.debt_to_equity) }}x
+                {% else %}—{% endif %}
+                {% if peer.ticker == ctx.leaderboard.lowest_debt_to_equity %}
+                  <span class="ml-1 text-[9px] font-sans px-1 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">Lowest</span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+
+          <!-- Cash / Assets % -->
+          <tr class="hover:bg-gray-800/30 transition">
+            <td class="py-3 px-5 text-gray-400 font-sans">Cash / Total Assets (%)</td>
+            {% for peer in ctx.peers %}
+              <td class="py-3 px-4 text-right tabular-nums text-gray-400">
+                {% if peer.cash_to_assets is not none %}
+                  {{ "%.1f"|format(peer.cash_to_assets) }}%
+                {% else %}—{% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Table Footer with Actions -->
+    <div class="p-4 bg-gray-950/60 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-500">
+      <div>
+        Showing <span class="font-bold text-gray-300">{{ ctx.peers | length }}</span> companies. Values derived from quarterly SEC 10-Q &amp; 10-K XBRL disclosures.
+      </div>
+      <div class="flex items-center gap-3">
+        {% for peer in ctx.peers %}
+          <a href="/company/{{ peer.ticker }}/detail" class="hover:text-indigo-400 transition font-mono">
+            {{ peer.ticker }} Slicer →
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

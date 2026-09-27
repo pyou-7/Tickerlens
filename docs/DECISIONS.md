@@ -157,4 +157,13 @@ Format:
 **Why:** Transformed Tickerlens from a single-ticker lookup utility into an investor research dashboard. Users can pin/unpin companies with one click from headers or dashboard cards, immediately monitoring revenue growth, EPS, and cash flow across their active watchlist.
 **Alternatives considered:** Storing watchlist in browser localStorage (rejected: server-side SQLite persistence preserves canonical CIK joins and allows background updates across devices).
 
+---
+
+## 2026-09-27 — Time Slicer Compare Mode & Frontend Typography Polish (PRD §4.2 / §4.4)
+
+**What:** Added `ComparisonService` (`services/comparison.py`), routes (`routes/comparison.py`), full-page view (`company/compare.html`), and HTMX chart partial (`partials/compare_chart.html`). Integrated multi-trace Plotly overlay for 7 normalized metrics (Revenue YoY %, Net Margin %, FCF Margin %, Revenue, Net Income, FCF, Diluted EPS) and 5-category side-by-side financial matrix with leader badges. Polished frontend with Inter/JetBrains Mono typography, `tabular-nums` alignment, HTMX top progress bar, and Table/Cards dashboard view toggle.
+**Why:** Users required side-by-side benchmarking of 2–5 peer companies (e.g. Semiconductors or Big Tech) to contrast quarterly growth trajectories, profitability margins, and balance sheet solvency without switching between individual company tabs.
+**Alternatives considered:** Static side-by-side tables without charting (rejected: visual trend overlay is essential to identify inflections in margins and growth); client-side-only peer comparison without server endpoints (rejected: shareable URLs like `/compare?tickers=NVDA,INTC,MRVL` and server-side aggregation ensure bookmarks and direct peer links work reliably).
+
+
 

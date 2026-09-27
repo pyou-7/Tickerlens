@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from tickerlens.routes import company, search, watchlist
+from tickerlens.routes import company, comparison, search, watchlist
 
 app = FastAPI(title="Tickerlens")
 
@@ -16,6 +16,7 @@ app.mount("/static", StaticFiles(directory=_BASE / "static"), name="static")
 templates = Jinja2Templates(directory=_BASE / "templates")
 
 app.include_router(company.router)
+app.include_router(comparison.router)
 app.include_router(search.router)
 app.include_router(watchlist.router)
 

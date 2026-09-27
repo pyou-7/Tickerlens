@@ -37,12 +37,12 @@
    rendered and the toggle is hidden by the caller. #}
 {% macro kpi_card(label, value, yoy_pct, qoq_pct=none) %}
 <div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
-  <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
-  <div class="text-2xl font-bold text-white mb-1">{{ value }}</div>
-  <div class="h-4">
-    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">YoY</span>{% endif %}</span>
+  <div class="text-xs text-gray-500 mb-1 font-medium">{{ label }}</div>
+  <div class="text-2xl font-bold text-white mb-1 font-mono tabular-nums">{{ value }}</div>
+  <div class="h-4 font-mono tabular-nums">
+    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs font-sans">YoY</span>{% endif %}</span>
     {% if qoq_pct is not none %}
-    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-gray-600 text-xs">QoQ</span></span>
+    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-gray-600 text-xs font-sans">QoQ</span></span>
     {% endif %}
   </div>
 </div>
@@ -178,30 +178,30 @@
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50">
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Revenue</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.revenue) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
+      <tbody class="divide-y divide-gray-800/50 font-mono">
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Revenue</td>
+          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.revenue) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Net Income</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.net_income) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Net Income</td>
+          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.net_income) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">EPS Basic</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-400 font-sans">EPS Basic</td>
+          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">EPS Diluted</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-400 font-sans">EPS Diluted</td>
+          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
         </tr>
       </tbody>
     </table>
@@ -220,27 +220,28 @@
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50">
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Operating Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.operating_cash_flow) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.operating_cash_flow) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.operating_cash_flow) }}</td>{% endif %}
+      <tbody class="divide-y divide-gray-800/50 font-mono">
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Operating Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.operating_cash_flow) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.operating_cash_flow) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.operating_cash_flow) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Capital Expenditures (Capex)</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(ctx.current.kpi.capex) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.capex) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.capex) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-400 font-sans">Capital Expenditures (Capex)</td>
+          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(ctx.current.kpi.capex) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.capex) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.capex) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-300 font-medium">Free Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-white font-bold">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition bg-indigo-950/20">
+          <td class="py-3 pr-4 text-indigo-300 font-sans font-semibold">Free Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
+          {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
         </tr>
       </tbody>
     </table>
+
     <p class="text-xs text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
   </div>
 
@@ -262,34 +263,35 @@
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50">
+      <tbody class="divide-y divide-gray-800/50 font-mono">
         {% set bs_yoy = ctx.current.balance_sheet_yoy %}
         {% set bs_qoq = ctx.current.balance_sheet_qoq %}
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Total Assets</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_assets) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_assets) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Total Assets</td>
+          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(bs.total_assets) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_assets) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Total Liabilities</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_liabilities) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_liabilities) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-400 font-sans">Total Liabilities</td>
+          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(bs.total_liabilities) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_liabilities) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Total Equity</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.total_equity) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_equity) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Total Equity</td>
+          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_equity) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30">
-          <td class="py-3 pr-4 text-gray-400">Cash &amp; Equivalents</td>
-          <td class="py-3 pr-4 text-right text-white font-medium">{{ fmt_large(bs.cash_and_equivalents) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
+        <tr class="hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-gray-400 font-sans">Cash &amp; Equivalents</td>
+          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(bs.cash_and_equivalents) }}</td>
+          <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
+          {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
         </tr>
       </tbody>
+
     </table>
     <p class="text-xs text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
     {% endif %}

@@ -51,13 +51,27 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - Added interactive `partials/watchlist_button.html` to company overview and detail headers.
     - Built responsive home screen dashboard `partials/pinned_dashboard.html` with card grid showing live stock prices, latest quarters, Revenue, Net Income, EPS, and FCF with YoY badges, and 1-click quick-pin empty state.
     - Validated with automated E2E navigation test script (`scripts/validate_watchlist_dashboard.py`).
-  - 81 tests currently passing in test suite.
+  - **Frontend Polish & Visual Typography:**
+    - Integrated Inter (sans) and JetBrains Mono (mono) typography with Tailwind configuration.
+    - Applied global `tabular-nums` for precise numeric and currency alignment across all financial statements and KPI cards.
+    - Added an animated top progress bar (`#htmx-progress`) tracking asynchronous HTMX swaps.
+    - Added high-density Table View alongside Card Grid View on the Home Dashboard with `localStorage` persistence.
+    - Upgraded search combobox with styled `<kbd>⌘K</kbd>` keycap shortcut affordance.
+  - **Time Slicer Compare Mode (PRD §4.2 / §4.4):**
+    - Created `ComparisonService` (`services/comparison.py`) and routes (`routes/comparison.py`).
+    - Built full-page comparison view (`company/compare.html`) and HTMX chart partial (`partials/compare_chart.html`).
+    - Implemented multi-company Plotly overlay chart supporting Revenue Growth YoY %, Net Margin %, FCF Margin %, Revenue, Net Income, FCF, and Diluted EPS.
+    - Designed 5-category side-by-side financial benchmarking matrix comparing Market & Valuation, YoY Growth, Profitability & Margins, Core Income/Cash Scale, and Balance Sheet & Liquidity with outperformer leader badges.
+    - Added quick-preset groups: Semiconductors (`NVDA, INTC, MRVL`), Big Tech (`AAPL, MSFT, GOOGL, AMZN, META`), Enterprise Cloud (`MSFT, ORCL, AMZN`), AI Ecosystem (`NVDA, MSFT, GOOGL, MRVL`).
+    - Added dynamic peer adder/remover pills supporting up to 5 concurrent peers.
+    - Validated with E2E automation script `scripts/validate_compare_mode.py`.
+  - 89 tests currently passing in test suite.
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Add Time Slicer Range and Compare modes (PRD §4.3 & §4.4).
+1. Add Time Slicer Range mode (PRD §4.2 multi-quarter contiguous slicing).
 2. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
 3. Build batch ingestion/refresh tooling for universe watchlist coverage.
 4. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).

@@ -4,9 +4,35 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Tickerlens{% endblock %}</title>
+  
+  <!-- Modern Fintech Typography: Inter + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
   <style>
     [x-cloak] { display: none !important; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    
+    /* Top Progress Bar for HTMX Requests */
+    #htmx-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 2.5px;
+      width: 0%;
+      background: linear-gradient(90deg, #6366f1, #818cf8, #a855f7);
+      transition: width 250ms ease, opacity 350ms ease;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0;
+    }
+    body.htmx-request #htmx-progress {
+      width: 75%;
+      opacity: 1;
+    }
   </style>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -16,6 +42,10 @@
       darkMode: 'class',
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
           colors: {
             brand: '#6366f1',
           }
@@ -24,12 +54,25 @@
     }
   </script>
 </head>
-<body class="h-full text-gray-100 font-sans antialiased">
+<body class="h-full text-gray-100 font-sans antialiased bg-gray-950 selection:bg-indigo-500/30 selection:text-indigo-200">
+  <!-- Top HTMX Progress Bar -->
+  <div id="htmx-progress"></div>
 
-  <!-- Nav -->
-  <nav class="border-b border-gray-800 bg-gray-950 sticky top-0 z-40">
+  <!-- Global Nav -->
+  <nav class="border-b border-gray-800/80 bg-gray-950/95 backdrop-blur-md sticky top-0 z-40 transition-colors">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
-      <a href="/" class="text-indigo-400 font-bold tracking-tight text-lg hover:text-indigo-300 transition shrink-0">Tickerlens</a>
+      <div class="flex items-center gap-6">
+        <a href="/" class="flex items-center gap-2 text-indigo-400 font-extrabold tracking-tight text-lg hover:text-indigo-300 transition shrink-0">
+          <span class="w-6 h-6 rounded-md bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center text-xs font-mono font-bold">TL</span>
+          <span>Tickerlens</span>
+        </a>
+        <a href="/compare" class="text-xs font-medium text-gray-400 hover:text-indigo-300 transition flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-gray-900 border border-transparent hover:border-gray-800">
+          <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+          <span>Compare</span>
+        </a>
+      </div>
 
       <div class="{% block nav_search_class %}{% endblock %}">
         {% with mode="nav", input_id="nav-search-input" %}
@@ -56,6 +99,17 @@
           target.select();
         }
       }
+    });
+
+    // Wire body htmx-request class for progress bar
+    document.addEventListener('htmx:beforeRequest', () => {
+      document.body.classList.add('htmx-request');
+    });
+    document.addEventListener('htmx:afterOnLoad', () => {
+      document.body.classList.remove('htmx-request');
+    });
+    document.addEventListener('htmx:sendError', () => {
+      document.body.classList.remove('htmx-request');
     });
   </script>
 </body>
