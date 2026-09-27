@@ -7,6 +7,8 @@ from tickerlens.config import get_settings
 from tickerlens.models.base import Base
 import tickerlens.models.company  # noqa: F401 — register models with Base.metadata
 import tickerlens.models.quarterly_financial  # noqa: F401
+import tickerlens.models.watchlist  # noqa: F401
+
 
 config = context.config
 

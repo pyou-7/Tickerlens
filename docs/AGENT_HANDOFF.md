@@ -17,34 +17,39 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 - `data/filings.py` — best-effort 10-K risk-factor and 8-K ex-99 text extraction.
 - `data/sic.py`, `data/wikipedia.py`, `data/yahoo.py` — sector, description, price, and market-cap enrichment.
 - `models/` — `Company` and `QuarterlyFinancial`, with CIK as the company key and Alembic-managed schema.
-- `quarterly_financials` stores core KPIs, balance-sheet values, and per-quarter press-release text/source.
+- `quarterly_financials` stores core KPIs, balance-sheet values, operating cash flow, capex, guidance, executive commentary, and per-quarter press-release text/source.
+- `watchlist_items` stores pinned status, notes, and display order with CIK as foreign key.
 
 ### Services and routes
 
 - `services/financials.py` — fetch/persist, company enrichment, press-release enrichment, overview context, and detail context.
 - `services/search.py` — SEC universe indexing, multi-tier ranking (exact ticker, prefix ticker, prefix company, word prefix, contains), market-cap tie breaking, and search query execution.
+- `services/watchlist.py` — watchlist card generation, pin/toggle/remove logic, and auto-ingest for watched tickers.
 - `services/ir_download.py` — earnings filing discovery, fiscal labeling, and 8-K ex-99 matching.
 - `routes/company.py` — home, overview, detail, HTMX detail fragment, and refresh handlers.
 - `routes/search.py` — `GET /api/search` JSON suggestions endpoint.
+- `routes/watchlist.py` — `POST /watchlist/pin/{ticker}`, `POST /watchlist/toggle/{ticker}`, `DELETE /watchlist/{ticker}`, and `GET /watchlist/dashboard`.
 - The refresh route performs financial, company, and press-release enrichment. First-visit auto-fetch stays lighter and does not fetch press releases.
 
 ### User interface
 
-- Home page: centered hero search combobox with ranked suggestions, debounced input, keyboard navigation, and quick links.
+- Home page: centered hero search combobox with ranked suggestions, debounced input, keyboard navigation, and responsive Pinned Companies Dashboard card grid showing live stock prices, latest quarters, Revenue/Net Income/EPS/FCF with YoY badges, and 1-click quick-pin empty state.
 - Global navigation: persistent compact search combobox in header on all pages with `Cmd+K` / `Ctrl+K` shortcut.
+- Company Overview and Detail headers: Pin/Watchlist toggle button (`partials/watchlist_button.html`) that swaps state via HTMX without full-page reloads.
 - Overview: company header/description, latest-quarter KPIs with YoY, TTM snapshot, and link to detail.
 - Detail: quarterly/yearly single-period selectors, HTMX swaps, a configurable one-metric Plotly trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs.
 - A separate stock-price chart lazy-loads adjusted Yahoo history from `GET /company/{ticker}/price-history` and supports Today through Max ranges without blocking initial detail-page rendering.
-- The trend selector covers Revenue, Net Income, FCF, EPS Basic/Diluted, Assets, Liabilities, Equity, and Cash. Its x values are unique period-end dates; month/year labels are display-only.
-- Disclosures: per-quarter press-release text, latest-company risk factors, and explicit unavailable states for guidance/transcripts.
+- The trend selector covers Revenue, Net Income, OCF, Capex, FCF, EPS Basic/Diluted, Assets, Liabilities, Equity, and Cash. Its x values are unique period-end dates; month/year labels are display-only.
+- Disclosures: per-quarter press-release text, management guidance, executive commentary, latest-company risk factors, and explicit unavailable states for transcripts.
 - Sticky Download PDF action: invokes browser print for the selected period, uses print-specific styling, and includes the required dated “As of” footer.
 - Full Range/Compare and ZIP export are deliberately Phase 3 work.
 
 ### Tests and migrations
 
-- 71 tests pass currently (56 at Phase 2 closeout, 4 Yahoo history tests, 7 search service unit tests, 4 search route/template tests).
-- Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, press-release enrichment, and search ranking.
-- Latest migration: `6b81522c5e05_add_press_release_columns_to_quarterly_*.py`.
+- 81 tests pass currently (56 at Phase 2 closeout, 4 Yahoo history tests, 7 search service unit tests, 4 search route/template tests, 2 filings tests, 2 watchlist service tests, 6 watchlist route tests).
+- Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, press-release enrichment, search ranking, and watchlist management.
+- Latest migration: `cf9ad233f7f8_create_watchlist_items_table.py`.
+
 
 ## Findings To Preserve
 
@@ -59,9 +64,10 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ## Next Recommended Work
 
-1. Add the single-user watchlist/pinned-company state.
-2. Add Time Slicer Range and Compare modes.
-3. Add the PRD §4.8 ZIP download workflow.
+1. Add Time Slicer Range and Compare modes (PRD §4.3 & §4.4).
+2. Add the PRD §4.8 ZIP download workflow.
+3. Build batch ingestion/refresh tooling for universe watchlist coverage.
+
 
 ## Guardrails
 

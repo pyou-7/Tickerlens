@@ -46,14 +46,19 @@ services/        Business logic — orchestrates data/ and models/
 |---|---|
 | `src/tickerlens/data/edgar.py` | SEC JSON client; throttler (≤10 req/sec); disk cache; CIK helpers |
 | `src/tickerlens/data/filings.py` | Best-effort narrative extraction from 10-K and 8-K exhibit HTML |
-| `src/tickerlens/data/xbrl.py` | Concept-mapping layer; quarterly metric extraction; YTD un-cumulation |
+| `src/tickerlens/data/xbrl.py` | Concept-mapping layer; quarterly metric extraction; YTD un-cumulation; latest-tag prioritization |
 | `src/tickerlens/services/financials.py` | Financial persistence, enrichment, overview, and detail-view service boundary |
+| `src/tickerlens/services/search.py` | SEC universe indexing, multi-tier ranking, and search query execution |
+| `src/tickerlens/services/watchlist.py` | Watchlist card generation, pin/toggle/remove logic, and auto-ingest |
 | `src/tickerlens/services/ir_download.py` | Earnings filing discovery and 8-K ex-99 matching |
-| `src/tickerlens/models/` | SQLAlchemy 2.0 models; CIK is the FK on every company join |
+| `src/tickerlens/models/` | SQLAlchemy 2.0 models (Company, QuarterlyFinancial, WatchlistItem); CIK is the FK |
 | `src/tickerlens/ai/` | Rules-based scoring + LLM calls (Claude SDK) |
 | `src/tickerlens/jobs/` | APScheduler background tasks |
-| `src/tickerlens/routes/` | FastAPI handlers; return Jinja2 HTML or HTMX fragments |
+| `src/tickerlens/routes/` | FastAPI handlers; return Jinja2 HTML or HTMX fragments, with JSON APIs for search/price history |
+| `src/tickerlens/routes/search.py` | JSON search suggestions endpoint (`GET /api/search`) |
+| `src/tickerlens/routes/watchlist.py` | Pin, toggle, and dashboard HTMX endpoints (`/watchlist`) |
 | `src/tickerlens/templates/` | Jinja2 templates; `partials/` for HTMX fragments |
+
 
 ---
 
@@ -93,6 +98,28 @@ The detail page loads adjusted Yahoo price history after the financial page rend
 JSON endpoint (`GET /company/{ticker}/price-history`) routes through `FinancialsService` to
 `data/yahoo.py`; range changes fetch only the selected window. This keeps unreliable market-data
 requests out of the initial EDGAR-backed page path and separate from quarterly financial state.
+
+### Dynamic concept-tag selection by latest end date
+Companies migrate XBRL concept tags over years (e.g. NVDA moving to `Revenues`, AMZN moving to
+`PaymentsToAcquireProductiveAssets`). `data/xbrl.py` prioritizes candidate tags whose facts cover
+the latest period `end` date, preventing lock-in to stale historical facts.
+
+### Universal balance sheet liabilities fallback
+For companies that omit a single `Liabilities` tag or stop reporting `LiabilitiesNoncurrent`
+(e.g., ORCL, AMZN), `data/xbrl.py` derives liabilities using the fundamental identity:
+`Liabilities = Total Assets - Stockholders' Equity`, blended with reported liabilities.
+
+### Global universe combobox search (PRD §4.10)
+`CompanySearchService` maintains an in-memory index of SEC public companies, loaded once from
+EDGAR's ticker file and enriched with market caps. A multi-tiered ranking algorithm (exact ticker,
+prefix ticker, prefix company name, word prefix, substring) powers instant suggestions via
+`GET /api/search` with Alpine.js keyboard navigation (`Cmd+K`, `↑`/`↓`/`Enter`/`Esc`).
+
+### Watchlist & Pinned Dashboard (PRD §4.2 / §4.6)
+Tracked companies are persisted in `watchlist_items` with CIK as the canonical foreign key.
+`WatchlistService` aggregates latest quarterly fundamentals (revenue, net income, EPS, FCF) and YoY
+trajectories. The home page renders a responsive card grid with 1-click pin/unpin toggling via HTMX,
+and company overview/detail headers provide instant pin toggles.
 
 ---
 

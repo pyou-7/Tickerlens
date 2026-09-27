@@ -26,3 +26,7 @@ class Company(Base):
     financials: Mapped[list["QuarterlyFinancial"]] = relationship(  # noqa: F821
         back_populates="company", cascade="all, delete-orphan"
     )
+    watchlist_item: Mapped["WatchlistItem | None"] = relationship(  # noqa: F821
+        "WatchlistItem", back_populates="company", uselist=False, cascade="all, delete-orphan"
+    )
+

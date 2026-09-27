@@ -10,15 +10,22 @@ from fastapi.templating import Jinja2Templates
 
 from tickerlens.data.yahoo import PriceHistory, PriceRange
 from tickerlens.services.financials import CompanyNotFoundError, FinancialsService, DetailContext
+from tickerlens.services.watchlist import WatchlistService
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
 _svc = FinancialsService()
+_watchlist_svc = WatchlistService()
 
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+    pinned_companies = _watchlist_svc.get_watchlist(pinned_only=True)
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"pinned_companies": pinned_companies},
+    )
 
 
 @router.get("/company/{ticker}", response_class=HTMLResponse)
@@ -35,11 +42,14 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             overview = _svc.get_overview(ticker)
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}: {exc}") from exc
+
+    is_pinned = _watchlist_svc.is_pinned(ticker)
     return templates.TemplateResponse(
         request=request,
         name="company/overview.html",
-        context={"overview": overview},
+        context={"overview": overview, "is_pinned": is_pinned},
     )
+
 
 
 @router.get("/company/{ticker}/detail", response_class=HTMLResponse)
@@ -65,11 +75,13 @@ def company_detail(
             )
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+    is_pinned = _watchlist_svc.is_pinned(ticker)
     return templates.TemplateResponse(
         request=request,
         name="company/detail.html",
-        context={"ctx": ctx, "exported_on": dt.date.today()},
+        context={"ctx": ctx, "exported_on": dt.date.today(), "is_pinned": is_pinned},
     )
+
 
 
 @router.get("/company/{ticker}/detail/data", response_class=HTMLResponse)

@@ -108,3 +108,53 @@ Format:
 **What:** Added a validated `GET /company/{ticker}/price-history` JSON endpoint and a separate Plotly stock chart supporting Today, 5D, 1M, 6M, YTD, 1Y, 3Y, 5Y, 10Y, and Max. The Yahoo adapter returns adjusted-close data in a Pydantic model; range requests load only after the detail page renders.
 **Why:** Stock performance is a different time series from quarterly fundamentals and needs independent ranges. Lazy loading prevents Yahoo latency or failure from blocking the EDGAR-backed company page, while adjusted prices preserve continuity across splits and distributions.
 **Alternatives considered:** Persisting daily prices immediately (deferred until ingestion/storage requirements are clearer); loading every range up front (rejected: unnecessary data and latency); combining price with financial metrics (rejected: mismatched frequencies and scales recreate the chart-congestion problem).
+
+---
+
+## 2026-09-26 — Concept-tag selection prioritized by latest end date
+
+**What:** Updated `concept_facts` in `data/xbrl.py` to prioritize candidate concept tags whose facts cover the latest period `end` date rather than the first tag in the fallback list with any facts.
+**Why:** Companies migrate XBRL tags over historical periods (e.g. NVDA transitioned from `RevenueFromContractWithCustomerExcludingAssessedTax` to `Revenues` in 2026; AMZN/NVDA transitioned capex from `PaymentsToAcquirePropertyPlantAndEquipment` to `PaymentsToAcquireProductiveAssets`). Taking the first matching tag with any facts locked into stale historical data and omitted recent quarters.
+**Alternatives considered:** Merging facts across all tags in the fallback list (rejected: creates overlap conflicts and double-counting when tags coexist in the same filing).
+
+---
+
+## 2026-09-26 — Universal balance-sheet liabilities fallback via accounting identity
+
+**What:** In `data/xbrl.py`, derive total liabilities as Assets − Stockholders' Equity across all periods and blend with reported liabilities (`Liabilities` or `LiabilitiesCurrent + LiabilitiesNoncurrent`).
+**Why:** Major filers like ORCL and AMZN do not report a single `Liabilities` tag. AMZN also stopped reporting `LiabilitiesNoncurrent` in 2012, causing balance sheet lookups to fail with "Not available for this period". The universal identity holds strictly under US GAAP and guarantees 100% balance sheet coverage.
+**Alternatives considered:** Manually enumerating all noncurrent liability line items (rejected: fragile and differs across industries).
+
+---
+
+## 2026-09-26 — Addition of Operating Cash Flow, Capex, and Free Cash Flow
+
+**What:** Added `operating_cash_flow` and `capex` columns (Float, nullable) to `QuarterlyFinancial` via migration `e89a1b2c3d4e`, extracted them in `data/xbrl.py` with YTD un-cumulation, and displayed OCF, Capex, and FCF in the Cash Flow tab and trend selector.
+**Why:** Cash flow analysis requires understanding operating cash generation and reinvestment capital intensity; FCF was already computed, but users could not see its constituent OCF and Capex components or their YoY/QoQ trajectories.
+**Alternatives considered:** Displaying only Free Cash Flow (rejected: users explicitly need the full Cash Flow statement breakdown).
+
+---
+
+## 2026-09-26 — Guidance and Executive Commentary extraction from 8-K exhibits
+
+**What:** Added `guidance` and `executive_commentary` columns (Text, nullable) to `QuarterlyFinancial` via migration `e89a1b2c3d4e`, built extractors in `data/filings.py`, and broadened 8-K exhibit pattern matching in `services/ir_download.py`.
+**Why:** Company earnings releases (8-K Ex-99) contain critical business outlook/guidance and executive remarks that quarterly 10-Q/10-K filings do not surface in tabular XBRL.
+**Alternatives considered:** Relying on third-party transcript APIs (rejected: violates free-data strategy; EDGAR exhibits already provide primary source text freely).
+
+---
+
+## 2026-09-26 — PRD §4.10 all-company search and global combobox
+
+**What:** Added `services/search.py` and `routes/search.py` providing an SEC universe index with multi-tier ranking (exact ticker, prefix ticker, prefix company name, word prefix, substring), market-cap tie breaking, and Alpine.js combobox in hero and persistent navbar with `Cmd+K`.
+**Why:** Users needed quick navigation across the entire public company universe without typing exact CIKs or leaving the keyboard.
+**Alternatives considered:** Server-rendered full search results page on form submit (rejected: combobox with instant suggestions offers a faster, modern workflow per PRD §4.10).
+
+---
+
+## 2026-09-26 — Watchlist & Pinned Companies Dashboard (PRD §4.2 / §4.6)
+
+**What:** Added `WatchlistItem` model and migration `cf9ad233f7f8`, `WatchlistService`, `routes/watchlist.py`, and interactive Alpine/HTMX components (`partials/watchlist_button.html` and `partials/pinned_dashboard.html`) to display tracked companies with latest reported fundamentals and YoY badges on the home page.
+**Why:** Transformed Tickerlens from a single-ticker lookup utility into an investor research dashboard. Users can pin/unpin companies with one click from headers or dashboard cards, immediately monitoring revenue growth, EPS, and cash flow across their active watchlist.
+**Alternatives considered:** Storing watchlist in browser localStorage (rejected: server-side SQLite persistence preserves canonical CIK joins and allows background updates across devices).
+
+

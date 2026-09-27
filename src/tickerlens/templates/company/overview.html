@@ -63,13 +63,19 @@
     </div>
   </div>
 
-  <form method="post" action="/company/{{ overview.ticker }}/refresh">
-    <button type="submit"
-            class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
-      ↻ Refresh
-    </button>
-  </form>
+  <div class="flex items-center gap-2.5">
+    {% with ticker=overview.ticker, is_pinned=is_pinned %}
+      {% include "partials/watchlist_button.html" %}
+    {% endwith %}
+    <form method="post" action="/company/{{ overview.ticker }}/refresh">
+      <button type="submit"
+              class="rounded-lg border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 transition cursor-pointer">
+        ↻ Refresh
+      </button>
+    </form>
+  </div>
 </div>
+
 
 <!-- Description -->
 {% if overview.description %}

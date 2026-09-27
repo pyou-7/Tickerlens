@@ -56,7 +56,14 @@
       {% endif %}
     </div>
   </div>
+
+  <div class="flex items-center gap-2.5">
+    {% with ticker=ctx.ticker, is_pinned=is_pinned %}
+      {% include "partials/watchlist_button.html" %}
+    {% endwith %}
+  </div>
 </div>
+
 
 <!-- Stock price history — loaded independently from Yahoo so quarterly
      financial navigation never blocks on market-data requests. -->

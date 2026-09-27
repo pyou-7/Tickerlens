@@ -45,17 +45,22 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - Broadened 8-K exhibit pattern matching in `ir_download.py` to support all filing conventions (`exhibit991`, `q2fy27pr`, `ex99_1`).
     - Added local caching and resilient fallback in `yahoo.py` and `wikipedia.py`.
     - Automated ingestion and validation across 10 US public companies: `AAPL`, `MSFT`, `ORCL`, `NVDA`, `TSLA`, `AMZN`, `GOOGL`, `INTC`, `MRVL`, `META` — 100% passed.
-  - 73 tests currently passing in test suite.
+  - **Watchlist & Pinned Companies Dashboard (PRD §4.2 / §4.6):**
+    - Created `WatchlistItem` model and migration `cf9ad233f7f8` with CIK foreign key.
+    - Implemented `WatchlistService` (`services/watchlist.py`) and routes (`routes/watchlist.py`) for pin, toggle, delete, and dashboard queries.
+    - Added interactive `partials/watchlist_button.html` to company overview and detail headers.
+    - Built responsive home screen dashboard `partials/pinned_dashboard.html` with card grid showing live stock prices, latest quarters, Revenue, Net Income, EPS, and FCF with YoY badges, and 1-click quick-pin empty state.
+    - Validated with automated E2E navigation test script (`scripts/validate_watchlist_dashboard.py`).
+  - 81 tests currently passing in test suite.
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Add the single-user watchlist and pinned-company home state.
-2. Add Time Slicer Range and Compare modes.
-3. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
-4. Build batch ingestion/refresh tooling for universe watchlist coverage.
-5. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+1. Add Time Slicer Range and Compare modes (PRD §4.3 & §4.4).
+2. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
+3. Build batch ingestion/refresh tooling for universe watchlist coverage.
+4. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
 
@@ -76,6 +81,13 @@ Do NOT build AI analysis, calendar/alerts, or the news feed — those remain Pha
 
 | Date | Decision |
 |---|---|
+| 2026-09-26 | Implemented Watchlist & Pinned Companies Dashboard (PRD §4.2 / §4.6) with SQLite persistence, header pin buttons, and home KPI card grid |
+| 2026-09-26 | Implemented PRD §4.10 all-company universe indexing, multi-tier ranking, and Alpine.js combobox with `Cmd+K` global keyboard shortcut |
+
+| 2026-09-26 | Added Management Guidance and Executive Commentary extraction from 8-K exhibits; broadened exhibit matching across varied filing conventions |
+| 2026-09-26 | Added Operating Cash Flow and Capex to models, financial services, Cash Flow statement tab, and trend chart |
+| 2026-09-26 | Implemented universal balance sheet total liabilities fallback (`Assets - StockholdersEquity`) blended with reported liabilities |
+| 2026-09-26 | Updated `concept_facts` tag selection to prioritize candidate concept tags by latest period `end` date, solving XBRL tag migration over time |
 | 2026-07-27 | Added a separate adjusted stock-price chart backed by a validated lazy-loaded Yahoo history endpoint; financial and market trends remain independent |
 | 2026-07-27 | Replaced the Revenue/EPS dual-axis chart with a one-metric-at-a-time selector; use period-end dates for chronological chart positioning |
 | 2026-07-27 | Closed Phase 2 after integrating press-release highlights and adding a per-period browser print/PDF action; advanced the project to Phase 3 |
