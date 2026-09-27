@@ -1,9 +1,22 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-gray-950">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}Tickerlens{% endblock %}</title>
+
+  <!-- Prevent Theme Flash (FOUC) -->
+  <script>
+    (function() {
+      var theme = localStorage.getItem('tickerlens_theme') || 'system';
+      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (theme === 'dark' || (theme === 'system' && prefersDark)) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    })();
+  </script>
   
   <!-- Modern Fintech Typography: Inter + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -54,30 +67,94 @@
     }
   </script>
 </head>
-<body class="h-full text-gray-100 font-sans antialiased bg-gray-950 selection:bg-indigo-500/30 selection:text-indigo-200">
+<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-gray-950 selection:bg-indigo-500/20 dark:selection:bg-indigo-500/30 selection:text-indigo-900 dark:selection:text-indigo-200 transition-colors duration-150">
   <!-- Top HTMX Progress Bar -->
   <div id="htmx-progress"></div>
 
   <!-- Global Nav -->
-  <nav class="border-b border-gray-800/80 bg-gray-950/95 backdrop-blur-md sticky top-0 z-40 transition-colors">
+  <nav class="border-b border-slate-200/80 dark:border-gray-800/80 bg-white/80 dark:bg-gray-950/80 backdrop-blur-xl sticky top-0 z-40 transition-colors duration-150">
     <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
       <div class="flex items-center gap-6">
-        <a href="/" class="flex items-center gap-2 text-indigo-400 font-extrabold tracking-tight text-lg hover:text-indigo-300 transition shrink-0">
-          <span class="w-6 h-6 rounded-md bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 flex items-center justify-center text-xs font-mono font-bold">TL</span>
+        <a href="/" class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-extrabold tracking-tight text-lg hover:text-indigo-500 dark:hover:text-indigo-300 transition shrink-0">
+          <span class="w-6 h-6 rounded-md bg-indigo-600/10 dark:bg-indigo-600/30 border border-indigo-500/30 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-xs font-mono font-bold">TL</span>
           <span>Tickerlens</span>
         </a>
-        <a href="/compare" class="text-xs font-medium text-gray-400 hover:text-indigo-300 transition flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-gray-900 border border-transparent hover:border-gray-800">
-          <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <a href="/compare" class="text-xs font-medium text-slate-600 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-indigo-300 transition flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-900 border border-transparent hover:border-slate-200 dark:hover:border-gray-800">
+          <svg class="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
           </svg>
           <span>Compare</span>
         </a>
       </div>
 
-      <div class="{% block nav_search_class %}{% endblock %}">
-        {% with mode="nav", input_id="nav-search-input" %}
-          {% include "partials/search_combobox.html" %}
-        {% endwith %}
+      <div class="flex items-center gap-3">
+        <!-- Search Combobox Container -->
+        <div class="{% block nav_search_class %}{% endblock %}">
+          {% with mode="nav", input_id="nav-search-input" %}
+            {% include "partials/search_combobox.html" %}
+          {% endwith %}
+        </div>
+
+        <!-- Theme Switcher: Light / Dark / System -->
+        <div x-data="{
+          theme: localStorage.getItem('tickerlens_theme') || 'system',
+          setTheme(t) {
+            this.theme = t;
+            localStorage.setItem('tickerlens_theme', t);
+            const isDark = (t === 'dark') || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+              document.documentElement.classList.add('dark');
+            } else {
+              document.documentElement.classList.remove('dark');
+            }
+            window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: t, isDark: isDark } }));
+          },
+          init() {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+              if (this.theme === 'system') {
+                if (e.matches) {
+                  document.documentElement.classList.add('dark');
+                } else {
+                  document.documentElement.classList.remove('dark');
+                }
+                window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: 'system', isDark: e.matches } }));
+              }
+            });
+          }
+        }" class="flex items-center bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 rounded-lg p-0.5 text-xs shadow-inner">
+          <!-- Light Mode Button -->
+          <button type="button"
+                  @click="setTheme('light')"
+                  :class="theme === 'light' ? 'bg-white dark:bg-gray-800 text-amber-500 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-md transition cursor-pointer"
+                  title="Light mode">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          </button>
+
+          <!-- Dark Mode Button -->
+          <button type="button"
+                  @click="setTheme('dark')"
+                  :class="theme === 'dark' ? 'bg-white dark:bg-gray-800 text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-md transition cursor-pointer"
+                  title="Dark mode">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          </button>
+
+          <!-- System Default Button -->
+          <button type="button"
+                  @click="setTheme('system')"
+                  :class="theme === 'system' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-md transition cursor-pointer"
+                  title="System default">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   </nav>

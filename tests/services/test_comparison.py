@@ -76,3 +76,32 @@ def test_comparison_service_chart_payload():
     assert "date" in first_q
     assert "label" in first_q
     assert "revenue" in first_q
+
+
+def test_comparison_service_invalid_metric_fallback():
+    svc = ComparisonService()
+    ctx = svc.get_comparison(tickers=["AAPL", "MSFT"], metric="nonexistent_metric_xyz")
+    assert ctx.metric == "revenue_yoy"
+    payload = json.loads(ctx.chart_payload_json)
+    assert payload["activeMetric"] == "revenue_yoy"
+
+
+def test_comparison_service_unknown_ticker():
+    svc = ComparisonService()
+    ctx = svc.get_comparison(tickers=["NONEXISTENT_XYZ", "AAPL"])
+    # Should gracefully skip nonexistent company and keep AAPL
+    assert len(ctx.peers) == 1
+    assert ctx.peers[0].ticker == "AAPL"
+
+
+def test_comparison_service_quarter_window_and_yoy():
+    svc = ComparisonService()
+    ctx = svc.get_comparison(tickers=["NVDA"])
+    assert len(ctx.peers) == 1
+    nvda = ctx.peers[0]
+    # Should cap at 8 displayed quarters
+    assert len(nvda.quarters) <= 8
+    # Recent quarters should have valid revenue_yoy computed from backfill
+    latest_q = nvda.quarters[-1]
+    assert latest_q.revenue_yoy is not None
+

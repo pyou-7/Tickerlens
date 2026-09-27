@@ -1,48 +1,85 @@
-<div id="compare-chart-container" class="rounded-2xl border border-gray-800 bg-gray-900/60 p-6 backdrop-blur-sm shadow-xl">
-  <!-- Chart Metric Selector Bar -->
-  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-5 border-b border-gray-800/80">
+{# partials/compare_chart.html #}
+<div id="compare-chart-container"
+     x-data="compareChart()"
+     class="rounded-2xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900/60 p-5 sm:p-6 backdrop-blur-xl shadow-sm dark:shadow-xl transition-colors">
+  
+  <!-- Chart Top Header & Metric Controls -->
+  <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-gray-800/80">
     <div>
-      <h3 class="text-base font-semibold text-white flex items-center gap-2">
-        <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
-        </svg>
-        Multi-Company Trend Overlay
-      </h3>
-      <p class="text-xs text-gray-400 mt-0.5">Apples-to-apples chronological trend across reporting quarters</p>
+      <div class="flex items-center gap-2">
+        <div class="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/50 text-indigo-600 dark:text-indigo-400">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+          </svg>
+        </div>
+        <h3 class="text-base font-bold text-slate-900 dark:text-white">
+          Multi-Company Trend Overlay
+        </h3>
+      </div>
+      <p class="text-xs text-slate-500 dark:text-gray-400 mt-1">
+        Benchmarking continuous fundamentals across the last 8 reporting quarters
+      </p>
     </div>
 
-    <!-- Metric Tabs -->
-    <div class="flex items-center gap-1.5 flex-wrap">
-      {% set metrics = [
-        ('revenue_yoy', 'Revenue YoY %'),
-        ('net_margin', 'Net Margin %'),
-        ('fcf_margin', 'FCF Margin %'),
-        ('revenue', 'Revenue ($)'),
-        ('free_cash_flow', 'FCF ($)'),
-        ('net_income', 'Net Income ($)'),
-        ('eps_diluted', 'Diluted EPS')
-      ] %}
-      {% for m_key, m_label in metrics %}
+    <!-- Controls: Metric Selector & Alignment Mode -->
+    <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+      <!-- Alignment Mode Toggle: By Date vs Aligned Quarters -->
+      <div class="flex items-center bg-slate-100 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 rounded-lg p-0.5 text-xs">
         <button type="button"
-                hx-get="/compare/chart?tickers={{ ctx.tickers_str }}&metric={{ m_key }}"
-                hx-target="#compare-chart-container"
-                hx-swap="outerHTML"
-                class="px-2.5 py-1 text-xs font-medium rounded-lg transition-all cursor-pointer {% if ctx.metric == m_key %}bg-indigo-600 text-white shadow-md shadow-indigo-900/30{% else %}bg-gray-800/80 text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 border border-gray-700/50{% endif %}">
-          {{ m_label }}
+                @click="setAlignment('quarters')"
+                :class="alignment === 'quarters' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+                class="px-2.5 py-1 rounded-md transition cursor-pointer flex items-center gap-1"
+                title="Align by fiscal reporting quarter">
+          <span>📊 Aligned Quarters</span>
         </button>
-      {% endfor %}
+        <button type="button"
+                @click="setAlignment('dates')"
+                :class="alignment === 'dates' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+                class="px-2.5 py-1 rounded-md transition cursor-pointer flex items-center gap-1"
+                title="Continuous calendar date timeline">
+          <span>📅 Calendar Dates</span>
+        </button>
+      </div>
+
+      <!-- Metric Pills -->
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <template x-for="m in metricOptions" :key="m.key">
+          <button type="button"
+                  @click="setMetric(m.key)"
+                  :class="activeMetric === m.key
+                    ? 'bg-indigo-600 text-white font-medium shadow-sm shadow-indigo-600/30'
+                    : 'bg-slate-100 dark:bg-gray-800/80 text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700/80 border border-slate-200 dark:border-gray-700/50'"
+                  class="px-2.5 py-1 text-xs rounded-lg transition-all cursor-pointer font-sans"
+                  x-text="m.label">
+          </button>
+        </template>
+      </div>
     </div>
   </div>
 
-  <!-- Legend row with Peer Badges -->
-  <div class="flex items-center gap-4 pt-4 pb-2 flex-wrap">
-    {% for peer in ctx.peers %}
-      <div class="flex items-center gap-2 text-xs font-medium px-2.5 py-1 rounded-md bg-gray-950 border border-gray-800">
-        <span class="w-2.5 h-2.5 rounded-full inline-block" style="background-color: {{ peer.color }};"></span>
-        <span class="font-mono font-bold text-white">{{ peer.ticker }}</span>
-        <span class="text-gray-400 truncate max-w-[130px] hidden sm:inline">{{ peer.name }}</span>
-      </div>
-    {% endfor %}
+  <!-- Legend row with Interactive Peer Visibility Toggle -->
+  <div class="flex items-center justify-between gap-4 pt-4 pb-2 flex-wrap">
+    <div class="flex items-center gap-2 flex-wrap">
+      <span class="text-xs text-slate-400 dark:text-gray-500 mr-1">Click peer to show/hide:</span>
+      <template x-for="peer in payload.peers" :key="peer.ticker">
+        <button type="button"
+                @click="togglePeer(peer.ticker)"
+                :class="hiddenPeers.includes(peer.ticker)
+                  ? 'opacity-40 line-through bg-slate-100 dark:bg-gray-950 border-dashed border-slate-300 dark:border-gray-800'
+                  : 'bg-slate-50 dark:bg-gray-950 border-slate-200 dark:border-gray-800 shadow-sm'"
+                class="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-xl border transition cursor-pointer">
+          <span class="w-2.5 h-2.5 rounded-full inline-block shrink-0 shadow-sm"
+                :style="'background-color: ' + peer.color"></span>
+          <span class="font-mono font-bold text-slate-900 dark:text-white" x-text="peer.ticker"></span>
+          <span class="text-slate-500 dark:text-gray-400 text-[11px] truncate max-w-[120px] hidden sm:inline" x-text="peer.name"></span>
+        </button>
+      </template>
+    </div>
+
+    <!-- Active Metric Label Display -->
+    <div class="text-xs font-mono text-indigo-600 dark:text-indigo-400 font-medium">
+      <span x-text="getMetricTitle(activeMetric)"></span>
+    </div>
   </div>
 
   <!-- Plotly Chart Div -->
@@ -56,135 +93,254 @@
   </script>
 
   <script>
-    (function() {
-      function renderCompareChart() {
-        var el = document.getElementById('compare-payload-json');
-        if (!el || !window.Plotly) return;
-        var data = JSON.parse(el.textContent);
-        var metric = data.activeMetric;
+    function compareChart() {
+      return {
+        activeMetric: '{{ ctx.metric or "revenue_yoy" }}',
+        alignment: 'quarters', // 'quarters' | 'dates'
+        hiddenPeers: [],
+        payload: { peers: [] },
+        metricOptions: [
+          { key: 'revenue_yoy', label: 'Revenue YoY %' },
+          { key: 'net_margin', label: 'Net Margin %' },
+          { key: 'fcf_margin', label: 'FCF Margin %' },
+          { key: 'revenue', label: 'Revenue ($)' },
+          { key: 'free_cash_flow', label: 'FCF ($)' },
+          { key: 'net_income', label: 'Net Income ($)' },
+          { key: 'eps_diluted', label: 'Diluted EPS' }
+        ],
 
-        // Metric configurations
-        var isPercent = (metric === 'revenue_yoy' || metric === 'net_margin' || metric === 'fcf_margin');
-        var isEps = (metric === 'eps_diluted');
-
-        // Metric Titles & Scale
-        var metricTitles = {
-          'revenue_yoy': 'Revenue YoY Growth (%)',
-          'net_margin': 'Net Profit Margin (%)',
-          'fcf_margin': 'Free Cash Flow Margin (%)',
-          'revenue': 'Revenue',
-          'free_cash_flow': 'Free Cash Flow',
-          'net_income': 'Net Income',
-          'eps_diluted': 'Diluted EPS ($)'
-        };
-
-        var titleText = metricTitles[metric] || metric;
-
-        // Auto-scale divisor for dollar amounts
-        var divisor = 1;
-        var unitSuffix = '';
-        if (!isPercent && !isEps) {
-          // Inspect max absolute value across all peers
-          var maxVal = 0;
-          data.peers.forEach(function(p) {
-            p.quarters.forEach(function(q) {
-              var val = q[metric];
-              if (val !== null && typeof val === 'number') {
-                var absVal = Math.abs(val);
-                if (absVal > maxVal) maxVal = absVal;
+        init() {
+          var el = document.getElementById('compare-payload-json');
+          if (el) {
+            try {
+              this.payload = JSON.parse(el.textContent);
+              if (this.payload.activeMetric) {
+                this.activeMetric = this.payload.activeMetric;
               }
+            } catch (e) {
+              console.error('Failed to parse chart payload JSON', e);
+            }
+          }
+
+          // Initial render when Plotly is ready
+          var self = this;
+          var checkPlotly = function() {
+            if (window.Plotly) {
+              self.renderChart();
+            } else {
+              setTimeout(checkPlotly, 50);
+            }
+          };
+          checkPlotly();
+
+          // Listen to global theme change
+          window.addEventListener('theme-changed', function() {
+            self.renderChart();
+          });
+
+          // Resize handler
+          window.addEventListener('resize', function() {
+            var chartEl = document.getElementById('compare-plotly-chart');
+            if (chartEl && window.Plotly) {
+              window.Plotly.Plots.resize(chartEl);
+            }
+          });
+        },
+
+        setMetric(metricKey) {
+          this.activeMetric = metricKey;
+          // Update URL without full reload
+          var url = new URL(window.location.href);
+          url.searchParams.set('metric', metricKey);
+          window.history.replaceState({}, '', url.toString());
+          this.renderChart();
+        },
+
+        setAlignment(mode) {
+          this.alignment = mode;
+          this.renderChart();
+        },
+
+        togglePeer(ticker) {
+          var idx = this.hiddenPeers.indexOf(ticker);
+          if (idx >= 0) {
+            this.hiddenPeers.splice(idx, 1);
+          } else {
+            this.hiddenPeers.push(ticker);
+          }
+          this.renderChart();
+        },
+
+        getMetricTitle(metric) {
+          var titles = {
+            'revenue_yoy': 'Revenue YoY Growth (%)',
+            'net_margin': 'Net Profit Margin (%)',
+            'fcf_margin': 'Free Cash Flow Margin (%)',
+            'revenue': 'Quarterly Revenue',
+            'free_cash_flow': 'Quarterly Free Cash Flow',
+            'net_income': 'Quarterly Net Income',
+            'eps_diluted': 'Diluted EPS ($)'
+          };
+          return titles[metric] || metric;
+        },
+
+        renderChart() {
+          var chartEl = document.getElementById('compare-plotly-chart');
+          if (!chartEl || !window.Plotly || !this.payload.peers) return;
+
+          var metric = this.activeMetric;
+          var isPercent = (metric === 'revenue_yoy' || metric === 'net_margin' || metric === 'fcf_margin');
+          var isEps = (metric === 'eps_diluted');
+          var titleText = this.getMetricTitle(metric);
+          var isDark = document.documentElement.classList.contains('dark');
+
+          // Auto-scale divisor for large dollar metrics
+          var divisor = 1;
+          var unitSuffix = '';
+          if (!isPercent && !isEps) {
+            var maxVal = 0;
+            this.payload.peers.forEach(function(p) {
+              p.quarters.forEach(function(q) {
+                var v = q[metric];
+                if (v !== null && typeof v === 'number') {
+                  var absV = Math.abs(v);
+                  if (absV > maxVal) maxVal = absV;
+                }
+              });
+            });
+
+            if (maxVal >= 1e9) {
+              divisor = 1e9;
+              unitSuffix = 'B';
+            } else if (maxVal >= 1e6) {
+              divisor = 1e6;
+              unitSuffix = 'M';
+            }
+          }
+
+          var alignByQuarters = (this.alignment === 'quarters');
+          var self = this;
+
+          // Determine standardized quarter indices for alignment mode
+          // (Q-7 to Q-0, or labels like Q3 FY24 -> Q2 FY26)
+          var quarterCategories = [];
+          if (alignByQuarters) {
+            // Pick the longest or first peer's labels
+            if (this.payload.peers.length > 0) {
+              quarterCategories = this.payload.peers[0].quarters.map(function(q, i) {
+                return q.label || ('Q' + (i + 1));
+              });
+            }
+          }
+
+          var traces = [];
+          this.payload.peers.forEach(function(peer) {
+            // Check if hidden by user
+            if (self.hiddenPeers.indexOf(peer.ticker) >= 0) return;
+
+            var xVals = [];
+            var yVals = [];
+            var hoverTexts = [];
+
+            peer.quarters.forEach(function(q, idx) {
+              if (alignByQuarters) {
+                // Use quarter label (or fallback to index)
+                xVals.push(quarterCategories[idx] || q.label);
+              } else {
+                xVals.push(q.date);
+              }
+
+              var rawVal = q[metric];
+              if (rawVal === null || rawVal === undefined) {
+                yVals.push(null);
+              } else if (isPercent || isEps) {
+                yVals.push(rawVal);
+              } else {
+                yVals.push(rawVal / divisor);
+              }
+
+              hoverTexts.push(q.label + ' (' + q.date + ')');
+            });
+
+            var hoverFormat = '%{y:,.2f}' + (isPercent ? '%' : (isEps ? '' : unitSuffix));
+            var prefix = (isPercent ? '' : '$');
+
+            traces.push({
+              x: xVals,
+              y: yVals,
+              name: peer.ticker,
+              text: hoverTexts,
+              type: 'scatter',
+              mode: 'lines+markers',
+              line: { color: peer.color, width: 3 },
+              marker: {
+                color: peer.color,
+                size: 7,
+                line: { color: isDark ? '#030712' : '#ffffff', width: 1.5 }
+              },
+              connectgaps: true,
+              hovertemplate: '<b>' + peer.ticker + '</b><br>' +
+                             '%{text}<br>' +
+                             titleText + ': <b>' + prefix + hoverFormat + '</b><extra></extra>'
             });
           });
 
-          if (maxVal >= 1e9) {
-            divisor = 1e9;
-            unitSuffix = 'B';
-          } else if (maxVal >= 1e6) {
-            divisor = 1e6;
-            unitSuffix = 'M';
-          }
-        }
+          // Theme styling
+          var gridCol = isDark ? 'rgba(75, 85, 99, 0.25)' : 'rgba(203, 213, 225, 0.7)';
+          var zeroCol = isDark ? 'rgba(156, 163, 175, 0.4)' : 'rgba(148, 163, 184, 0.6)';
+          var textCol = isDark ? '#9ca3af' : '#64748b';
+          var titleCol = isDark ? '#f3f4f6' : '#1e293b';
 
-        var traces = data.peers.map(function(peer) {
-          var dates = [];
-          var values = [];
-          var labels = [];
-
-          peer.quarters.forEach(function(q) {
-            dates.push(q.date);
-            labels.push(q.label);
-            var val = q[metric];
-            if (val === null || val === undefined) {
-              values.push(null);
-            } else if (isPercent || isEps) {
-              values.push(val);
-            } else {
-              values.push(val / divisor);
-            }
-          });
-
-          var hoverFormat = '%{y:,.2f}' + (isPercent ? '%' : (isEps ? '' : unitSuffix));
-          var prefix = (isPercent ? '' : '$');
-
-          return {
-            x: dates,
-            y: values,
-            name: peer.ticker,
-            text: labels,
-            type: 'scatter',
-            mode: 'lines+markers',
-            line: { color: peer.color, width: 2.5 },
-            marker: { color: peer.color, size: 6, line: { color: '#030712', width: 1 } },
-            connectgaps: false,
-            hovertemplate: '<b>' + peer.ticker + '</b> (%{text})<br>' +
-                           titleText + ': ' + prefix + hoverFormat + '<extra></extra>'
-          };
-        });
-
-        var darkBg = '#030712';
-        var gridCol = 'rgba(75, 85, 99, 0.2)';
-        var textCol = '#9ca3af';
-
-        var yAxisConfig = {
-          title: { text: titleText + (unitSuffix ? ' (USD ' + unitSuffix + ')' : ''), font: { color: '#e5e7eb', size: 11 } },
-          gridcolor: gridCol,
-          linecolor: gridCol,
-          zeroline: true,
-          zerolinecolor: 'rgba(156, 163, 175, 0.4)',
-          tickfont: { size: 10, color: textCol },
-        };
-
-        if (isPercent) {
-          yAxisConfig.ticksuffix = '%';
-        } else {
-          yAxisConfig.tickprefix = '$';
-          if (unitSuffix) yAxisConfig.ticksuffix = unitSuffix;
-        }
-
-        var layout = {
-          paper_bgcolor: 'transparent',
-          plot_bgcolor: 'transparent',
-          margin: { t: 20, r: 20, b: 40, l: 65 },
-          font: { color: textCol, size: 11 },
-          showlegend: false,
-          hovermode: 'x unified',
-          xaxis: {
-            type: 'date',
+          var yAxisConfig = {
+            title: {
+              text: titleText + (unitSuffix ? ' (USD ' + unitSuffix + ')' : ''),
+              font: { color: titleCol, size: 11, family: 'Inter, sans-serif' }
+            },
             gridcolor: gridCol,
             linecolor: gridCol,
-            tickfont: { size: 10, color: textCol },
-          },
-          yaxis: yAxisConfig
-        };
+            zeroline: true,
+            zerolinecolor: zeroCol,
+            tickfont: { size: 10, color: textCol, family: 'JetBrains Mono, monospace' },
+          };
 
-        Plotly.react('compare-plotly-chart', traces, layout, { displayModeBar: false, responsive: true });
-      }
+          if (isPercent) {
+            yAxisConfig.ticksuffix = '%';
+          } else {
+            yAxisConfig.tickprefix = '$';
+            if (unitSuffix) yAxisConfig.ticksuffix = unitSuffix;
+          }
 
-      if (window.Plotly) {
-        renderCompareChart();
-      } else {
-        window.addEventListener('load', renderCompareChart);
-      }
-    })();
+          var xAxisConfig = {
+            gridcolor: gridCol,
+            linecolor: gridCol,
+            tickfont: { size: 10, color: textCol, family: 'JetBrains Mono, monospace' },
+          };
+
+          if (alignByQuarters) {
+            xAxisConfig.type = 'category';
+            xAxisConfig.categoryorder = 'array';
+            xAxisConfig.categoryarray = quarterCategories;
+          } else {
+            xAxisConfig.type = 'date';
+          }
+
+          var layout = {
+            paper_bgcolor: 'transparent',
+            plot_bgcolor: 'transparent',
+            margin: { t: 20, r: 24, b: 45, l: 65 },
+            font: { color: textCol, size: 11, family: 'Inter, sans-serif' },
+            showlegend: false,
+            hovermode: 'x unified',
+            xaxis: xAxisConfig,
+            yaxis: yAxisConfig
+          };
+
+          Plotly.react('compare-plotly-chart', traces, layout, {
+            displayModeBar: false,
+            responsive: true
+          });
+        }
+      };
+    }
   </script>
 </div>

@@ -57,15 +57,18 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - Added an animated top progress bar (`#htmx-progress`) tracking asynchronous HTMX swaps.
     - Added high-density Table View alongside Card Grid View on the Home Dashboard with `localStorage` persistence.
     - Upgraded search combobox with styled `<kbd>⌘K</kbd>` keycap shortcut affordance.
-  - **Time Slicer Compare Mode (PRD §4.2 / §4.4):**
+  - **Time Slicer Compare Mode & AI-Grade Frontend Polish (PRD §4.2 / §4.4):**
     - Created `ComparisonService` (`services/comparison.py`) and routes (`routes/comparison.py`).
-    - Built full-page comparison view (`company/compare.html`) and HTMX chart partial (`partials/compare_chart.html`).
-    - Implemented multi-company Plotly overlay chart supporting Revenue Growth YoY %, Net Margin %, FCF Margin %, Revenue, Net Income, FCF, and Diluted EPS.
-    - Designed 5-category side-by-side financial benchmarking matrix comparing Market & Valuation, YoY Growth, Profitability & Margins, Core Income/Cash Scale, and Balance Sheet & Liquidity with outperformer leader badges.
-    - Added quick-preset groups: Semiconductors (`NVDA, INTC, MRVL`), Big Tech (`AAPL, MSFT, GOOGL, AMZN, META`), Enterprise Cloud (`MSFT, ORCL, AMZN`), AI Ecosystem (`NVDA, MSFT, GOOGL, MRVL`).
-    - Added dynamic peer adder/remover pills supporting up to 5 concurrent peers.
-    - Validated with E2E automation script `scripts/validate_compare_mode.py`.
-  - 89 tests currently passing in test suite.
+    - Built full-page comparison view (`company/compare.html`) and client-side Alpine.js controller with instant sub-5ms metric switching and responsive re-rendering (`partials/compare_chart.html`).
+    - Built comprehensive **Dark Mode, Light Mode, and System Theme Engine** with `localStorage` persistence, inline `<head>` script to eliminate FOUC, theme switcher segmented controls in persistent navbar, and custom event bus (`window.dispatchEvent(new CustomEvent('theme-changed', ...))`).
+    - Added theme-reactive Plotly dynamic palette updating (dark canvas background `#030712`, custom dark axes/gridlines, and high-contrast light mode).
+    - Fixed Compare Mode 5-year timeline gap and data void by purging orphaned historical FY rows from database and expanding ingestion window to 12 quarters so that all 8 displayed quarters have 100% complete YoY calculations.
+    - Added **Timeline Mode Switcher**: toggle between **"📊 Aligned Quarters"** (groups by fiscal quarter index) and **"📅 Calendar Dates"** (continuous calendar date timeline).
+    - Added **Peer Visibility Toggling**: clicking peer pills in chart legend toggles traces on/off in Plotly with visual dimming and striking through.
+    - Added **Search Combobox in "Add Peer"**: allows searching the entire SEC universe and adding peers directly via `/api/search` with keyboard navigation.
+    - Upgraded side-by-side financial benchmarking matrix with sticky left indicator column, backdrop blur, and interactive column hover highlighting (`@mouseenter`/`@mouseleave`).
+    - Validated with E2E automation script `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
+  - 94 tests currently passing in test suite (100% pass rate).
 
 ---
 

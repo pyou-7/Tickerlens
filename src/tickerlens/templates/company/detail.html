@@ -329,28 +329,33 @@
         line: { color: lineColor, width: 2.5 },
         hovertemplate: '%{x|' + hoverFormat + '}<br>Price: %{y:$,.2f}<extra></extra>',
       };
+      var isDark = document.documentElement.classList.contains('dark');
+      var darkBg = isDark ? '#111827' : '#ffffff';
+      var gridCol = isDark ? '#1f2937' : '#e2e8f0';
+      var textCol = isDark ? '#9ca3af' : '#64748b';
+
       var layout = {
-        paper_bgcolor: '#111827',
-        plot_bgcolor: '#111827',
+        paper_bgcolor: darkBg,
+        plot_bgcolor: darkBg,
         margin: { t: 8, r: 24, b: 45, l: 60 },
-        font: { color: '#9ca3af', size: 11 },
+        font: { color: textCol, size: 11 },
         showlegend: false,
         hovermode: 'x unified',
         xaxis: {
           type: 'date',
           tickformat: tickFormat,
           nticks: 8,
-          gridcolor: '#1f2937',
-          linecolor: '#1f2937',
-          tickfont: { size: 10 },
+          gridcolor: gridCol,
+          linecolor: gridCol,
+          tickfont: { size: 10, color: textCol },
         },
         yaxis: {
           title: { text: 'Adjusted Price (' + (data.currency || 'USD') + ')', font: { color: lineColor, size: 11 } },
           tickprefix: '$',
-          gridcolor: '#1f2937',
-          linecolor: '#1f2937',
+          gridcolor: gridCol,
+          linecolor: gridCol,
           zeroline: false,
-          tickfont: { size: 10 },
+          tickfont: { size: 10, color: textCol },
         },
       };
       Plotly.react('price-chart', [trace], layout, { displayModeBar: false, responsive: true });
@@ -429,9 +434,12 @@
       hovertemplate: '%{x|%b %e, %Y}<br>' + meta.label + ': $%{y:,.2f}' + hoverSuffix + '<extra></extra>',
     };
 
-    var darkBg = '#111827';
-    var gridCol = '#1f2937';
-    var textCol = '#9ca3af';
+    var isDark = document.documentElement.classList.contains('dark');
+    var darkBg = isDark ? '#111827' : '#ffffff';
+    var gridCol = isDark ? '#1f2937' : '#e2e8f0';
+    var textCol = isDark ? '#9ca3af' : '#64748b';
+    var zeroCol = isDark ? '#4b5563' : '#cbd5e1';
+
     var layout = {
       paper_bgcolor: darkBg, plot_bgcolor: darkBg,
       margin: { t: 10, r: 24, b: 52, l: 72 },
@@ -451,13 +459,13 @@
         tickangle: -35,
         gridcolor: gridCol,
         linecolor: gridCol,
-        tickfont: { size: 10 },
+        tickfont: { size: 10, color: textCol },
       },
       yaxis: {
         title: { text: meta.label + ' (' + scale.axis + ')', font: { color: meta.color, size: 11 } },
         gridcolor: gridCol, linecolor: gridCol,
-        zeroline: true, zerolinecolor: '#4b5563',
-        tickprefix: '$', ticksuffix: scale.suffix, tickfont: { size: 10 },
+        zeroline: true, zerolinecolor: zeroCol,
+        tickprefix: '$', ticksuffix: scale.suffix, tickfont: { size: 10, color: textCol },
       },
     };
     Plotly.react('trend-chart', [trace], layout, { displayModeBar: false, responsive: true });
@@ -467,6 +475,12 @@
   document.addEventListener('DOMContentLoaded', function() {
     loadStockPrice('1y');
     renderTrendChart();
+  });
+
+  // Re-render charts when theme changes
+  window.addEventListener('theme-changed', function() {
+    renderTrendChart();
+    if (activeRange) loadStockPrice(activeRange);
   });
 
   // After every HTMX swap into #detail-data

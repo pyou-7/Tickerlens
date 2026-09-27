@@ -6,10 +6,10 @@
 {% block content %}
 <div class="flex flex-col items-center justify-start pt-6 pb-16 gap-6 px-4 w-full">
   <div class="text-center space-y-2 max-w-xl">
-    <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight">
+    <h1 class="text-4xl sm:text-5xl font-extrabold text-slate-900 dark:text-white tracking-tight">
       Tickerlens
     </h1>
-    <p class="text-gray-400 text-sm sm:text-base leading-relaxed">
+    <p class="text-slate-600 dark:text-gray-400 text-sm sm:text-base leading-relaxed">
       Instant earnings analysis and historical fundamentals across 10,000+ US public companies.
     </p>
   </div>
@@ -22,11 +22,11 @@
   </div>
 
   <!-- Quick Access Tickers -->
-  <div class="flex items-center gap-2 flex-wrap justify-center text-xs text-gray-500">
+  <div class="flex items-center gap-2 flex-wrap justify-center text-xs text-slate-500 dark:text-gray-500">
     <span>Popular:</span>
     {% for sym in ["AAPL", "MSFT", "NVDA", "ORCL", "TSLA", "INTC"] %}
       <a href="/company/{{ sym }}"
-         class="rounded-lg bg-gray-900 border border-gray-800 hover:border-indigo-500/50 hover:text-indigo-300 px-2.5 py-1 font-mono transition">
+         class="rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-indigo-300 px-2.5 py-1 font-mono shadow-sm transition">
         {{ sym }}
       </a>
     {% endfor %}

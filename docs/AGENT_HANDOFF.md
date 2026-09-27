@@ -36,9 +36,10 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 ### User interface
 
 - Home page: centered hero search combobox with ranked suggestions, debounced input, keyboard navigation, and responsive Pinned Companies Dashboard card grid & dense table view toggle with `localStorage` persistence, showing live stock prices, latest quarters, Revenue/Net Income/EPS/FCF with YoY badges, and 1-click quick-pin empty state.
-- Global navigation: persistent compact search combobox in header on all pages with `Cmd+K` / `Ctrl+K` shortcut, top HTMX progress bar, and persistent Compare Mode link.
+- Global navigation: persistent compact search combobox in header on all pages with `Cmd+K` / `Ctrl+K` shortcut, top HTMX progress bar, persistent Compare Mode link, and Dark/Light/System theme segmented controller.
+- Theme System: Zero-FOUC inline script in `<head>`, persistent `localStorage` theme state, Tailwind `class` dark mode throughout all views, and `theme-changed` custom event bus that triggers Plotly canvas/palette recoloring.
 - Company Overview and Detail headers: Pin/Watchlist toggle button (`partials/watchlist_button.html`) that swaps state via HTMX without full-page reloads.
-- Time Slicer Compare Mode (`company/compare.html` and `partials/compare_chart.html`): side-by-side benchmarking of 2–5 peer companies with dynamic peer chips, presets (Semiconductors, Big Tech, Cloud, AI), multi-trace Plotly chart for 7 normalized metrics (Revenue YoY, Net Margin %, FCF Margin %, Revenue, FCF, Net Income, Diluted EPS), and 5-category financial matrix with leader badges.
+- Time Slicer Compare Mode (`company/compare.html` and `partials/compare_chart.html`): side-by-side benchmarking of 2–5 peer companies with dynamic peer chips, presets (Semiconductors, Big Tech, Cloud, AI), search combobox in "Add Peer", multi-trace Plotly chart for 7 normalized metrics (Revenue YoY, Net Margin %, FCF Margin %, Revenue, FCF, Net Income, Diluted EPS), client-side Alpine controller (`compareChart()`) with sub-5ms metric switching, trace visibility toggles in the legend, "Aligned Quarters" vs "Calendar Dates" alignment switcher, and 5-category financial matrix with sticky headers and column hover highlighting.
 - Overview: company header/description, latest-quarter KPIs with YoY, TTM snapshot, and link to detail.
 - Detail: quarterly/yearly single-period selectors, HTMX swaps, a configurable one-metric Plotly trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs with `tabular-nums` formatting and FCF highlights.
 - A separate stock-price chart lazy-loads adjusted Yahoo history from `GET /company/{ticker}/price-history` and supports Today through Max ranges without blocking initial detail-page rendering.
@@ -49,8 +50,8 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ### Tests and migrations
 
-- 89 tests pass currently (56 at Phase 2 closeout, 4 Yahoo history tests, 7 search service unit tests, 4 search route/template tests, 2 filings tests, 2 watchlist service tests, 6 watchlist route tests, 5 comparison service unit tests, 3 comparison route tests).
-- Focused coverage exists for XBRL edge cases, filing extraction, financial calculations, persistence, balance sheets, QoQ gaps, press-release enrichment, search ranking, watchlist management, and peer comparison.
+- 94 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, and comparison).
+- Comprehensive end-to-end automation scripts: `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
 - Latest migration: `cf9ad233f7f8_create_watchlist_items_table.py`.
 
 

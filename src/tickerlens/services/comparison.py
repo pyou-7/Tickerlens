@@ -237,10 +237,10 @@ class ComparisonService:
         ).scalar_one_or_none()
 
         if company is None:
-            # Attempt to fetch and persist on demand
+            # Attempt to fetch and persist on demand (12 quarters = 3 full years for clean YoY)
             try:
-                self._financials_svc.fetch_and_persist(ticker, periods=8)
-                self._financials_svc.enrich_company(ticker)
+                self._financials_svc.fetch_and_persist(ticker, periods=12, session=db)
+                self._financials_svc.enrich_company(ticker, session=db)
                 company = db.execute(
                     select(Company).where(Company.ticker == ticker)
                 ).scalar_one_or_none()
@@ -269,9 +269,11 @@ class ComparisonService:
         latest_label = f"{latest.fiscal_period} FY{latest.fiscal_year}"
         latest_yoy = _compute_yoy(latest, all_rows)
 
-        # Build chronological quarters series
+        # Standardize peer comparison chart to the recent 8 quarters (2-year window)
+        # while using the entire history (all_rows) to accurately compute YoY
+        recent_rows = all_rows[-8:]
         quarters: list[PeerQuarter] = []
-        for row in all_rows:
+        for row in recent_rows:
             row_yoy = _compute_yoy(row, all_rows)
             net_marg = (
                 (row.net_income / row.revenue * 100)

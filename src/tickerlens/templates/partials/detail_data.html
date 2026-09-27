@@ -18,16 +18,16 @@
 {% macro change_badge(pct) %}
   {%- if pct is not none -%}
     {%- if pct >= 0 -%}
-      <span class="inline-flex items-center gap-0.5 text-green-400 text-xs font-medium">
+      <span class="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
         ▲ +{{ "%.1f"|format(pct) }}%
       </span>
     {%- else -%}
-      <span class="inline-flex items-center gap-0.5 text-red-400 text-xs font-medium">
+      <span class="inline-flex items-center gap-0.5 text-rose-600 dark:text-rose-400 text-xs font-semibold">
         ▼ {{ "%.1f"|format(pct) }}%
       </span>
     {%- endif -%}
   {%- else -%}
-    <span class="text-gray-600 text-xs">—</span>
+    <span class="text-slate-400 dark:text-gray-600 text-xs">—</span>
   {%- endif -%}
 {% endmacro %}
 
@@ -36,13 +36,13 @@
    (yearly view, or a quarter with no adjacent prior), only the YoY badge is
    rendered and the toggle is hidden by the caller. #}
 {% macro kpi_card(label, value, yoy_pct, qoq_pct=none) %}
-<div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
-  <div class="text-xs text-gray-500 mb-1 font-medium">{{ label }}</div>
-  <div class="text-2xl font-bold text-white mb-1 font-mono tabular-nums">{{ value }}</div>
+<div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 px-5 py-4 shadow-sm dark:shadow-none transition-colors">
+  <div class="text-xs text-slate-500 dark:text-gray-400 mb-1 font-semibold">{{ label }}</div>
+  <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1 font-mono tabular-nums">{{ value }}</div>
   <div class="h-4 font-mono tabular-nums">
-    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs font-sans">YoY</span>{% endif %}</span>
+    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-slate-400 dark:text-gray-600 text-xs font-sans">YoY</span>{% endif %}</span>
     {% if qoq_pct is not none %}
-    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-gray-600 text-xs font-sans">QoQ</span></span>
+    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-slate-400 dark:text-gray-600 text-xs font-sans">QoQ</span></span>
     {% endif %}
   </div>
 </div>
@@ -54,20 +54,20 @@
 <div x-data="{ changeMode: 'yoy' }">
   <!-- Period label + change-mode toggle -->
   <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
-    <h2 class="text-xs uppercase tracking-widest text-gray-500">
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 dark:text-gray-400 font-bold">
       {{ ctx.current.label }}
       {% if ctx.current.period_end %}
-        <span class="normal-case text-gray-600 ml-1">(ended {{ ctx.current.period_end }})</span>
+        <span class="normal-case text-slate-400 dark:text-gray-600 ml-1 font-normal">(ended {{ ctx.current.period_end }})</span>
       {% endif %}
     </h2>
     {% if ctx.current.qoq %}
-    <div class="flex rounded-lg overflow-hidden border border-gray-700 text-xs" role="group" aria-label="Change comparison mode">
+    <div class="flex rounded-lg overflow-hidden border border-slate-200 dark:border-gray-700 text-xs shadow-sm" role="group" aria-label="Change comparison mode">
       <button type="button" @click="changeMode = 'yoy'" :aria-pressed="changeMode === 'yoy'"
-              class="px-3 py-1 transition"
-              :class="changeMode === 'yoy' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">YoY</button>
+              class="px-3 py-1 transition cursor-pointer font-medium"
+              :class="changeMode === 'yoy' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'">YoY</button>
       <button type="button" @click="changeMode = 'qoq'" :aria-pressed="changeMode === 'qoq'"
-              class="px-3 py-1 transition"
-              :class="changeMode === 'qoq' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">QoQ</button>
+              class="px-3 py-1 transition cursor-pointer font-medium"
+              :class="changeMode === 'qoq' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'">QoQ</button>
     </div>
     {% endif %}
   </div>
@@ -103,18 +103,18 @@
 
 <!-- Configurable single-metric trend chart. Keeping one active series avoids
      dual-axis ambiguity and works for metrics with very different scales. -->
-<div class="rounded-xl bg-gray-900 border border-gray-800 p-4 mb-8">
+<div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-4 mb-8 shadow-sm dark:shadow-none transition-colors">
   <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h2 class="text-xs uppercase tracking-widest text-gray-500">Financial Trend</h2>
-      <p class="mt-1 text-xs text-gray-600">Quarterly values · one metric at a time</p>
+      <h2 class="text-xs uppercase tracking-widest text-slate-500 dark:text-gray-400 font-bold">Financial Trend</h2>
+      <p class="mt-1 text-xs text-slate-400 dark:text-gray-500">Quarterly values · one metric at a time</p>
     </div>
-    <label class="flex items-center gap-2 text-xs text-gray-500 print:hidden">
+    <label class="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 print:hidden font-medium">
       Metric
       <select
         id="trend-metric-select"
         onchange="renderTrendChart(this.value)"
-        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        class="rounded-lg bg-slate-50 dark:bg-gray-800 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
       >
         <optgroup label="Performance">
           <option value="revenue">Revenue</option>
@@ -139,29 +139,27 @@
   <div id="trend-chart" style="height: 280px;"></div>
 </div>
 
-<!-- Tabbed financial tables.
-     These always show both YoY and QoQ columns (when a prior quarter exists);
-     the YoY/QoQ toggle above applies to the hero KPI cards only. -->
+<!-- Tabbed financial tables. -->
 <div
   x-data="{ tab: 'income' }"
-  class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden"
+  class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 overflow-hidden shadow-sm dark:shadow-none transition-colors"
 >
   <!-- Tab header -->
-  <div class="flex border-b border-gray-800">
+  <div class="flex border-b border-slate-200 dark:border-gray-800">
     <button
       @click="tab = 'income'"
-      class="px-5 py-3 text-sm font-medium transition border-b-2"
-      :class="tab === 'income' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+      class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+      :class="tab === 'income' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-white' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
     >Income Statement</button>
     <button
       @click="tab = 'cashflow'"
-      class="px-5 py-3 text-sm font-medium transition border-b-2"
-      :class="tab === 'cashflow' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+      class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+      :class="tab === 'cashflow' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-white' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
     >Cash Flow</button>
     <button
       @click="tab = 'balance'"
-      class="px-5 py-3 text-sm font-medium transition border-b-2"
-      :class="tab === 'balance' ? 'border-indigo-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'"
+      class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+      :class="tab === 'balance' ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-white' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
     >Balance Sheet</button>
   </div>
 
@@ -169,37 +167,37 @@
   <div x-show="tab === 'income'" class="p-4">
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
-          <th class="text-left py-2 pr-4 font-medium">Metric</th>
-          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
-          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2 pr-4 font-semibold">Metric</th>
+          <th class="text-right py-2 pr-4 font-semibold">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-semibold">YoY</th>
           {% if ctx.current.qoq %}
-          <th class="text-right py-2 font-medium">QoQ</th>
+          <th class="text-right py-2 font-semibold">QoQ</th>
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50 font-mono">
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Revenue</td>
-          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-sans font-medium">Revenue</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.revenue) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Net Income</td>
-          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-sans font-medium">Net Income</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.net_income) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-400 font-sans">EPS Basic</td>
-          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-500 dark:text-gray-400 font-sans">EPS Basic</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-400 font-sans">EPS Diluted</td>
-          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-500 dark:text-gray-400 font-sans">EPS Diluted</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
         </tr>
@@ -211,38 +209,38 @@
   <div x-show="tab === 'cashflow'" class="p-4">
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
-          <th class="text-left py-2 pr-4 font-medium">Metric</th>
-          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
-          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2 pr-4 font-semibold">Metric</th>
+          <th class="text-right py-2 pr-4 font-semibold">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-semibold">YoY</th>
           {% if ctx.current.qoq %}
-          <th class="text-right py-2 font-medium">QoQ</th>
+          <th class="text-right py-2 font-semibold">QoQ</th>
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50 font-mono">
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Operating Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.operating_cash_flow) }}</td>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-sans font-medium">Operating Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.operating_cash_flow) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.operating_cash_flow) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.operating_cash_flow) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-400 font-sans">Capital Expenditures (Capex)</td>
-          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(ctx.current.kpi.capex) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-500 dark:text-gray-400 font-sans">Capital Expenditures (Capex)</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(ctx.current.kpi.capex) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.capex) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.capex) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition bg-indigo-950/20">
-          <td class="py-3 pr-4 text-indigo-300 font-sans font-semibold">Free Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition bg-indigo-50/50 dark:bg-indigo-950/20">
+          <td class="py-3 pr-4 text-indigo-700 dark:text-indigo-300 font-sans font-semibold">Free Cash Flow</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
           {% if ctx.current.qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
         </tr>
       </tbody>
     </table>
 
-    <p class="text-xs text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
+    <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
   </div>
 
   <!-- Balance Sheet tab -->
@@ -250,82 +248,77 @@
     {% set bs = ctx.current.balance_sheet %}
     {% if bs.total_assets is none and bs.total_liabilities is none
           and bs.total_equity is none and bs.cash_and_equivalents is none %}
-      <p class="text-gray-500 text-sm py-4 text-center">Not available for this period.</p>
+      <p class="text-slate-400 dark:text-gray-500 text-sm py-4 text-center">Not available for this period.</p>
     {% else %}
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
-          <th class="text-left py-2 pr-4 font-medium">Metric</th>
-          <th class="text-right py-2 pr-4 font-medium">{{ ctx.current.label }}</th>
-          <th class="text-right py-2 pr-4 font-medium">YoY</th>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2 pr-4 font-semibold">Metric</th>
+          <th class="text-right py-2 pr-4 font-semibold">{{ ctx.current.label }}</th>
+          <th class="text-right py-2 pr-4 font-semibold">YoY</th>
           {% if ctx.current.balance_sheet_qoq %}
-          <th class="text-right py-2 font-medium">QoQ</th>
+          <th class="text-right py-2 font-semibold">QoQ</th>
           {% endif %}
         </tr>
       </thead>
-      <tbody class="divide-y divide-gray-800/50 font-mono">
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
         {% set bs_yoy = ctx.current.balance_sheet_yoy %}
         {% set bs_qoq = ctx.current.balance_sheet_qoq %}
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Total Assets</td>
-          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(bs.total_assets) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-sans font-medium">Total Assets</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_assets) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_assets) }}</td>
           {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-400 font-sans">Total Liabilities</td>
-          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(bs.total_liabilities) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-500 dark:text-gray-400 font-sans">Total Liabilities</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(bs.total_liabilities) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_liabilities) }}</td>
           {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-300 font-sans font-medium">Total Equity</td>
-          <td class="py-3 pr-4 text-right text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-sans font-medium">Total Equity</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.total_equity) }}</td>
           {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
         </tr>
-        <tr class="hover:bg-gray-800/30 transition">
-          <td class="py-3 pr-4 text-gray-400 font-sans">Cash &amp; Equivalents</td>
-          <td class="py-3 pr-4 text-right text-white tabular-nums">{{ fmt_large(bs.cash_and_equivalents) }}</td>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 pr-4 text-slate-500 dark:text-gray-400 font-sans">Cash &amp; Equivalents</td>
+          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(bs.cash_and_equivalents) }}</td>
           <td class="py-3 pr-4 text-right tabular-nums">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
           {% if bs_qoq %}<td class="py-3 text-right tabular-nums">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
         </tr>
       </tbody>
-
     </table>
-    <p class="text-xs text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
+    <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
     {% endif %}
   </div>
 </div>
 
-<!-- Collapsible disclosure sections (PRD 4.3 #6).
-     Each stays visible and shows "Not available for this period" when empty, so
-     the reader knows where to look. Risk Factors come from the latest 10-K
-     (company-level); press release highlights from the quarter's 8-K ex-99
-     (per-period). Guidance and transcripts await content sources in a later phase. -->
+<!-- Collapsible disclosure sections -->
 {% macro disclosure(title, body, source=none) %}
-<div x-data="{ open: false }" class="rounded-xl bg-gray-900 border border-gray-800 overflow-hidden">
+<div x-data="{ open: false }" class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 overflow-hidden shadow-sm dark:shadow-none transition-colors">
   <button type="button" @click="open = !open" :aria-expanded="open"
-          class="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-gray-800/30 transition">
-    <span class="text-sm font-medium text-gray-200">{{ title }}</span>
-    <svg class="w-4 h-4 text-gray-500 transition-transform" :class="open && 'rotate-180'"
+          class="w-full flex items-center justify-between px-5 py-3 text-left hover:bg-slate-50 dark:hover:bg-gray-800/30 transition cursor-pointer">
+    <span class="text-sm font-semibold text-slate-800 dark:text-gray-200">{{ title }}</span>
+    <svg class="w-4 h-4 text-slate-400 dark:text-gray-500 transition-transform" :class="open && 'rotate-180'"
          fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
     </svg>
   </button>
-  <div x-show="open" x-cloak class="px-5 pb-4 border-t border-gray-800/50 pt-3">
+  <div x-show="open" x-cloak class="px-5 pb-4 border-t border-slate-100 dark:border-gray-800/50 pt-3">
     {% if body %}
-      <div class="text-sm text-gray-400 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-line">{{ body }}</div>
-      {% if source %}<p class="text-xs text-gray-600 mt-3">Source: {{ source }}</p>{% endif %}
+      <div class="text-sm text-slate-600 dark:text-gray-400 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-line">{{ body }}</div>
+      {% if source %}<p class="text-xs text-slate-400 dark:text-gray-600 mt-3">Source: {{ source }}</p>{% endif %}
     {% else %}
-      <p class="text-sm text-gray-600">Not available for this period.</p>
+      <p class="text-sm text-slate-400 dark:text-gray-600">Not available for this period.</p>
     {% endif %}
   </div>
 </div>
 {% endmacro %}
 
 <div class="mt-8 space-y-3">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-1">Disclosures</h2>
+  <h2 class="text-xs uppercase tracking-widest text-slate-500 dark:text-gray-400 font-bold mb-1">Disclosures</h2>
   {{ disclosure("Press release highlights", ctx.current.press_release, ctx.current.press_release_source) }}
   {{ disclosure("Management guidance & outlook", ctx.current.guidance, ctx.current.press_release_source) }}
   {{ disclosure("Executive commentary & remarks", ctx.current.executive_commentary, ctx.current.press_release_source) }}

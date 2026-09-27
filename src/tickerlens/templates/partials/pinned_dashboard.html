@@ -24,30 +24,30 @@
 <div id="pinned-dashboard"
      x-data="{ viewMode: localStorage.getItem('tickerlens_view_mode') || 'grid' }"
      class="w-full max-w-6xl mt-8">
-  <div class="flex items-center justify-between border-b border-gray-800 pb-3 mb-6 flex-wrap gap-4">
+  <div class="flex items-center justify-between border-b border-slate-200 dark:border-gray-800 pb-3 mb-6 flex-wrap gap-4">
     <div class="flex items-center gap-3">
-      <div class="p-2 rounded-lg bg-indigo-950/60 border border-indigo-800/50 text-indigo-400">
+      <div class="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/50 text-indigo-600 dark:text-indigo-400">
         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
           <path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" />
         </svg>
       </div>
       <div>
         <div class="flex items-center gap-2">
-          <h2 class="text-lg font-bold text-white tracking-tight">Pinned Dashboard</h2>
-          <span class="rounded-full bg-indigo-900/50 border border-indigo-700/50 px-2 py-0.5 text-xs font-mono font-semibold text-indigo-300">
+          <h2 class="text-lg font-bold text-slate-900 dark:text-white tracking-tight">Pinned Dashboard</h2>
+          <span class="rounded-full bg-indigo-100 dark:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-700/50 px-2 py-0.5 text-xs font-mono font-semibold text-indigo-700 dark:text-indigo-300">
             {{ pinned_companies|length }}
           </span>
         </div>
-        <p class="text-xs text-gray-400">Your tracked companies and latest quarterly fundamentals</p>
+        <p class="text-xs text-slate-500 dark:text-gray-400">Your tracked companies and latest quarterly fundamentals</p>
       </div>
     </div>
 
     {% if pinned_companies %}
       <!-- View Mode Toggle: Cards vs Table -->
-      <div class="flex items-center gap-1 bg-gray-900 border border-gray-800 p-0.5 rounded-lg text-xs">
+      <div class="flex items-center gap-1 bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 p-0.5 rounded-lg text-xs">
         <button type="button"
                 @click="viewMode = 'grid'; localStorage.setItem('tickerlens_view_mode', 'grid')"
-                :class="viewMode === 'grid' ? 'bg-gray-800 text-white font-medium shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+                :class="viewMode === 'grid' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
                 class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
@@ -56,7 +56,7 @@
         </button>
         <button type="button"
                 @click="viewMode = 'table'; localStorage.setItem('tickerlens_view_mode', 'table')"
-                :class="viewMode === 'table' ? 'bg-gray-800 text-white font-medium shadow-sm' : 'text-gray-400 hover:text-gray-200'"
+                :class="viewMode === 'table' ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
                 class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition cursor-pointer">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
@@ -75,16 +75,16 @@
          x-transition:enter-end="opacity-100 scale-100"
          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
       {% for card in pinned_companies %}
-        <div class="rounded-xl bg-gray-900 border border-gray-800 hover:border-gray-700/80 p-5 transition-all duration-150 flex flex-col justify-between group shadow-sm hover:shadow-indigo-950/20">
+        <div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700/80 p-5 transition-all duration-150 flex flex-col justify-between group shadow-sm hover:shadow-md dark:shadow-none">
           <!-- Card Top: Ticker, Name, Unpin -->
           <div>
             <div class="flex items-start justify-between gap-2 mb-2">
               <div class="flex items-center gap-2 flex-wrap">
                 <a href="/company/{{ card.ticker }}"
-                   class="rounded-lg bg-indigo-900/60 hover:bg-indigo-800/80 border border-indigo-700/40 px-2.5 py-1 text-indigo-300 font-mono font-bold text-sm tracking-wide transition">
+                   class="rounded-lg bg-indigo-50 dark:bg-indigo-900/60 hover:bg-indigo-100 dark:hover:bg-indigo-800/80 border border-indigo-200 dark:border-indigo-700/40 px-2.5 py-1 text-indigo-700 dark:text-indigo-300 font-mono font-bold text-sm tracking-wide transition">
                   {{ card.ticker }}
                 </a>
-                <span class="text-xs text-gray-400 font-mono">{{ card.latest_period }}</span>
+                <span class="text-xs text-slate-500 dark:text-gray-400 font-mono">{{ card.latest_period }}</span>
               </div>
               
               <!-- Unpin Button -->
@@ -93,7 +93,7 @@
                       hx-target="#pinned-dashboard"
                       hx-swap="outerHTML"
                       title="Unpin {{ card.ticker }} from Dashboard"
-                      class="text-gray-500 hover:text-amber-400 p-1 rounded-lg hover:bg-gray-800 transition cursor-pointer">
+                      class="text-slate-400 dark:text-gray-500 hover:text-amber-500 dark:hover:text-amber-400 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition cursor-pointer">
                 <svg class="w-4 h-4 fill-amber-400/80 hover:fill-amber-400" viewBox="0 0 20 20">
                   <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
                 </svg>
@@ -102,86 +102,86 @@
 
             <!-- Company Name & Price -->
             <div class="mb-4">
-              <a href="/company/{{ card.ticker }}" class="text-base font-semibold text-white hover:text-indigo-300 transition line-clamp-1">
+              <a href="/company/{{ card.ticker }}" class="text-base font-semibold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-300 transition line-clamp-1">
                 {{ card.name }}
               </a>
-              <div class="flex items-center gap-2 mt-1 text-xs text-gray-400">
+              <div class="flex items-center gap-2 mt-1 text-xs text-slate-500 dark:text-gray-400">
                 {% if card.last_price %}
-                  <span class="font-bold text-gray-200 text-sm font-mono tabular-nums">{{ fmt_price(card.last_price) }}</span>
+                  <span class="font-bold text-slate-900 dark:text-gray-200 text-sm font-mono tabular-nums">{{ fmt_price(card.last_price) }}</span>
                 {% endif %}
                 {% if card.market_cap %}
-                  <span class="text-gray-500">•</span>
+                  <span class="text-slate-300 dark:text-gray-600">•</span>
                   <span class="font-mono tabular-nums">Mkt Cap {{ fmt_large(card.market_cap) }}</span>
                 {% endif %}
               </div>
             </div>
 
             <!-- Fundamentals 2x2 Grid -->
-            <div class="grid grid-cols-2 gap-2.5 pt-3 border-t border-gray-800/80 mb-4">
+            <div class="grid grid-cols-2 gap-2.5 pt-3 border-t border-slate-100 dark:border-gray-800/80 mb-4">
               <!-- Revenue -->
-              <div class="bg-gray-950/70 rounded-lg p-2.5 border border-gray-800/70">
-                <div class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">Revenue</div>
-                <div class="text-sm font-bold text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.revenue) }}</div>
+              <div class="bg-slate-50 dark:bg-gray-950/70 rounded-lg p-2.5 border border-slate-200/80 dark:border-gray-800/70">
+                <div class="text-[11px] text-slate-500 dark:text-gray-500 uppercase tracking-wider font-semibold">Revenue</div>
+                <div class="text-sm font-bold text-slate-900 dark:text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.revenue) }}</div>
                 <div class="text-[11px] mt-0.5 font-mono tabular-nums">
                   {% if card.yoy.revenue is not none %}
                     {% if card.yoy.revenue >= 0 %}
-                      <span class="text-emerald-400 font-medium">+{{ "%.1f"|format(card.yoy.revenue) }}% YoY</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.revenue) }}% YoY</span>
                     {% else %}
-                      <span class="text-rose-400 font-medium">{{ "%.1f"|format(card.yoy.revenue) }}% YoY</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.revenue) }}% YoY</span>
                     {% endif %}
                   {% else %}
-                    <span class="text-gray-500">—</span>
+                    <span class="text-slate-400 dark:text-gray-500">—</span>
                   {% endif %}
                 </div>
               </div>
 
               <!-- Net Income -->
-              <div class="bg-gray-950/70 rounded-lg p-2.5 border border-gray-800/70">
-                <div class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">Net Income</div>
-                <div class="text-sm font-bold text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.net_income) }}</div>
+              <div class="bg-slate-50 dark:bg-gray-950/70 rounded-lg p-2.5 border border-slate-200/80 dark:border-gray-800/70">
+                <div class="text-[11px] text-slate-500 dark:text-gray-500 uppercase tracking-wider font-semibold">Net Income</div>
+                <div class="text-sm font-bold text-slate-900 dark:text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.net_income) }}</div>
                 <div class="text-[11px] mt-0.5 font-mono tabular-nums">
                   {% if card.yoy.net_income is not none %}
                     {% if card.yoy.net_income >= 0 %}
-                      <span class="text-emerald-400 font-medium">+{{ "%.1f"|format(card.yoy.net_income) }}% YoY</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.net_income) }}% YoY</span>
                     {% else %}
-                      <span class="text-rose-400 font-medium">{{ "%.1f"|format(card.yoy.net_income) }}% YoY</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.net_income) }}% YoY</span>
                     {% endif %}
                   {% else %}
-                    <span class="text-gray-500">—</span>
+                    <span class="text-slate-400 dark:text-gray-500">—</span>
                   {% endif %}
                 </div>
               </div>
 
               <!-- EPS (Diluted) -->
-              <div class="bg-gray-950/70 rounded-lg p-2.5 border border-gray-800/70">
-                <div class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">EPS Diluted</div>
-                <div class="text-sm font-bold text-white mt-0.5 font-mono tabular-nums">{{ fmt_eps(card.kpis.eps_diluted) }}</div>
+              <div class="bg-slate-50 dark:bg-gray-950/70 rounded-lg p-2.5 border border-slate-200/80 dark:border-gray-800/70">
+                <div class="text-[11px] text-slate-500 dark:text-gray-500 uppercase tracking-wider font-semibold">EPS Diluted</div>
+                <div class="text-sm font-bold text-slate-900 dark:text-white mt-0.5 font-mono tabular-nums">{{ fmt_eps(card.kpis.eps_diluted) }}</div>
                 <div class="text-[11px] mt-0.5 font-mono tabular-nums">
                   {% if card.yoy.eps_diluted is not none %}
                     {% if card.yoy.eps_diluted >= 0 %}
-                      <span class="text-emerald-400 font-medium">+{{ "%.1f"|format(card.yoy.eps_diluted) }}% YoY</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.eps_diluted) }}% YoY</span>
                     {% else %}
-                      <span class="text-rose-400 font-medium">{{ "%.1f"|format(card.yoy.eps_diluted) }}% YoY</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.eps_diluted) }}% YoY</span>
                     {% endif %}
                   {% else %}
-                    <span class="text-gray-500">—</span>
+                    <span class="text-slate-400 dark:text-gray-500">—</span>
                   {% endif %}
                 </div>
               </div>
 
               <!-- Free Cash Flow -->
-              <div class="bg-gray-950/70 rounded-lg p-2.5 border border-gray-800/70">
-                <div class="text-[11px] text-gray-500 uppercase tracking-wider font-medium">Free Cash Flow</div>
-                <div class="text-sm font-bold text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.free_cash_flow) }}</div>
+              <div class="bg-slate-50 dark:bg-gray-950/70 rounded-lg p-2.5 border border-slate-200/80 dark:border-gray-800/70">
+                <div class="text-[11px] text-slate-500 dark:text-gray-500 uppercase tracking-wider font-semibold">Free Cash Flow</div>
+                <div class="text-sm font-bold text-slate-900 dark:text-white mt-0.5 font-mono tabular-nums">{{ fmt_large(card.kpis.free_cash_flow) }}</div>
                 <div class="text-[11px] mt-0.5 font-mono tabular-nums">
                   {% if card.yoy.free_cash_flow is not none %}
                     {% if card.yoy.free_cash_flow >= 0 %}
-                      <span class="text-emerald-400 font-medium">+{{ "%.1f"|format(card.yoy.free_cash_flow) }}% YoY</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.free_cash_flow) }}% YoY</span>
                     {% else %}
-                      <span class="text-rose-400 font-medium">{{ "%.1f"|format(card.yoy.free_cash_flow) }}% YoY</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.free_cash_flow) }}% YoY</span>
                     {% endif %}
                   {% else %}
-                    <span class="text-gray-500">—</span>
+                    <span class="text-slate-400 dark:text-gray-500">—</span>
                   {% endif %}
                 </div>
               </div>
@@ -189,18 +189,18 @@
           </div>
 
           <!-- Card Actions -->
-          <div class="flex items-center justify-between pt-3 border-t border-gray-800/60 text-xs">
+          <div class="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800/60 text-xs">
             <a href="/company/{{ card.ticker }}"
-               class="text-gray-400 hover:text-white transition font-medium">
+               class="text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-white transition font-medium">
               Overview
             </a>
             <div class="flex items-center gap-3">
               <a href="/compare?tickers={{ card.ticker }}"
-                 class="text-gray-400 hover:text-indigo-300 transition">
+                 class="text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition">
                 Compare
               </a>
               <a href="/company/{{ card.ticker }}/detail"
-                 class="text-indigo-400 hover:text-indigo-300 font-medium transition inline-flex items-center gap-1">
+                 class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 font-medium transition inline-flex items-center gap-1">
                 Time Slicer →
               </a>
             </div>
@@ -214,9 +214,9 @@
          x-transition:enter="transition ease-out duration-150"
          x-transition:enter-start="opacity-0 scale-[0.99]"
          x-transition:enter-end="opacity-100 scale-100"
-         class="overflow-x-auto rounded-xl border border-gray-800 bg-gray-900 shadow-sm">
+         class="overflow-x-auto rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-sm">
       <table class="w-full text-left text-xs border-collapse">
-        <thead class="bg-gray-950/80 border-b border-gray-800 text-gray-400 uppercase tracking-wider font-semibold">
+        <thead class="bg-slate-50 dark:bg-gray-950/80 border-b border-slate-200 dark:border-gray-800 text-slate-600 dark:text-gray-400 uppercase tracking-wider font-semibold">
           <tr>
             <th scope="col" class="py-3 px-4">Company</th>
             <th scope="col" class="py-3 px-3 text-right">Price</th>
@@ -229,81 +229,81 @@
             <th scope="col" class="py-3 px-4 text-center">Actions</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-gray-800/60 font-mono">
+        <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60 font-mono">
           {% for card in pinned_companies %}
-            <tr class="hover:bg-gray-800/40 transition">
+            <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
               <!-- Company -->
               <td class="py-3 px-4 font-sans">
                 <div class="flex items-center gap-2">
                   <a href="/company/{{ card.ticker }}"
-                     class="font-mono font-bold text-indigo-400 hover:text-indigo-300 transition">
+                     class="font-mono font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition">
                     {{ card.ticker }}
                   </a>
-                  <span class="text-gray-300 text-xs truncate max-w-[140px]" title="{{ card.name }}">
+                  <span class="text-slate-600 dark:text-gray-300 text-xs truncate max-w-[140px]" title="{{ card.name }}">
                     {{ card.name }}
                   </span>
                 </div>
               </td>
               <!-- Price -->
-              <td class="py-3 px-3 text-right text-gray-200 tabular-nums">
+              <td class="py-3 px-3 text-right text-slate-800 dark:text-gray-200 tabular-nums font-semibold">
                 {{ fmt_price(card.last_price) }}
               </td>
               <!-- Market Cap -->
-              <td class="py-3 px-3 text-right text-gray-400 tabular-nums">
+              <td class="py-3 px-3 text-right text-slate-500 dark:text-gray-400 tabular-nums">
                 {{ fmt_large(card.market_cap) }}
               </td>
               <!-- Period -->
-              <td class="py-3 px-3 text-center text-gray-400">
-                <span class="rounded bg-gray-800/80 px-1.5 py-0.5 text-[11px]">{{ card.latest_period }}</span>
+              <td class="py-3 px-3 text-center text-slate-500 dark:text-gray-400">
+                <span class="rounded bg-slate-100 dark:bg-gray-800/80 px-1.5 py-0.5 text-[11px] font-medium">{{ card.latest_period }}</span>
               </td>
               <!-- Revenue -->
               <td class="py-3 px-3 text-right tabular-nums">
-                <div class="text-white font-medium">{{ fmt_large(card.kpis.revenue) }}</div>
+                <div class="text-slate-900 dark:text-white font-medium">{{ fmt_large(card.kpis.revenue) }}</div>
                 <div class="text-[10px]">
                   {% if card.yoy.revenue is not none %}
                     {% if card.yoy.revenue >= 0 %}
-                      <span class="text-emerald-400">+{{ "%.1f"|format(card.yoy.revenue) }}%</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.revenue) }}%</span>
                     {% else %}
-                      <span class="text-rose-400">{{ "%.1f"|format(card.yoy.revenue) }}%</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.revenue) }}%</span>
                     {% endif %}
                   {% else %}—{% endif %}
                 </div>
               </td>
               <!-- Net Income -->
               <td class="py-3 px-3 text-right tabular-nums">
-                <div class="text-white font-medium">{{ fmt_large(card.kpis.net_income) }}</div>
+                <div class="text-slate-900 dark:text-white font-medium">{{ fmt_large(card.kpis.net_income) }}</div>
                 <div class="text-[10px]">
                   {% if card.yoy.net_income is not none %}
                     {% if card.yoy.net_income >= 0 %}
-                      <span class="text-emerald-400">+{{ "%.1f"|format(card.yoy.net_income) }}%</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.net_income) }}%</span>
                     {% else %}
-                      <span class="text-rose-400">{{ "%.1f"|format(card.yoy.net_income) }}%</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.net_income) }}%</span>
                     {% endif %}
                   {% else %}—{% endif %}
                 </div>
               </td>
               <!-- EPS -->
               <td class="py-3 px-3 text-right tabular-nums">
-                <div class="text-white font-medium">{{ fmt_eps(card.kpis.eps_diluted) }}</div>
+                <div class="text-slate-900 dark:text-white font-medium">{{ fmt_eps(card.kpis.eps_diluted) }}</div>
                 <div class="text-[10px]">
                   {% if card.yoy.eps_diluted is not none %}
                     {% if card.yoy.eps_diluted >= 0 %}
-                      <span class="text-emerald-400">+{{ "%.1f"|format(card.yoy.eps_diluted) }}%</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.eps_diluted) }}%</span>
                     {% else %}
-                      <span class="text-rose-400">{{ "%.1f"|format(card.yoy.eps_diluted) }}%</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.eps_diluted) }}%</span>
                     {% endif %}
                   {% else %}—{% endif %}
                 </div>
               </td>
               <!-- FCF -->
               <td class="py-3 px-3 text-right tabular-nums">
-                <div class="text-white font-medium">{{ fmt_large(card.kpis.free_cash_flow) }}</div>
+                <div class="text-slate-900 dark:text-white font-medium">{{ fmt_large(card.kpis.free_cash_flow) }}</div>
                 <div class="text-[10px]">
                   {% if card.yoy.free_cash_flow is not none %}
                     {% if card.yoy.free_cash_flow >= 0 %}
-                      <span class="text-emerald-400">+{{ "%.1f"|format(card.yoy.free_cash_flow) }}%</span>
+                      <span class="text-emerald-600 dark:text-emerald-400 font-semibold">+{{ "%.1f"|format(card.yoy.free_cash_flow) }}%</span>
                     {% else %}
-                      <span class="text-rose-400">{{ "%.1f"|format(card.yoy.free_cash_flow) }}%</span>
+                      <span class="text-rose-600 dark:text-rose-400 font-semibold">{{ "%.1f"|format(card.yoy.free_cash_flow) }}%</span>
                     {% endif %}
                   {% else %}—{% endif %}
                 </div>
@@ -312,11 +312,11 @@
               <td class="py-3 px-4 text-center font-sans">
                 <div class="flex items-center justify-center gap-2">
                   <a href="/company/{{ card.ticker }}"
-                     class="text-gray-400 hover:text-white transition px-1.5 py-0.5 rounded hover:bg-gray-800" title="Overview">
+                     class="text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white transition px-1.5 py-0.5 rounded hover:bg-slate-100 dark:hover:bg-gray-800" title="Overview">
                     View
                   </a>
                   <a href="/company/{{ card.ticker }}/detail"
-                     class="text-indigo-400 hover:text-indigo-300 font-medium transition px-1.5 py-0.5 rounded hover:bg-indigo-950/40" title="Time Slicer">
+                     class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 font-medium transition px-1.5 py-0.5 rounded hover:bg-indigo-50 dark:hover:bg-indigo-950/40" title="Time Slicer">
                     Slicer
                   </a>
                   <button type="button"
@@ -324,7 +324,7 @@
                           hx-target="#pinned-dashboard"
                           hx-swap="outerHTML"
                           title="Unpin {{ card.ticker }}"
-                          class="text-gray-500 hover:text-rose-400 p-1 rounded hover:bg-gray-800 transition cursor-pointer">
+                          class="text-slate-400 dark:text-gray-500 hover:text-rose-500 dark:hover:text-rose-400 p-1 rounded hover:bg-slate-100 dark:hover:bg-gray-800 transition cursor-pointer">
                     ✕
                   </button>
                 </div>
@@ -336,25 +336,25 @@
     </div>
   {% else %}
     <!-- Empty State -->
-    <div class="rounded-2xl border border-dashed border-gray-800 bg-gray-900/40 p-8 text-center max-w-2xl mx-auto">
-      <div class="w-12 h-12 rounded-full bg-gray-800/80 text-amber-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
-        <svg class="w-6 h-6 fill-amber-400/80" viewBox="0 0 20 20">
+    <div class="rounded-2xl border border-dashed border-slate-200 dark:border-gray-800 bg-white/60 dark:bg-gray-900/40 p-8 text-center max-w-2xl mx-auto shadow-sm">
+      <div class="w-12 h-12 rounded-full bg-amber-50 dark:bg-gray-800/80 text-amber-500 dark:text-amber-400 flex items-center justify-center mx-auto mb-3 shadow-inner">
+        <svg class="w-6 h-6 fill-amber-500 dark:fill-amber-400/80" viewBox="0 0 20 20">
           <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
         </svg>
       </div>
-      <h3 class="text-base font-semibold text-white mb-1">Your Pinned Dashboard is Empty</h3>
-      <p class="text-xs text-gray-400 max-w-md mx-auto mb-5 leading-relaxed">
+      <h3 class="text-base font-bold text-slate-900 dark:text-white mb-1">Your Pinned Dashboard is Empty</h3>
+      <p class="text-xs text-slate-600 dark:text-gray-400 max-w-md mx-auto mb-5 leading-relaxed">
         Pin key companies to monitor their latest quarterly revenue growth, EPS trajectory, and free cash flow in one place.
       </p>
       
       <div class="flex items-center justify-center gap-2 flex-wrap text-xs">
-        <span class="text-gray-500 mr-1">Pin with 1 click:</span>
+        <span class="text-slate-400 dark:text-gray-500 mr-1 font-medium">Pin with 1 click:</span>
         {% for sym in ["AAPL", "NVDA", "MSFT", "AMZN", "ORCL", "TSLA", "META", "INTC"] %}
           <button type="button"
                   hx-post="/watchlist/pin/{{ sym }}?view=dashboard"
                   hx-target="#pinned-dashboard"
                   hx-swap="outerHTML"
-                  class="rounded-lg bg-gray-800/80 hover:bg-indigo-900/60 border border-gray-700 hover:border-indigo-500/50 text-gray-300 hover:text-indigo-200 px-2.5 py-1 font-mono transition cursor-pointer">
+                  class="rounded-lg bg-slate-100 hover:bg-indigo-50 dark:bg-gray-800/80 dark:hover:bg-indigo-900/60 border border-slate-200 hover:border-indigo-300 dark:border-gray-700 dark:hover:border-indigo-500/50 text-slate-700 hover:text-indigo-700 dark:text-gray-300 dark:hover:text-indigo-200 px-2.5 py-1 font-mono transition cursor-pointer shadow-sm">
             + {{ sym }}
           </button>
         {% endfor %}

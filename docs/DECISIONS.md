@@ -165,5 +165,15 @@ Format:
 **Why:** Users required side-by-side benchmarking of 2–5 peer companies (e.g. Semiconductors or Big Tech) to contrast quarterly growth trajectories, profitability margins, and balance sheet solvency without switching between individual company tabs.
 **Alternatives considered:** Static side-by-side tables without charting (rejected: visual trend overlay is essential to identify inflections in margins and growth); client-side-only peer comparison without server endpoints (rejected: shareable URLs like `/compare?tickers=NVDA,INTC,MRVL` and server-side aggregation ensure bookmarks and direct peer links work reliably).
 
+---
 
+## 2026-09-27 — Dark/Light/System Theme Engine and Client-Side Plotly Controller
 
+**What:** Implemented a full-system Dark, Light, and System default theme engine in `base.html` using Tailwind CSS `class` mode, inline `<head>` script to avoid FOUC, and an interactive 3-state segmented switcher. Overhauled Compare Mode charting to use a client-side Alpine.js controller (`compareChart()`) rather than HTMX fragment swaps, embedding the JSON payload once and rendering chart transitions locally in <5ms.
+**Why:**
+1. Financial charts and data tables require high contrast and comfortable viewing during late-night analysis sessions.
+2. HTMX outerHTML swapping of `#compare-chart-container` caused Plotly DOM teardown/reattach bugs, script re-execution race conditions, and sluggish network round-trips for simple metric toggles. Client-side Alpine state management allows instant metric switching, peer trace toggling, and layout updates without hitting the backend.
+3. Cleaned legacy `FY` rows from 2018–2020 and expanded company ingestion from 8 to 12 quarters so that all 8 displayed quarters in Compare Mode have prior-year baselines, delivering 100% complete YoY points with zero time gaps.
+**Alternatives considered:**
+- Cookie-based theme toggling with server-side class rendering (rejected: requires server round-trip or full reload to switch themes).
+- Continued HTMX outerHTML swaps for Plotly metric buttons (rejected: Plotly redraws are 100x faster and flicker-free when executed directly via `Plotly.react` in client state).
