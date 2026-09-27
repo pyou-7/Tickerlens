@@ -42,16 +42,17 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 - Time Slicer Compare Mode (`company/compare.html` and `partials/compare_chart.html`): side-by-side benchmarking of 2–5 peer companies with dynamic peer chips, presets (Semiconductors, Big Tech, Cloud, AI), search combobox in "Add Peer", multi-trace Plotly chart for 7 normalized metrics (Revenue YoY, Net Margin %, FCF Margin %, Revenue, FCF, Net Income, Diluted EPS), client-side Alpine controller (`compareChart()`) with sub-5ms metric switching, trace visibility toggles in the legend, "Aligned Quarters" vs "Calendar Dates" alignment switcher, and 5-category financial matrix with sticky headers and column hover highlighting.
 - Overview: company header/description, latest-quarter KPIs with YoY, TTM snapshot, and link to detail.
 - Detail: quarterly/yearly single-period selectors, HTMX swaps, a configurable one-metric Plotly trend, YoY/QoQ hero KPIs, and Income/Cash Flow/Balance Sheet tabs with `tabular-nums` formatting and FCF highlights.
+- Time Slicer Range Mode: contiguous multi-quarter and multi-year slicing via `RangeSummary`, dynamic "From" and "To" selectors, Cumulative Revenue / Net Income / FCF Hero KPI cards with span growth and margins, and multi-period comparative statement columns with sticky metric headers and total summary columns.
+- One-Click Earnings ZIP Export Archive: in-memory streaming ZIP generation (`GET /company/{ticker}/export-zip`) bundling complete financial statement CSVs, primary source disclosures (8-K releases, guidance, executive remarks), risk factors, and `README.txt`.
 - A separate stock-price chart lazy-loads adjusted Yahoo history from `GET /company/{ticker}/price-history` and supports Today through Max ranges without blocking initial detail-page rendering.
 - The trend selector covers Revenue, Net Income, OCF, Capex, FCF, EPS Basic/Diluted, Assets, Liabilities, Equity, and Cash. Its x values are unique period-end dates; month/year labels are display-only.
 - Disclosures: per-quarter press-release text, management guidance, executive commentary, latest-company risk factors, and explicit unavailable states for transcripts.
-- Sticky Download PDF action: invokes browser print for the selected period, uses print-specific styling, and includes the required dated “As of” footer.
-- Full Range mode and ZIP export are Phase 3 tasks.
+- Sticky Action Pill: invokes browser print for PDF export and triggers one-click ZIP download archive.
 
 ### Tests and migrations
 
-- 94 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, and comparison).
-- Comprehensive end-to-end automation scripts: `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
+- 100 tests pass currently (100% pass rate, zero regressions across filings, xbrl, yahoo, search, financials, watchlist, comparison, routes, range mode, and zip export).
+- Comprehensive end-to-end automation scripts: `scripts/validate_range_and_zip.py`, `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
 - Latest migration: `cf9ad233f7f8_create_watchlist_items_table.py`.
 
 
@@ -68,9 +69,9 @@ Phases 0–2 are complete. One-company data flows end to end from EDGAR fetch th
 
 ## Next Recommended Work
 
-1. Add Time Slicer Range and Compare modes (PRD §4.3 & §4.4).
-2. Add the PRD §4.8 ZIP download workflow.
-3. Build batch ingestion/refresh tooling for universe watchlist coverage.
+1. Build batch ingestion/refresh tooling and CLI for universe watchlist coverage.
+2. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
+3. Investigate and implement automated SEC filing webhook/poller for real-time earnings detection.
 
 
 ## Guardrails

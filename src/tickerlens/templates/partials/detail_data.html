@@ -48,9 +48,66 @@
 </div>
 {% endmacro %}
 
-<!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card.
-     changeMode resets to 'yoy' on each HTMX period swap (this partial is re-rendered),
-     which is the intended default when the selected period changes. -->
+{% if ctx.mode == 'range' and ctx.range_summary %}
+<!-- Range Mode Hero KPI section -->
+<div class="mb-8">
+  <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
+    <div>
+      <h2 class="text-xs uppercase tracking-widest text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-2">
+        <span>Range Aggregates: {{ ctx.range_summary.start_label }} → {{ ctx.range_summary.end_label }}</span>
+        <span class="rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 text-[10px] px-2.5 py-0.5 font-mono font-medium">
+          {{ ctx.range_summary.period_count }} Periods
+        </span>
+      </h2>
+      <p class="text-xs text-slate-500 dark:text-gray-400 mt-0.5">Cumulative fundamental totals and margin evolution across the selected contiguous window</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <!-- Cumulative Revenue -->
+    <div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 px-5 py-4 shadow-sm dark:shadow-none transition-colors">
+      <div class="text-xs text-slate-500 dark:text-gray-400 mb-1 font-semibold">Cumulative Revenue</div>
+      <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1 font-mono tabular-nums">{{ fmt_large(ctx.range_summary.total_revenue) }}</div>
+      <div class="h-4 font-mono tabular-nums">
+        {{ change_badge(ctx.range_summary.revenue_growth_pct) }}
+        <span class="text-slate-400 dark:text-gray-600 text-xs font-sans">Span Growth</span>
+      </div>
+    </div>
+
+    <!-- Cumulative Net Income -->
+    <div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 px-5 py-4 shadow-sm dark:shadow-none transition-colors">
+      <div class="text-xs text-slate-500 dark:text-gray-400 mb-1 font-semibold">Cumulative Net Income</div>
+      <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1 font-mono tabular-nums">{{ fmt_large(ctx.range_summary.total_net_income) }}</div>
+      <div class="h-4 font-mono text-xs tabular-nums text-slate-500 dark:text-gray-400 font-sans">
+        {% if ctx.range_summary.cumulative_net_margin is not none %}
+          <span class="text-indigo-600 dark:text-indigo-400 font-semibold font-mono">{{ "%.1f"|format(ctx.range_summary.cumulative_net_margin) }}%</span> Margin
+        {% else %}—{% endif %}
+      </div>
+    </div>
+
+    <!-- Cumulative Free Cash Flow -->
+    <div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 px-5 py-4 shadow-sm dark:shadow-none transition-colors">
+      <div class="text-xs text-slate-500 dark:text-gray-400 mb-1 font-semibold">Cumulative Free Cash Flow</div>
+      <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1 font-mono tabular-nums">{{ fmt_large(ctx.range_summary.total_free_cash_flow) }}</div>
+      <div class="h-4 font-mono text-xs tabular-nums text-slate-500 dark:text-gray-400 font-sans">
+        {% if ctx.range_summary.cumulative_fcf_margin is not none %}
+          <span class="text-cyan-600 dark:text-cyan-400 font-semibold font-mono">{{ "%.1f"|format(ctx.range_summary.cumulative_fcf_margin) }}%</span> FCF Margin
+        {% else %}—{% endif %}
+      </div>
+    </div>
+
+    <!-- Average Revenue per Period -->
+    <div class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 px-5 py-4 shadow-sm dark:shadow-none transition-colors">
+      <div class="text-xs text-slate-500 dark:text-gray-400 mb-1 font-semibold">Avg. Period Revenue</div>
+      <div class="text-2xl font-bold text-slate-900 dark:text-white mb-1 font-mono tabular-nums">{{ fmt_large(ctx.range_summary.avg_revenue) }}</div>
+      <div class="h-4 font-mono text-xs text-slate-400 dark:text-gray-600 font-sans">
+        Per {{ "quarter" if ctx.granularity == "quarterly" else "year" }}
+      </div>
+    </div>
+  </div>
+</div>
+{% else %}
+<!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card. -->
 <div x-data="{ changeMode: 'yoy' }">
   <!-- Period label + change-mode toggle -->
   <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
@@ -100,6 +157,7 @@
     ) }}
   </div>
 </div>
+{% endif %}
 
 <!-- Configurable single-metric trend chart. Keeping one active series avoids
      dual-axis ambiguity and works for metrics with very different scales. -->
@@ -164,6 +222,51 @@
   </div>
 
   <!-- Income Statement tab -->
+  {% if ctx.mode == 'range' and ctx.range_periods %}
+  <div x-show="tab === 'income'" class="p-4 overflow-x-auto relative">
+    <table class="w-full text-sm border-collapse">
+      <thead>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2.5 px-4 font-semibold sticky left-0 z-10 bg-white dark:bg-gray-900 min-w-[180px] border-r border-slate-200/60 dark:border-gray-800/60">Metric</th>
+          {% for p in ctx.range_periods %}
+            <th class="text-right py-2.5 px-4 font-semibold min-w-[120px]">{{ p.label }}</th>
+          {% endfor %}
+          <th class="text-right py-2.5 px-4 font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 min-w-[140px]">Cumulative Total</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Revenue</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(p.kpi.revenue) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_summary.total_revenue) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Net Income</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(p.kpi.net_income) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_summary.total_net_income) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-500 dark:text-gray-400 font-sans sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">EPS Basic</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_eps(p.kpi.eps_basic) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right text-slate-400 dark:text-gray-500 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">—</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-500 dark:text-gray-400 font-sans sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">EPS Diluted</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_eps(p.kpi.eps_diluted) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right text-slate-400 dark:text-gray-500 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  {% else %}
   <div x-show="tab === 'income'" class="p-4">
     <table class="w-full text-sm">
       <thead>
@@ -204,8 +307,48 @@
       </tbody>
     </table>
   </div>
+  {% endif %}
 
   <!-- Cash Flow tab -->
+  {% if ctx.mode == 'range' and ctx.range_periods %}
+  <div x-show="tab === 'cashflow'" class="p-4 overflow-x-auto relative">
+    <table class="w-full text-sm border-collapse">
+      <thead>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2.5 px-4 font-semibold sticky left-0 z-10 bg-white dark:bg-gray-900 min-w-[180px] border-r border-slate-200/60 dark:border-gray-800/60">Metric</th>
+          {% for p in ctx.range_periods %}
+            <th class="text-right py-2.5 px-4 font-semibold min-w-[120px]">{{ p.label }}</th>
+          {% endfor %}
+          <th class="text-right py-2.5 px-4 font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 min-w-[140px]">Cumulative Total</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Operating Cash Flow</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(p.kpi.operating_cash_flow) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_summary.total_operating_cash_flow) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-500 dark:text-gray-400 font-sans sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Capital Expenditures</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(p.kpi.capex) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_summary.total_capex) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition bg-indigo-50/50 dark:bg-indigo-950/20">
+          <td class="py-3 px-4 text-indigo-700 dark:text-indigo-300 font-sans font-semibold sticky left-0 z-10 bg-indigo-50/90 dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Free Cash Flow</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(p.kpi.free_cash_flow) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-100/50 dark:bg-indigo-900/40 tabular-nums">{{ fmt_large(ctx.range_summary.total_free_cash_flow) }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
+  </div>
+  {% else %}
   <div x-show="tab === 'cashflow'" class="p-4">
     <table class="w-full text-sm">
       <thead>
@@ -239,11 +382,57 @@
         </tr>
       </tbody>
     </table>
-
     <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
   </div>
+  {% endif %}
 
   <!-- Balance Sheet tab -->
+  {% if ctx.mode == 'range' and ctx.range_periods %}
+  <div x-show="tab === 'balance'" class="p-4 overflow-x-auto relative">
+    <table class="w-full text-sm border-collapse">
+      <thead>
+        <tr class="text-slate-400 dark:text-gray-500 text-xs uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+          <th class="text-left py-2.5 px-4 font-semibold sticky left-0 z-10 bg-white dark:bg-gray-900 min-w-[180px] border-r border-slate-200/60 dark:border-gray-800/60">Metric</th>
+          {% for p in ctx.range_periods %}
+            <th class="text-right py-2.5 px-4 font-semibold min-w-[120px]">{{ p.label }}</th>
+          {% endfor %}
+          <th class="text-right py-2.5 px-4 font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 min-w-[140px]">Latest Period</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/50 font-mono">
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Total Assets</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(p.balance_sheet.total_assets) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_periods[-1].balance_sheet.total_assets) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-500 dark:text-gray-400 font-sans sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Total Liabilities</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(p.balance_sheet.total_liabilities) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_periods[-1].balance_sheet.total_liabilities) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-700 dark:text-gray-300 font-sans font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Total Equity</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(p.balance_sheet.total_equity) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_periods[-1].balance_sheet.total_equity) }}</td>
+        </tr>
+        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/30 transition">
+          <td class="py-3 px-4 text-slate-500 dark:text-gray-400 font-sans sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-slate-200/60 dark:border-gray-800/60">Cash &amp; Equivalents</td>
+          {% for p in ctx.range_periods %}
+            <td class="py-3 px-4 text-right text-slate-900 dark:text-white tabular-nums">{{ fmt_large(p.balance_sheet.cash_and_equivalents) }}</td>
+          {% endfor %}
+          <td class="py-3 px-4 text-right font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20 tabular-nums">{{ fmt_large(ctx.range_periods[-1].balance_sheet.cash_and_equivalents) }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">Balance-sheet values are point-in-time, as of each period end date.</p>
+  </div>
+  {% else %}
   <div x-show="tab === 'balance'" class="p-4">
     {% set bs = ctx.current.balance_sheet %}
     {% if bs.total_assets is none and bs.total_liabilities is none
@@ -293,6 +482,7 @@
     <p class="text-xs text-slate-400 dark:text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
     {% endif %}
   </div>
+  {% endif %}
 </div>
 
 <!-- Collapsible disclosure sections -->

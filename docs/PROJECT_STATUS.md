@@ -68,16 +68,25 @@ Goal: expand beyond one-company browsing with a company universe, global search,
     - Added **Search Combobox in "Add Peer"**: allows searching the entire SEC universe and adding peers directly via `/api/search` with keyboard navigation.
     - Upgraded side-by-side financial benchmarking matrix with sticky left indicator column, backdrop blur, and interactive column hover highlighting (`@mouseenter`/`@mouseleave`).
     - Validated with E2E automation script `scripts/validate_compare_mode.py`, `scripts/validate_10_companies.py`, and `scripts/validate_watchlist_dashboard.py`.
-  - 94 tests currently passing in test suite (100% pass rate).
+  - **Time Slicer Range Mode (PRD §4.2 / §4.3):**
+    - Contiguous multi-quarter and multi-year slicing via `RangeSummary` model and `_build_range_data` in `FinancialsService`.
+    - Added Single Period vs Range Mode switcher in detail view with dynamic "From" and "To" quarter/year selectors and automatic chronologic alignment.
+    - Multi-period comparative statement columns for Income Statement, Cash Flow, and Balance Sheet with sticky metric titles and cumulative/latest summary totals.
+    - Hero Aggregate KPI cards: Cumulative Revenue (with span growth badge), Cumulative Net Income (with cumulative net margin badge), Cumulative Free Cash Flow (with cumulative FCF margin badge), and Average Period Revenue.
+  - **One-Click Earnings ZIP Export Archive (PRD §4.8):**
+    - In-memory streaming ZIP generation (`FinancialsService.export_zip(ticker, range_start, range_end)`) served via `GET /company/{ticker}/export-zip`.
+    - Packages complete financial statements CSV (`{ticker}_financials.csv`), all primary-source disclosures extracted from EDGAR (`disclosures/` folder with 8-K press release exhibits, guidance, executive commentary), Item 1A Risk Factors (`{ticker}_risk_factors.txt`), and `README.txt`.
+    - Added quick-action ZIP download buttons in slicer toolbar and floating action pill on company detail page.
+    - Validated with end-to-end automation script `scripts/validate_range_and_zip.py` across all 10 tracked companies.
+  - 100 tests currently passing in test suite (100% pass rate).
 
 ---
 
 ## What's next (concrete Phase 3 tasks)
 
-1. Add Time Slicer Range mode (PRD §4.2 multi-quarter contiguous slicing).
-2. Implement the PRD §4.8 ZIP export workflow; keep the Phase 2 print/PDF action as the lightweight single-period option.
-3. Build batch ingestion/refresh tooling for universe watchlist coverage.
-4. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
+1. Build batch ingestion/refresh tooling and CLI for universe watchlist coverage (e.g. `scripts/refresh_universe.py` or background worker).
+2. Advanced Export & Chart customization (custom CSV deltas, annotation flags for earnings surprise dates).
+3. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
 
@@ -98,6 +107,9 @@ Do NOT build AI analysis, calendar/alerts, or the news feed — those remain Pha
 
 | Date | Decision |
 |---|---|
+| 2026-09-27 | Implemented Time Slicer Range Mode (PRD §4.2 / §4.3) with multi-period comparative tables and cumulative fundamentals |
+| 2026-09-27 | Implemented One-Click Earnings ZIP Export Archive (PRD §4.8) packaging CSV financials, EDGAR disclosures, risk factors, and manifest |
+| 2026-09-27 | Implemented full Dark/Light/System Theme engine and overhauled Compare Mode to client-side Alpine/Plotly controller |
 | 2026-09-26 | Implemented Watchlist & Pinned Companies Dashboard (PRD §4.2 / §4.6) with SQLite persistence, header pin buttons, and home KPI card grid |
 | 2026-09-26 | Implemented PRD §4.10 all-company universe indexing, multi-tier ranking, and Alpine.js combobox with `Cmd+K` global keyboard shortcut |
 

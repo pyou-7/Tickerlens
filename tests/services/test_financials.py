@@ -741,3 +741,78 @@ def test_enrich_press_releases_skips_failed_exhibit_and_continues(
     q3 = session.query(QuarterlyFinancial).filter_by(fiscal_period="Q3").one()
     assert q2.press_release_highlights is None
     assert q3.press_release_highlights is not None
+
+
+def test_get_detail_range_mode(session: Session) -> None:
+    import zipfile
+    import io
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2024, 9, 30), fiscal_year=2024, fiscal_period="Q4", revenue=90_000, net_income=20_000, free_cash_flow=15_000))
+    session.add(_row(cik=cik, period_end=dt.date(2024, 12, 31), fiscal_year=2025, fiscal_period="Q1", revenue=100_000, net_income=25_000, free_cash_flow=20_000))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q2", revenue=110_000, net_income=30_000, free_cash_flow=25_000))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q3", revenue=120_000, net_income=35_000, free_cash_flow=30_000))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail(
+        "AAPL",
+        mode="range",
+        range_start="Q1 FY2025",
+        range_end="Q3 FY2025",
+        session=session,
+    )
+
+    assert ctx.mode == "range"
+    assert ctx.range_summary is not None
+    assert ctx.range_summary.period_count == 3
+    assert ctx.range_summary.total_revenue == 330_000
+    assert ctx.range_summary.total_net_income == 90_000
+    assert ctx.range_summary.total_free_cash_flow == 75_000
+    assert ctx.range_summary.avg_revenue == 110_000
+    assert len(ctx.range_periods) == 3
+    assert ctx.range_periods[0].label == "Q1 FY2025"
+    assert ctx.range_periods[-1].label == "Q3 FY2025"
+
+
+def test_export_zip(session: Session) -> None:
+    import zipfile
+    import io
+    cik = "0000320193"
+    comp = _company(cik=cik)
+    comp.risk_factors = "Material supply chain risks."
+    session.add(comp)
+    row = _row(
+        cik=cik,
+        period_end=dt.date(2025, 3, 31),
+        fiscal_year=2025,
+        fiscal_period="Q2",
+        revenue=110_000,
+        net_income=30_000,
+        free_cash_flow=25_000,
+    )
+    row.press_release_highlights = "Record revenue growth"
+    session.add(row)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    zip_bytes = svc.export_zip("AAPL", session=session)
+    assert len(zip_bytes) > 0
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        namelist = zf.namelist()
+        assert "aapl_financials.csv" in namelist
+        assert "README.txt" in namelist
+        assert "AAPL_risk_factors.txt" in namelist
+        assert "disclosures/AAPL_Q2_FY2025_disclosure.txt" in namelist
+
+        csv_content = zf.read("aapl_financials.csv").decode("utf-8")
+        assert "Revenue ($)" in csv_content
+        assert "110000" in csv_content
+

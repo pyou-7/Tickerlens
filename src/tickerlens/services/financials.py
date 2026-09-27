@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
 import datetime as dt
+import io
 import logging
+import zipfile
 
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -109,6 +112,23 @@ class PeriodData(BaseModel):
     executive_commentary: str | None = None
 
 
+class RangeSummary(BaseModel):
+    """Aggregated financial summary across a multi-period range."""
+    start_label: str
+    end_label: str
+    period_count: int
+    total_revenue: float | None = None
+    total_net_income: float | None = None
+    total_free_cash_flow: float | None = None
+    total_operating_cash_flow: float | None = None
+    total_capex: float | None = None
+    avg_revenue: float | None = None
+    cumulative_net_margin: float | None = None
+    cumulative_fcf_margin: float | None = None
+    revenue_growth_pct: float | None = None
+    net_income_growth_pct: float | None = None
+
+
 class DetailContext(BaseModel):
     """Everything the detail page needs to render."""
     cik: str
@@ -119,11 +139,16 @@ class DetailContext(BaseModel):
     market_cap: float | None
     # Selector state
     granularity: str            # "quarterly" | "yearly"
+    mode: str = "single"        # "single" | "range"
     quarter_options: list[str]  # most recent first, e.g. ["Q4 FY2025", ...]
     year_options: list[int]     # most recent first, e.g. [2025, 2024, 2023]
     selected_quarter: str       # e.g. "Q4 FY2025"
     selected_year: int          # e.g. 2025
-    # Current period
+    range_start: str | None = None
+    range_end: str | None = None
+    range_summary: RangeSummary | None = None
+    range_periods: list[PeriodData] = []
+    # Current period (or latest in range)
     current: PeriodData
     # Chart data — unique period-end dates in chronological order. Dates, rather
     # than fiscal labels, prevent duplicate/misreported labels from collapsing
@@ -382,6 +407,9 @@ class FinancialsService:
         granularity: str = "quarterly",
         selected_quarter: str | None = None,
         selected_year: int | None = None,
+        mode: str = "single",
+        range_start: str | None = None,
+        range_end: str | None = None,
         session: Session | None = None,
     ) -> DetailContext:
         """Return everything the detail / time-slicer page needs."""
@@ -431,33 +459,53 @@ class FinancialsService:
             if selected_year is None:
                 selected_year = year_options[0]
 
-            # Build current period data
-            if granularity == "yearly":
-                current = _build_yearly_period(all_rows, selected_year, year_options[0])
-                selected_year = current.fiscal_year  # may have been corrected
-            else:
-                current, selected_quarter = _build_quarterly_period(
-                    all_rows, selected_quarter, latest
-                )
+            range_summary: RangeSummary | None = None
+            range_periods: list[PeriodData] = []
 
-            # Chart data — chronological order across all quarters. Use the
-            # actual period end as the x value because upstream fiscal labels
-            # can be duplicated or inconsistent across comparative facts.
-            chart_dates = [r.period_end.isoformat() for r in all_rows]
-            chart_labels = [r.period_end.strftime("%b '%y") for r in all_rows]
-            chart_metrics = {
-                "revenue": [r.revenue for r in all_rows],
-                "net_income": [r.net_income for r in all_rows],
-                "free_cash_flow": [r.free_cash_flow for r in all_rows],
-                "operating_cash_flow": [r.operating_cash_flow for r in all_rows],
-                "capex": [r.capex for r in all_rows],
-                "eps_diluted": [r.eps_diluted for r in all_rows],
-                "eps_basic": [r.eps_basic for r in all_rows],
-                "total_assets": [r.total_assets for r in all_rows],
-                "total_liabilities": [r.total_liabilities for r in all_rows],
-                "total_equity": [r.total_equity for r in all_rows],
-                "cash_and_equivalents": [r.cash_and_equivalents for r in all_rows],
-            }
+            if mode == "range":
+                (
+                    range_summary,
+                    range_periods,
+                    current,
+                    range_start,
+                    range_end,
+                    chart_dates,
+                    chart_labels,
+                    chart_metrics,
+                ) = _build_range_data(
+                    all_rows,
+                    granularity,
+                    range_start,
+                    range_end,
+                    quarter_options,
+                    year_options,
+                    latest,
+                )
+            else:
+                # Build current period data
+                if granularity == "yearly":
+                    current = _build_yearly_period(all_rows, selected_year, year_options[0])
+                    selected_year = current.fiscal_year  # may have been corrected
+                else:
+                    current, selected_quarter = _build_quarterly_period(
+                        all_rows, selected_quarter, latest
+                    )
+
+                chart_dates = [r.period_end.isoformat() for r in all_rows]
+                chart_labels = [r.period_end.strftime("%b '%y") for r in all_rows]
+                chart_metrics = {
+                    "revenue": [r.revenue for r in all_rows],
+                    "net_income": [r.net_income for r in all_rows],
+                    "free_cash_flow": [r.free_cash_flow for r in all_rows],
+                    "operating_cash_flow": [r.operating_cash_flow for r in all_rows],
+                    "capex": [r.capex for r in all_rows],
+                    "eps_diluted": [r.eps_diluted for r in all_rows],
+                    "eps_basic": [r.eps_basic for r in all_rows],
+                    "total_assets": [r.total_assets for r in all_rows],
+                    "total_liabilities": [r.total_liabilities for r in all_rows],
+                    "total_equity": [r.total_equity for r in all_rows],
+                    "cash_and_equivalents": [r.cash_and_equivalents for r in all_rows],
+                }
 
             return DetailContext(
                 cik=cik,
@@ -467,10 +515,15 @@ class FinancialsService:
                 last_price=company.last_price,
                 market_cap=company.market_cap,
                 granularity=granularity,
+                mode=mode,
                 quarter_options=quarter_options,
                 year_options=year_options,
                 selected_quarter=selected_quarter,
                 selected_year=selected_year,
+                range_start=range_start,
+                range_end=range_end,
+                range_summary=range_summary,
+                range_periods=range_periods,
                 current=current,
                 chart_dates=chart_dates,
                 chart_labels=chart_labels,
@@ -481,6 +534,161 @@ class FinancialsService:
         finally:
             if session is None and self._session is None:
                 db.close()
+
+    def export_zip(
+        self,
+        ticker: str,
+        range_start: str | None = None,
+        range_end: str | None = None,
+        session: Session | None = None,
+    ) -> bytes:
+        """Generate an in-memory ZIP archive containing formatted financial CSV, press releases, and README."""
+        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No company found for {ticker}")
+
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+            if not all_rows:
+                raise CompanyNotFoundError(f"No financial data found for {ticker}")
+
+            rows = all_rows
+            labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
+            if range_start and range_start in labels and range_end and range_end in labels:
+                s_idx = labels.index(range_start)
+                e_idx = labels.index(range_end)
+                if s_idx > e_idx:
+                    s_idx, e_idx = e_idx, s_idx
+                rows = all_rows[s_idx : e_idx + 1]
+
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                # 1. Financials CSV
+                csv_buf = io.StringIO()
+                writer = csv.writer(csv_buf)
+                writer.writerow([
+                    "Ticker",
+                    "CIK",
+                    "Fiscal Period",
+                    "Fiscal Year",
+                    "Period Label",
+                    "Period End",
+                    "Revenue ($)",
+                    "Net Income ($)",
+                    "Diluted EPS ($)",
+                    "Basic EPS ($)",
+                    "Operating Cash Flow ($)",
+                    "Capital Expenditures ($)",
+                    "Free Cash Flow ($)",
+                    "Net Margin (%)",
+                    "FCF Margin (%)",
+                    "Total Assets ($)",
+                    "Total Liabilities ($)",
+                    "Total Equity ($)",
+                    "Cash & Equivalents ($)",
+                ])
+
+                for r in rows:
+                    net_margin = (
+                        (r.net_income / r.revenue * 100)
+                        if (r.net_income is not None and r.revenue and r.revenue > 0)
+                        else None
+                    )
+                    fcf_margin = (
+                        (r.free_cash_flow / r.revenue * 100)
+                        if (r.free_cash_flow is not None and r.revenue and r.revenue > 0)
+                        else None
+                    )
+                    writer.writerow([
+                        ticker.upper(),
+                        cik,
+                        r.fiscal_period,
+                        r.fiscal_year,
+                        f"{r.fiscal_period} FY{r.fiscal_year}",
+                        r.period_end.isoformat() if r.period_end else "",
+                        r.revenue if r.revenue is not None else "",
+                        r.net_income if r.net_income is not None else "",
+                        f"{r.eps_diluted:.2f}" if r.eps_diluted is not None else "",
+                        f"{r.eps_basic:.2f}" if r.eps_basic is not None else "",
+                        r.operating_cash_flow if r.operating_cash_flow is not None else "",
+                        r.capex if r.capex is not None else "",
+                        r.free_cash_flow if r.free_cash_flow is not None else "",
+                        f"{net_margin:.2f}" if net_margin is not None else "",
+                        f"{fcf_margin:.2f}" if fcf_margin is not None else "",
+                        r.total_assets if r.total_assets is not None else "",
+                        r.total_liabilities if r.total_liabilities is not None else "",
+                        r.total_equity if r.total_equity is not None else "",
+                        r.cash_and_equivalents if r.cash_and_equivalents is not None else "",
+                    ])
+
+                zf.writestr(f"{ticker.lower()}_financials.csv", csv_buf.getvalue())
+
+                # 2. Press release / earnings disclosures
+                seen_disclosures: set[str] = set()
+                for r in rows:
+                    if r.press_release_highlights or r.guidance or r.executive_commentary:
+                        clean_fp = f"{r.fiscal_period}_FY{r.fiscal_year}"
+                        if clean_fp in seen_disclosures:
+                            clean_fp = f"{clean_fp}_{r.period_end}"
+                        seen_disclosures.add(clean_fp)
+                        doc_text = (
+                            f"================================================================================\n"
+                            f"{company.name} ({ticker.upper()}) — {r.fiscal_period} FY{r.fiscal_year} Disclosures\n"
+                            f"Period Ended: {r.period_end}\n"
+                            f"Source Filing: {r.press_release_source or 'SEC 8-K Ex-99'}\n"
+                            f"================================================================================\n\n"
+                            f"[MANAGEMENT GUIDANCE]\n"
+                            f"{r.guidance or 'No quantitative guidance excerpted for this period.'}\n\n"
+                            f"[EXECUTIVE COMMENTARY]\n"
+                            f"{r.executive_commentary or 'No executive remarks excerpted for this period.'}\n\n"
+                            f"[PRESS RELEASE TEXT]\n"
+                            f"{r.press_release_highlights or 'No press release text available.'}\n"
+                        )
+                        zf.writestr(f"disclosures/{ticker.upper()}_{clean_fp}_disclosure.txt", doc_text)
+
+                # 3. Risk factors if present
+                if company.risk_factors:
+                    rf_text = (
+                        f"================================================================================\n"
+                        f"{company.name} ({ticker.upper()}) — 10-K Item 1A Risk Factors\n"
+                        f"Source: {company.risk_factors_source or 'SEC 10-K'}\n"
+                        f"================================================================================\n\n"
+                        f"{company.risk_factors}\n"
+                    )
+                    zf.writestr(f"{ticker.upper()}_risk_factors.txt", rf_text)
+
+                # 4. README.txt
+                readme_text = (
+                    f"Tickerlens Financial Data & Filings Export\n"
+                    f"==========================================\n"
+                    f"Company: {company.name} ({ticker.upper()})\n"
+                    f"CIK: {company.cik}\n"
+                    f"Sector: {sector_for_sic(company.sic) or 'Unknown'}\n"
+                    f"Export Date: {dt.date.today().isoformat()}\n"
+                    f"Quarterly Periods Included: {len(rows)}\n\n"
+                    f"Files in this Archive:\n"
+                    f"- {ticker.lower()}_financials.csv: Comprehensive GAAP financial statement history.\n"
+                    f"- disclosures/: Raw text of 8-K Ex-99 earnings press releases, guidance, and executive remarks.\n"
+                    f"- {ticker.upper()}_risk_factors.txt: 10-K Item 1A Risk Factors.\n\n"
+                    f"Generated by Tickerlens (SEC EDGAR companyfacts & filings engine).\n"
+                )
+                zf.writestr("README.txt", readme_text)
+
+            return zip_buf.getvalue()
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -645,6 +853,169 @@ def _compute_kpi_yoy(current_kpi: KPISnapshot, prior_kpi: KPISnapshot) -> KPICha
         operating_cash_flow=_pct_change(current_kpi.operating_cash_flow, prior_kpi.operating_cash_flow),
         capex=_pct_change(current_kpi.capex, prior_kpi.capex),
     )
+
+
+def _build_range_data(
+    all_rows: list[QuarterlyFinancial],
+    granularity: str,
+    range_start: str | None,
+    range_end: str | None,
+    quarter_options: list[str],
+    year_options: list[int],
+    latest: QuarterlyFinancial,
+) -> tuple[
+    RangeSummary,
+    list[PeriodData],
+    PeriodData,
+    str,
+    str,
+    list[str],
+    list[str],
+    dict[str, list[float | None]],
+]:
+    """Build RangeSummary and list of PeriodData for consecutive multi-period ranges."""
+    if granularity == "yearly":
+        sorted_years = sorted(year_options)
+        start_yr: int | None = None
+        end_yr: int | None = None
+        if range_start:
+            try:
+                start_yr = int(range_start.replace("FY", ""))
+            except ValueError:
+                pass
+        if range_end:
+            try:
+                end_yr = int(range_end.replace("FY", ""))
+            except ValueError:
+                pass
+
+        if start_yr is None or start_yr not in sorted_years:
+            start_yr = sorted_years[max(0, len(sorted_years) - 3)]
+        if end_yr is None or end_yr not in sorted_years:
+            end_yr = sorted_years[-1]
+
+        if start_yr > end_yr:
+            start_yr, end_yr = end_yr, start_yr
+
+        selected_years = [y for y in sorted_years if start_yr <= y <= end_yr]
+        range_periods: list[PeriodData] = []
+        for yr in selected_years:
+            p = _build_yearly_period(all_rows, yr, year_options[0])
+            range_periods.append(p)
+
+        total_rev = _sum_nullable(*[p.kpi.revenue for p in range_periods])
+        total_ni = _sum_nullable(*[p.kpi.net_income for p in range_periods])
+        total_fcf = _sum_nullable(*[p.kpi.free_cash_flow for p in range_periods])
+        total_ocf = _sum_nullable(*[p.kpi.operating_cash_flow for p in range_periods])
+        total_capex = _sum_nullable(*[p.kpi.capex for p in range_periods])
+        p_count = len(range_periods)
+        avg_rev = (total_rev / p_count) if (total_rev is not None and p_count > 0) else None
+        c_net_margin = (total_ni / total_rev * 100) if (total_ni is not None and total_rev and total_rev > 0) else None
+        c_fcf_margin = (total_fcf / total_rev * 100) if (total_fcf is not None and total_rev and total_rev > 0) else None
+        rev_growth = _pct_change(range_periods[-1].kpi.revenue, range_periods[0].kpi.revenue)
+        ni_growth = _pct_change(range_periods[-1].kpi.net_income, range_periods[0].kpi.net_income)
+
+        start_lbl = f"FY{start_yr}"
+        end_lbl = f"FY{end_yr}"
+        summary = RangeSummary(
+            start_label=start_lbl,
+            end_label=end_lbl,
+            period_count=p_count,
+            total_revenue=total_rev,
+            total_net_income=total_ni,
+            total_free_cash_flow=total_fcf,
+            total_operating_cash_flow=total_ocf,
+            total_capex=total_capex,
+            avg_revenue=avg_rev,
+            cumulative_net_margin=c_net_margin,
+            cumulative_fcf_margin=c_fcf_margin,
+            revenue_growth_pct=rev_growth,
+            net_income_growth_pct=ni_growth,
+        )
+        current = range_periods[-1]
+        chart_dates = [f"{p.fiscal_year}-12-31" for p in range_periods]
+        chart_labels = [p.label for p in range_periods]
+        chart_metrics = {
+            "revenue": [p.kpi.revenue for p in range_periods],
+            "net_income": [p.kpi.net_income for p in range_periods],
+            "free_cash_flow": [p.kpi.free_cash_flow for p in range_periods],
+            "operating_cash_flow": [p.kpi.operating_cash_flow for p in range_periods],
+            "capex": [p.kpi.capex for p in range_periods],
+            "eps_diluted": [p.kpi.eps_diluted for p in range_periods],
+            "eps_basic": [p.kpi.eps_basic for p in range_periods],
+            "total_assets": [p.balance_sheet.total_assets for p in range_periods],
+            "total_liabilities": [p.balance_sheet.total_liabilities for p in range_periods],
+            "total_equity": [p.balance_sheet.total_equity for p in range_periods],
+            "cash_and_equivalents": [p.balance_sheet.cash_and_equivalents for p in range_periods],
+        }
+        return summary, range_periods, current, start_lbl, end_lbl, chart_dates, chart_labels, chart_metrics
+    else:
+        labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
+        if range_start is None or range_start not in labels:
+            start_idx = max(0, len(all_rows) - 4)
+        else:
+            start_idx = labels.index(range_start)
+
+        if range_end is None or range_end not in labels:
+            end_idx = len(all_rows) - 1
+        else:
+            end_idx = labels.index(range_end)
+
+        if start_idx > end_idx:
+            start_idx, end_idx = end_idx, start_idx
+
+        range_rows = all_rows[start_idx : end_idx + 1]
+        range_periods = []
+        for r in range_rows:
+            p, _ = _build_quarterly_period(all_rows, f"{r.fiscal_period} FY{r.fiscal_year}", latest)
+            range_periods.append(p)
+
+        total_rev = _sum_nullable(*[r.revenue for r in range_rows])
+        total_ni = _sum_nullable(*[r.net_income for r in range_rows])
+        total_fcf = _sum_nullable(*[r.free_cash_flow for r in range_rows])
+        total_ocf = _sum_nullable(*[r.operating_cash_flow for r in range_rows])
+        total_capex = _sum_nullable(*[r.capex for r in range_rows])
+        p_count = len(range_rows)
+        avg_rev = (total_rev / p_count) if (total_rev is not None and p_count > 0) else None
+        c_net_margin = (total_ni / total_rev * 100) if (total_ni is not None and total_rev and total_rev > 0) else None
+        c_fcf_margin = (total_fcf / total_rev * 100) if (total_fcf is not None and total_rev and total_rev > 0) else None
+        rev_growth = _pct_change(range_rows[-1].revenue, range_rows[0].revenue)
+        ni_growth = _pct_change(range_rows[-1].net_income, range_rows[0].net_income)
+
+        start_lbl = labels[start_idx]
+        end_lbl = labels[end_idx]
+        summary = RangeSummary(
+            start_label=start_lbl,
+            end_label=end_lbl,
+            period_count=p_count,
+            total_revenue=total_rev,
+            total_net_income=total_ni,
+            total_free_cash_flow=total_fcf,
+            total_operating_cash_flow=total_ocf,
+            total_capex=total_capex,
+            avg_revenue=avg_rev,
+            cumulative_net_margin=c_net_margin,
+            cumulative_fcf_margin=c_fcf_margin,
+            revenue_growth_pct=rev_growth,
+            net_income_growth_pct=ni_growth,
+        )
+        current = range_periods[-1]
+        chart_dates = [r.period_end.isoformat() for r in range_rows]
+        chart_labels = [r.period_end.strftime("%b '%y") for r in range_rows]
+        chart_metrics = {
+            "revenue": [r.revenue for r in range_rows],
+            "net_income": [r.net_income for r in range_rows],
+            "free_cash_flow": [r.free_cash_flow for r in range_rows],
+            "operating_cash_flow": [r.operating_cash_flow for r in range_rows],
+            "capex": [r.capex for r in range_rows],
+            "eps_diluted": [r.eps_diluted for r in range_rows],
+            "eps_basic": [r.eps_basic for r in range_rows],
+            "total_assets": [r.total_assets for r in range_rows],
+            "total_liabilities": [r.total_liabilities for r in range_rows],
+            "total_equity": [r.total_equity for r in range_rows],
+            "cash_and_equivalents": [r.cash_and_equivalents for r in range_rows],
+        }
+        return summary, range_periods, current, start_lbl, end_lbl, chart_dates, chart_labels, chart_metrics
 
 
 def _parse_quarter_label(label: str) -> tuple[str, int] | None:

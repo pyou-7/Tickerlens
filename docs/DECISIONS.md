@@ -177,3 +177,25 @@ Format:
 **Alternatives considered:**
 - Cookie-based theme toggling with server-side class rendering (rejected: requires server round-trip or full reload to switch themes).
 - Continued HTMX outerHTML swaps for Plotly metric buttons (rejected: Plotly redraws are 100x faster and flicker-free when executed directly via `Plotly.react` in client state).
+
+---
+
+## 2026-09-27 — Time Slicer Range Mode (PRD §4.2 / §4.3)
+
+**What:** Implemented multi-period contiguous slicing in `FinancialsService._build_range_data`, returning a `RangeSummary` and a chronological list of `PeriodData` periods. Detail view (`detail.html`) now features a mode toggle between "Single Period" and "Range Mode" with dynamic `From` and `To` dropdowns. When active, detail view renders Range Aggregate hero KPI cards (Cumulative Revenue with period growth badge, Cumulative Net Income with margin badge, Cumulative Free Cash Flow with margin badge, and Average Revenue) alongside multi-period comparative tables for Income Statement, Cash Flow, and Balance Sheet with sticky metric titles and a highlighted summary column.
+**Why:** Investors frequently analyze multi-quarter or multi-year cycles (e.g. FY2024 through FY2026, or a 4-quarter product ramp) rather than isolated single periods. Range Mode provides instant aggregated totals and side-by-side progression across custom contiguous periods without manual spreadsheet exports.
+**Alternatives considered:** Client-side summing of table rows (rejected: server-side slicing guarantees consistent period ordering, proper accounting identity enforcement, and accurate percentage growth computations across varying fiscal year structures).
+
+---
+
+## 2026-09-27 — In-Memory One-Click Earnings ZIP Export (PRD §4.8)
+
+**What:** Added `GET /company/{ticker}/export-zip` and `FinancialsService.export_zip(ticker, range_start, range_end)`. Generates an in-memory ZIP streaming archive containing:
+1. `{ticker}_financials.csv`: Structured CSV containing all periods with Income Statement, Cash Flow, Balance Sheet, and per-share fundamentals.
+2. `disclosures/`: Text files for every available period containing primary source EDGAR earnings press releases (8-K Ex-99), management guidance, and executive commentary. Filenames are deduplicated by fiscal period and period-end date.
+3. `{ticker}_risk_factors.txt`: Item 1A Risk Factors extracted from the latest 10-K filing.
+4. `README.txt`: Manifest documenting metadata, extraction provenance, period coverage, and disclaimer.
+Added export buttons to the slicer toolbar and floating action pill on company detail pages.
+**Why:** Analysts require raw fundamental data and primary source earnings commentary bundled together for offline modeling, archival, and deep analysis without having to download multiple documents individually from SEC EDGAR.
+**Alternatives considered:** Disk-based temporary file caching (rejected: in-memory `io.BytesIO` generation is fast (<50ms), eliminates cleanup cron jobs and orphaned files, and streams cleanly via FastAPI `StreamingResponse`).
+
