@@ -384,12 +384,16 @@ def test_build_yearly_period_computes_yoy_vs_prior_year() -> None:
     rows = [
         _row(period_end=dt.date(2024, 3, 31),  fiscal_year=2024, fiscal_period="Q1", revenue=90.0),
         _row(period_end=dt.date(2024, 6, 30),  fiscal_year=2024, fiscal_period="Q2", revenue=80.0),
+        _row(period_end=dt.date(2024, 9, 30),  fiscal_year=2024, fiscal_period="Q3", revenue=85.0),
+        _row(period_end=dt.date(2024, 12, 31), fiscal_year=2024, fiscal_period="Q4", revenue=95.0),
         _row(period_end=dt.date(2025, 3, 31),  fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
         _row(period_end=dt.date(2025, 6, 30),  fiscal_year=2025, fiscal_period="Q2", revenue=85.0),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3", revenue=90.0),
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4", revenue=100.0),
     ]
     data = _build_yearly_period(rows, selected_year=2025, default_year=2025)
-    prior_rev = 90.0 + 80.0
-    current_rev = 95.0 + 85.0
+    prior_rev = 90.0 + 80.0 + 85.0 + 95.0
+    current_rev = 95.0 + 85.0 + 90.0 + 100.0
     expected_yoy = (current_rev - prior_rev) / prior_rev * 100
     assert data.yoy.revenue == pytest.approx(expected_yoy)
 
@@ -809,3 +813,42 @@ def test_enrich_company_updates_price_on_quote_success(session: Session) -> None
     session.refresh(company)
     assert company.last_price == pytest.approx(341.07)
     assert company.market_cap == pytest.approx(5_100_000_000_000.0)
+
+
+def _fy_rows(cik: str, year: int, quarters: int):
+    months = [3, 6, 9, 12]
+    return [
+        _row(cik=cik, period_end=dt.date(year, months[i], 28), fiscal_year=year,
+             fiscal_period=f"Q{i + 1}", revenue=100.0 * (i + 1))
+        for i in range(quarters)
+    ]
+
+
+def test_yearly_yoy_empty_when_prior_year_incomplete(session: Session) -> None:
+    """YoY must not compare a full-year sum against a partial prior year."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add_all(_fy_rows(cik, 2025, 4) + _fy_rows(cik, 2024, 1))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
+    assert ctx.current.kpi.revenue == pytest.approx(1000.0)  # 100+200+300+400
+    assert ctx.current.yoy.revenue is None
+
+
+def test_yearly_yoy_computed_when_both_years_complete(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add_all(_fy_rows(cik, 2025, 4) + _fy_rows(cik, 2024, 4))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
+    assert ctx.current.yoy.revenue == pytest.approx(0.0)  # identical sums

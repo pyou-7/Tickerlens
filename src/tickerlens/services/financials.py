@@ -757,7 +757,15 @@ def _build_yearly_period(
     kpi = _compute_ttm(year_rows)
 
     prior_rows = [r for r in all_rows if r.fiscal_year == selected_year - 1]
-    yoy = _compute_kpi_yoy(kpi, _compute_ttm(prior_rows)) if prior_rows else KPIChange()
+    # A year-over-year % is only meaningful when both years are complete
+    # 4-quarter aggregates; otherwise a 4-quarter sum would be compared
+    # against a partial-year sum (e.g. 338% "growth" from a single prior
+    # quarter). Incomplete comparisons render as "—".
+    yoy = (
+        _compute_kpi_yoy(kpi, _compute_ttm(prior_rows))
+        if len(year_rows) == 4 and len(prior_rows) == 4
+        else KPIChange()
+    )
 
     # Balance sheet is a point-in-time value — use the year's last quarter (year end),
     # not a sum, and compare against the prior year's last quarter.
