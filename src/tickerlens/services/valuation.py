@@ -54,6 +54,7 @@ class ValuationSignal(BaseModel):
     current_multiple: float | None  # where the market prices it today
     growth_pct: float | None  # the growth input, in percent
     reasoning: list[str]
+    fcf_note: str | None = None  # FCF-yield cross-check footnote (PRD §4.11)
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -72,6 +73,93 @@ def _signal_for_upside(upside_pct: float) -> str:
     return "Strong Sell"
 
 
+# FCF-yield hurdle for the cross-check footnote: roughly the long-run
+# earnings yield of the broad market.
+_FCF_YIELD_HURDLE_PCT = 4.0
+
+_BULLISH_SIGNALS = {"Strong Buy", "Buy"}
+_BEARISH_SIGNALS = {"Strong Sell", "Sell"}
+
+
+def _fcf_cross_check_note(
+    signal: str,
+    ttm_free_cash_flow: float | None,
+    market_cap: float | None,
+) -> str:
+    """One-line cash-flow footnote for the valuation card (PRD §4.11).
+
+    Independent of the PEG/sales model — it never changes the signal, only
+    adds context. Negative or missing FCF is reported honestly instead of
+    hidden.
+    """
+    if ttm_free_cash_flow is None or market_cap is None or market_cap <= 0:
+        return "Cross-check unavailable: TTM free cash flow or market cap not reported."
+    fcf_yield = ttm_free_cash_flow / market_cap * 100.0
+    if ttm_free_cash_flow <= 0:
+        if signal in _BEARISH_SIGNALS:
+            return (
+                f"Cross-check: TTM free cash flow is negative "
+                f"(FCF yield {fcf_yield:.1f}%) — consistent with the {signal} signal."
+            )
+        return (
+            f"Cross-check: TTM free cash flow is negative "
+            f"(FCF yield {fcf_yield:.1f}%) — the business is burning cash, "
+            f"which tempers the {signal} signal."
+        )
+    base = (
+        f"Cross-check: FCF yield {fcf_yield:.1f}% "
+        f"({'above' if fcf_yield >= _FCF_YIELD_HURDLE_PCT else 'below'} "
+        f"the {_FCF_YIELD_HURDLE_PCT:.0f}% hurdle)."
+    )
+    if signal in _BULLISH_SIGNALS:
+        verdict = (
+            "Supports the signal — cheap on cash too."
+            if fcf_yield >= _FCF_YIELD_HURDLE_PCT
+            else "Tempers the signal — pricey on cash flow."
+        )
+    elif signal in _BEARISH_SIGNALS:
+        verdict = (
+            "Tempers the signal — cheap on cash flow."
+            if fcf_yield >= _FCF_YIELD_HURDLE_PCT
+            else "Supports the signal — expensive on cash as well."
+        )
+    else:
+        verdict = ""
+    return f"{base} {verdict}".rstrip()
+
+
+def _guardrail_note(
+    growth_pct: float,
+    growth_lo: float,
+    growth_hi: float,
+    raw_multiple: float,
+    multiple_lo: float,
+    multiple_hi: float,
+    multiple_name: str,
+) -> str | None:
+    """Name the clamp bound(s) driving the target, or None if none bound.
+
+    Takes the *pre-clamp* multiple: when a guardrail binds, the signal is
+    driven by the guardrail rather than the data — the card must say so and
+    cap confidence at Medium (PRD §4.11).
+    """
+    hit: list[str] = []
+    if growth_pct < growth_lo:
+        hit.append(f"growth {growth_pct:.1f}% hit the {growth_lo:.0f}% floor")
+    elif growth_pct > growth_hi:
+        hit.append(f"growth {growth_pct:.1f}% hit the {growth_hi:.0f}% cap")
+    if raw_multiple < multiple_lo:
+        hit.append(f"fair {multiple_name} hit the {multiple_lo:.0f}× floor")
+    elif raw_multiple > multiple_hi:
+        hit.append(f"fair {multiple_name} hit the {multiple_hi:.0f}× cap")
+    if not hit:
+        return None
+    return (
+        "Note: " + " and ".join(hit) + " — the target is driven by the "
+        "model's guardrails, so confidence is capped at Medium."
+    )
+
+
 def compute_valuation(
     *,
     ticker: str,
@@ -83,12 +171,16 @@ def compute_valuation(
     shares_outstanding: float | None,
     ttm_quarters: int = 4,
     growth_is_fallback: bool = False,
+    ttm_free_cash_flow: float | None = None,
+    market_cap: float | None = None,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
     Pure function — all inputs are plain numbers so the math is unit-testable
     without a database. ``growth_is_fallback`` marks that the growth input
     came from a quarterly YoY / net-income proxy rather than TTM-over-TTM.
+    ``ttm_free_cash_flow`` / ``market_cap`` feed the FCF-yield cross-check
+    footnote only; they never change the signal.
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -117,28 +209,40 @@ def compute_valuation(
     # ── Primary: PEG-implied P/E ──────────────────────────────────────────
     if ttm_eps_diluted is not None and ttm_eps_diluted > 0 and eps_growth_pct is not None:
         growth = _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
-        fair_pe = _clamp(PEG_TARGET * growth, _MIN_PE, _MAX_PE)
+        raw_pe = PEG_TARGET * growth
+        fair_pe = _clamp(raw_pe, _MIN_PE, _MAX_PE)
         target = ttm_eps_diluted * fair_pe
         current_pe = current_price / ttm_eps_diluted
         upside = (target - current_price) / current_price * 100.0
+        signal = _signal_for_upside(upside)
+        guardrail_note = _guardrail_note(
+            eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT,
+            raw_pe, _MIN_PE, _MAX_PE, "P/E",
+        )
+        if guardrail_note is not None:
+            confidence = "Medium"  # cap: the guardrail, not the data, drives the target
+        reasoning = [
+            f"TTM diluted EPS ${ttm_eps_diluted:.2f}, growing {eps_growth_pct:.1f}% year over year.",
+            f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
+            f"(current P/E is {current_pe:.1f}×).",
+            f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
+            f"({upside:+.1f}% implied upside).",
+        ]
+        if guardrail_note is not None:
+            reasoning.append(guardrail_note)
         return ValuationSignal(
             ticker=ticker,
             current_price=current_price,
             target_price=round(target, 2),
             upside_pct=round(upside, 1),
-            signal=_signal_for_upside(upside),
+            signal=signal,
             confidence=confidence,
             method="peg",
             fair_multiple=round(fair_pe, 1),
             current_multiple=round(current_pe, 1),
             growth_pct=round(eps_growth_pct, 1),
-            reasoning=[
-                f"TTM diluted EPS ${ttm_eps_diluted:.2f}, growing {eps_growth_pct:.1f}% year over year.",
-                f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
-                f"(current P/E is {current_pe:.1f}×).",
-                f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
-                f"({upside:+.1f}% implied upside).",
-            ],
+            reasoning=reasoning,
+            fcf_note=_fcf_cross_check_note(signal, ttm_free_cash_flow, market_cap),
         )
 
     # ── Fallback: sales-based target when earnings are unusable ────────────
@@ -150,28 +254,41 @@ def compute_valuation(
         and shares_outstanding > 0
     ):
         growth = _clamp(revenue_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
-        fair_ps = _clamp(0.5 * growth, _MIN_PS, _MAX_PS)
+        raw_ps = 0.5 * growth
+        fair_ps = _clamp(raw_ps, _MIN_PS, _MAX_PS)
         target = ttm_revenue * fair_ps / shares_outstanding
         current_ps = current_price * shares_outstanding / ttm_revenue
         upside = (target - current_price) / current_price * 100.0
+        signal = _signal_for_upside(upside)
+        guardrail_note = _guardrail_note(
+            revenue_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT,
+            raw_ps, _MIN_PS, _MAX_PS, "P/S",
+        )
+        sales_confidence = "Medium" if confidence == "High" else confidence
+        if guardrail_note is not None:
+            sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
+        reasoning = [
+            "No positive TTM earnings — valuing on sales instead (less reliable).",
+            f"TTM revenue growing {revenue_growth_pct:.1f}% implies a fair P/S of {fair_ps:.1f}× "
+            f"(current P/S is {current_ps:.1f}×).",
+            f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
+            f"({upside:+.1f}% implied upside).",
+        ]
+        if guardrail_note is not None:
+            reasoning.append(guardrail_note)
         return ValuationSignal(
             ticker=ticker,
             current_price=current_price,
             target_price=round(target, 2),
             upside_pct=round(upside, 1),
-            signal=_signal_for_upside(upside),
-            confidence="Medium" if confidence == "High" else confidence,
+            signal=signal,
+            confidence=sales_confidence,
             method="sales",
             fair_multiple=round(fair_ps, 1),
             current_multiple=round(current_ps, 1),
             growth_pct=round(revenue_growth_pct, 1),
-            reasoning=[
-                "No positive TTM earnings — valuing on sales instead (less reliable).",
-                f"TTM revenue growing {revenue_growth_pct:.1f}% implies a fair P/S of {fair_ps:.1f}× "
-                f"(current P/S is {current_ps:.1f}×).",
-                f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
-                f"({upside:+.1f}% implied upside).",
-            ],
+            reasoning=reasoning,
+            fcf_note=_fcf_cross_check_note(signal, ttm_free_cash_flow, market_cap),
         )
 
     # ── Nothing usable ────────────────────────────────────────────────────

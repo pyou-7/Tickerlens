@@ -226,7 +226,11 @@ The primary way to open a company. Modeled on the **combobox / command-palette p
 | −25% to −10% | Sell |
 | < −25% | Strong Sell |
 
-**Confidence:** High = full 4-quarter TTM plus prior-year TTM for growth; Medium = partial history or growth fallback used; the card always names the method and inputs so the number is auditable.
+**Confidence:** High = full 4-quarter TTM plus prior-year TTM for growth; Medium = partial history or growth fallback used; capped at Medium whenever a clamp bound binds (see below) — the card then says so explicitly.
+
+**Guardrail honesty (added 2026-09-28):** The growth [2%, 40%] and multiple [8×–40× P/E / 1×–10× P/S] clamps keep the heuristic from producing absurd multiples, but when a bound binds, the signal is driven by the guardrail rather than the data. In that case confidence can be at most Medium and the card appends a note naming which bound bound (e.g. "growth −7.8% hit the 2% floor, so the 8× floor P/E drives the target").
+
+**FCF-yield cross-check (added 2026-09-28):** The card carries a one-line cash-flow footnote independent of the PEG/sales model: TTM free cash flow (filing-derived) ÷ market cap, versus a 4% hurdle (rough long-run market earnings yield). It states the yield and whether it supports or tempers the signal (e.g. a Buy with a 1% FCF yield is "pricey on cash flow"); negative or missing FCF is reported honestly instead of hidden. The PEG/sales target remains the primary model — the cross-check never changes the signal, only adds context.
 
 **Deliberately v1-limited:** single-factor (growth-implied multiple) heuristic, not a DCF; ignores balance-sheet strength, moat, and macro. It is a *precursor* to the §4.4 AI analysis (Phase 5), which will layer the market-cap-tiered factor model and LLM reasoning on top — the Invest / Swing / Watch / Avoid signals there remain the long-term framework. The card carries a one-line "model estimate, not investment advice" note.
 

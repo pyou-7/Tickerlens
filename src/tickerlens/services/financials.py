@@ -458,6 +458,8 @@ class FinancialsService:
                 shares_outstanding=shares_outstanding,
                 ttm_quarters=min(4, len(rows)),
                 growth_is_fallback=growth_is_fallback,
+                ttm_free_cash_flow=ttm.free_cash_flow,
+                market_cap=company.market_cap,
             )
         finally:
             if session is None and self._session is None:

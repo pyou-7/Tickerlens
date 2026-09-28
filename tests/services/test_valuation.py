@@ -91,3 +91,77 @@ def test_partial_history_lowers_confidence():
     assert v.confidence == "Medium"
     v = _base(growth_is_fallback=True)
     assert v.confidence == "Medium"
+
+
+# ── FCF-yield cross-check + guardrail honesty (PRD §4.11) ─────────────────────
+
+def test_fcf_note_supports_bullish_signal():
+    v = _base(ttm_free_cash_flow=60_000_000.0, market_cap=1_000_000_000.0)
+    assert v.signal == "Strong Buy"
+    assert "FCF yield 6.0%" in v.fcf_note
+    assert "above the 4% hurdle" in v.fcf_note
+    assert "Supports the signal" in v.fcf_note
+
+
+def test_fcf_note_tempers_bullish_signal():
+    v = _base(ttm_free_cash_flow=10_000_000.0, market_cap=1_000_000_000.0)
+    assert v.signal == "Strong Buy"
+    assert "FCF yield 1.0%" in v.fcf_note
+    assert "below the 4% hurdle" in v.fcf_note
+    assert "Tempers the signal" in v.fcf_note
+
+
+def test_fcf_note_supports_bearish_signal_when_cash_expensive():
+    # growth 2% -> floor P/E 8x -> target 40 vs price 100 -> Strong Sell
+    v = _base(eps_growth_pct=2.0, ttm_free_cash_flow=10_000_000.0,
+              market_cap=1_000_000_000.0)
+    assert v.signal == "Strong Sell"
+    assert "Supports the signal" in v.fcf_note
+
+
+def test_fcf_note_tempers_bearish_signal_when_cash_cheap():
+    v = _base(eps_growth_pct=2.0, ttm_free_cash_flow=80_000_000.0,
+              market_cap=1_000_000_000.0)
+    assert v.signal == "Strong Sell"
+    assert "Tempers the signal" in v.fcf_note
+
+
+def test_fcf_note_negative_cash_flow_bullish():
+    v = _base(ttm_free_cash_flow=-50_000_000.0, market_cap=1_000_000_000.0)
+    assert "negative" in v.fcf_note
+    assert "burning cash" in v.fcf_note
+
+
+def test_fcf_note_negative_cash_flow_bearish():
+    v = _base(eps_growth_pct=2.0, ttm_free_cash_flow=-50_000_000.0,
+              market_cap=1_000_000_000.0)
+    assert "consistent with the Strong Sell signal" in v.fcf_note
+
+
+def test_fcf_note_unavailable_without_inputs():
+    v = _base()
+    assert v.fcf_note == "Cross-check unavailable: TTM free cash flow or market cap not reported."
+
+
+def test_guardrail_caps_confidence_and_names_bound():
+    # Mirror the JNJ case: negative growth slams into both the growth floor
+    # and the P/E floor; High confidence would overstate the model's certainty.
+    v = _base(current_price=271.85, ttm_eps_diluted=8.62, eps_growth_pct=-7.8)
+    assert v.signal == "Strong Sell"
+    assert v.confidence == "Medium"
+    notes = [p for p in v.reasoning if p.startswith("Note:")]
+    assert len(notes) == 1
+    assert "growth -7.8% hit the 2% floor" in notes[0]
+    assert "fair P/E hit the 8× floor" in notes[0]
+
+
+def test_guardrail_cap_on_growth_cap_side():
+    v = _base(eps_growth_pct=95.0)
+    assert v.confidence == "Medium"
+    assert any("hit the 40% cap" in p for p in v.reasoning)
+
+
+def test_no_guardrail_keeps_high_confidence():
+    v = _base()
+    assert v.confidence == "High"
+    assert not any(p.startswith("Note:") for p in v.reasoning)

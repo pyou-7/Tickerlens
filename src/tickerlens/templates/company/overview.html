@@ -158,6 +158,9 @@
       <li>{{ point }}</li>
       {% endfor %}
     </ul>
+    {% if valuation.fcf_note %}
+    <p class="text-xs text-gray-500 mb-3">🔍 {{ valuation.fcf_note }}</p>
+    {% endif %}
     <p class="text-xs text-gray-600">Model estimate based on SEC filings — not investment advice.</p>
   </div>
 </div>
