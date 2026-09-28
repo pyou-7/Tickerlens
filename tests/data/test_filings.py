@@ -194,6 +194,38 @@ def test_extract_pr_highlights_falls_back_to_lede() -> None:
     assert "forward-looking statements" not in result.lower()
 
 
+def test_extract_pr_highlights_skips_sec_exhibit_headers() -> None:
+    """Regression: real EDGAR ex-99 exhibits (e.g. Apple's) open with SEC
+    exhibit headers — EX-99.1 labels, page numbers, filenames — that must not
+    be mistaken for the headline or consume the lede budget."""
+    lede = (
+        "CUPERTINO, California — Acme Corp today announced financial results for its "
+        "fiscal 2025 fourth quarter ended December 31, 2025. The Company posted quarterly "
+        "revenue of 50.2 billion dollars, up 8 percent year over year, and quarterly diluted "
+        "earnings per share of 2.10 dollars, up 12 percent year over year. Gross margin was "
+        "44 percent, reflecting a strong product mix and continued services growth."
+    )
+    html = f"""<html><head><title>EX-99.1</title></head><body>
+<p>EX-99.1</p><p>2</p><p>a8-kex991q4202509272025.htm</p><p>EX-99.1</p>
+<p>Exhibit 99.1</p>
+<h1>Acme Corp Reports Fourth Quarter 2025 Results</h1>
+<p>iPhone drives record September quarter revenue</p>
+<p>{lede}</p><p>Services revenue reaches new all-time high, up 14 percent.</p>
+<p>The board of directors declared a cash dividend of 0.25 dollars per share, payable
+in January to shareholders of record, reflecting confidence in the Company's
+long-term cash generation and capital return program.</p>
+<h2>ABOUT ACME CORP</h2><p>Acme Corp designs and sells widgets worldwide.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("Acme Corp Reports Fourth Quarter 2025 Results")
+    assert "CUPERTINO, California" in result
+    assert "EX-99.1" not in result
+    assert "a8-kex991q4202509272025.htm" not in result
+    assert "Exhibit 99.1" not in result
+    assert "widgets worldwide" not in result.lower()
+
+
 def test_extract_pr_highlights_returns_none_for_stub() -> None:
     assert extract_press_release_highlights("<html><body>too short</body></html>") is None
 

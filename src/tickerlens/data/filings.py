@@ -62,9 +62,16 @@ _BOILERPLATE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Release-admin lines that precede the real headline in many exhibits.
+# Release-admin lines that precede the real headline in many exhibits:
+# "For Immediate Release" banners plus the SEC exhibit headers EDGAR renders
+# at the top of ex-99 docs (EX-99.1 labels, page numbers, exhibit filenames).
 _ADMIN_LINE_RE = re.compile(
-    r"^(for immediate release|news release|press release)\b", re.IGNORECASE
+    r"^(for immediate release|news release|press release)\b"
+    r"|^ex-?99\.1\b"  # EX-99.1
+    r"|^exhibit\s+99\b"  # Exhibit 99.1
+    r"|^\d{1,3}$"  # page numbers
+    r"|^\S+\.html?$",  # exhibit filename lines
+    re.IGNORECASE,
 )
 
 # An explicit "Highlights" / "Financial Highlights" section heading.
@@ -172,6 +179,8 @@ def extract_press_release_highlights(
         # Fallback: the lede — opening paragraphs before boilerplate begins.
         lede: list[str] = []
         for ln in body_lines:
+            if _ADMIN_LINE_RE.match(ln):
+                continue  # stray exhibit headers / page numbers mid-document
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)
@@ -200,6 +209,8 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
             continue
         collected: list[str] = []
         for follow in lines[i + 1:]:
+            if _ADMIN_LINE_RE.match(follow):
+                continue  # stray exhibit headers / page numbers mid-document
             if _BOILERPLATE_RE.match(follow):
                 break
             if follow.isupper() and len(follow) <= 80:
