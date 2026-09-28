@@ -757,3 +757,55 @@ def test_get_detail_yearly_uses_q4_highlights(session: Session) -> None:
     ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
     assert ctx.press_release_highlights == "Q4 annual highlights"
     assert ctx.press_release_source == "Earnings release Q4 FY2025"
+
+
+def test_enrich_company_keeps_price_on_quote_failure(session: Session) -> None:
+    """A transient Yahoo failure (quote fields None) must not wipe a
+    previously-good last_price / market_cap — same never-wipe policy as
+    risk factors and press-release highlights."""
+    from unittest.mock import patch
+
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.last_price = 341.07
+    company.market_cap = 5_000_000_000_000.0
+    session.add(company)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    with patch("tickerlens.services.financials.get_quote") as q, \
+         patch("tickerlens.services.financials.get_description", return_value="desc"), \
+         patch("tickerlens.services.financials.discover_earnings_filings", return_value=[]):
+        q.return_value = MagicMock(last_price=None, market_cap=None)
+        svc.enrich_company("AAPL", session=session)
+
+    session.refresh(company)
+    assert company.last_price == pytest.approx(341.07)
+    assert company.market_cap == pytest.approx(5_000_000_000_000.0)
+
+
+def test_enrich_company_updates_price_on_quote_success(session: Session) -> None:
+    from unittest.mock import patch
+
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.last_price = 300.0
+    session.add(company)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    with patch("tickerlens.services.financials.get_quote") as q, \
+         patch("tickerlens.services.financials.get_description", return_value="desc"), \
+         patch("tickerlens.services.financials.discover_earnings_filings", return_value=[]):
+        q.return_value = MagicMock(last_price=341.07, market_cap=5_100_000_000_000.0)
+        svc.enrich_company("AAPL", session=session)
+
+    session.refresh(company)
+    assert company.last_price == pytest.approx(341.07)
+    assert company.market_cap == pytest.approx(5_100_000_000_000.0)

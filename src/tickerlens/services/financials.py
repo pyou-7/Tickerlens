@@ -216,8 +216,13 @@ class FinancialsService:
             quote = get_quote(ticker)
             description = get_description(company.name)
 
-            company.last_price = quote.last_price
-            company.market_cap = quote.market_cap
+            # Price and market cap are point-in-time snapshots; never wipe a
+            # previously-good value when a transient quote failure returns None
+            # (same policy as risk factors and press-release highlights below).
+            if quote.last_price is not None:
+                company.last_price = quote.last_price
+            if quote.market_cap is not None:
+                company.market_cap = quote.market_cap
             company.description = description  # None clears a stale description
 
             # Risk factors are expensive to fetch and parse; only overwrite when
