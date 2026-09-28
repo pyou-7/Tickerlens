@@ -15,6 +15,7 @@ from tickerlens.services.financials import (
     build_period_csv,
     download_filename,
 )
+from tickerlens.services.search import get_search_entries, search_companies
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
@@ -124,6 +125,17 @@ def download_period_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{download_filename(ctx)}"'},
     )
+
+
+@router.get("/api/search")
+def api_search(q: str = "") -> dict:
+    """Autocomplete suggestions for the search combobox (PRD §4.10).
+
+    Matches ticker and company name with ranked suggestions; the client
+    navigates to ``/company/{ticker}``, which resolves the CIK live.
+    """
+    entries = get_search_entries(_svc.edgar_client)
+    return {"results": [r.model_dump() for r in search_companies(q, entries)]}
 
 
 @router.post("/company/{ticker}/refresh", response_class=HTMLResponse)

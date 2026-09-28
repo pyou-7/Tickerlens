@@ -33,7 +33,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Routes layer (`src/tickerlens/routes/`)
 
-- **`company.py`** — `GET /` (home), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich).
+- **`company.py`** — `GET /` (home), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer), `GET /api/search` (autocomplete suggestions, PRD §4.10).
 
 ### App entry
 

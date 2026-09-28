@@ -121,3 +121,45 @@ def test_build_period_csv_none_values_render_empty() -> None:
     assert "Net Income,23630.0,," in csv_text
     assert "None" not in csv_text
     assert download_filename(ctx) == "AAPL_Q3-FY2025.csv"
+
+
+# ── /api/search autocomplete (PRD §4.10) ─────────────────────────────────────
+
+SEARCH_FIXTURES = [
+    {"ticker": "AAPL", "name": "Apple Inc.", "cik": "0000320193"},
+    {"ticker": "TSLA", "name": "Tesla, Inc.", "cik": "0001318605"},
+]
+
+
+@pytest.fixture
+def search_client(monkeypatch) -> TestClient:
+    monkeypatch.setattr(
+        routes.company, "get_search_entries", lambda edgar_client: SEARCH_FIXTURES
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_api_search_ranks_ticker_prefix_first(search_client: TestClient) -> None:
+    resp = search_client.get("/api/search", params={"q": "aap"})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results[0]["ticker"] == "AAPL"
+    assert results[0]["cik"] == "0000320193"
+
+
+def test_api_search_matches_company_name(search_client: TestClient) -> None:
+    resp = search_client.get("/api/search", params={"q": "tesla"})
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["ticker"] == "TSLA"
+
+
+def test_api_search_empty_query_returns_no_results(search_client: TestClient) -> None:
+    resp = search_client.get("/api/search", params={"q": ""})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+def test_api_search_no_match_returns_empty_list(search_client: TestClient) -> None:
+    resp = search_client.get("/api/search", params={"q": "zzz-no-such"})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
