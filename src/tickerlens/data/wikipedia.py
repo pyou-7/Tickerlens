@@ -62,7 +62,11 @@ def _search_title(query: str) -> str | None:
         resp.raise_for_status()
         results = resp.json().get("query", {}).get("search", [])
         return results[0]["title"] if results else ""
-    except (httpx.HTTPError, httpx.TimeoutException, OSError):
+    # NOTE: httpx.InvalidURL is NOT an HTTPError subclass (inherits directly
+    # from Exception); it can be raised from broken proxy/env config before
+    # any request is made. Treat it as a network failure, per this module's
+    # None-on-error contract.
+    except (httpx.HTTPError, httpx.InvalidURL, OSError):
         logger.warning("Wikipedia search failed for %r", query, exc_info=True)
         return None
 
@@ -79,6 +83,10 @@ def _fetch_extract(title: str) -> str | None:
         if len(extract.split()) < _MIN_WORDS:
             return None
         return extract[:_MAX_CHARS]
-    except (httpx.HTTPError, httpx.TimeoutException, OSError):
+    # NOTE: httpx.InvalidURL is NOT an HTTPError subclass (inherits directly
+    # from Exception); it can be raised from broken proxy/env config before
+    # any request is made. Treat it as a network failure, per this module's
+    # None-on-error contract.
+    except (httpx.HTTPError, httpx.InvalidURL, OSError):
         logger.warning("Wikipedia extract failed for %r", title, exc_info=True)
         return None
