@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Not found — Tickerlens{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-xl text-center py-20">
+  <div class="text-6xl mb-6">🔭</div>
+  <h1 class="text-3xl font-bold text-white mb-3">Couldn't find that company</h1>
+  <p class="text-gray-400 mb-8">{{ detail or "The ticker you asked for isn't in EDGAR's records, or we couldn't fetch its data." }}</p>
+  <a href="/" class="inline-block rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-500 transition">
+    ← Back to search
+  </a>
+</div>
+{% endblock %}

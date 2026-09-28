@@ -33,7 +33,21 @@ logger = logging.getLogger(__name__)
 
 
 class CompanyNotFoundError(Exception):
-    """Raised by get_overview when no local data exists for a ticker."""
+    """Raised when no local data exists for a ticker, or when the ticker
+    cannot be resolved to a CIK at all (unknown / invalid ticker)."""
+
+
+def _resolve_cik(edgar_client, ticker: str) -> str:
+    """Resolve a ticker to a normalized CIK.
+
+    The EDGAR client raises a bare KeyError for unknown tickers; convert it
+    to CompanyNotFoundError so routes can map it to a clean 404 instead of
+    a 500.
+    """
+    try:
+        return normalize_cik(edgar_client.cik_for_ticker(ticker))
+    except KeyError as exc:
+        raise CompanyNotFoundError(f"Unknown ticker: {ticker}") from exc
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -165,7 +179,7 @@ class FinancialsService:
         session: Session | None = None,
     ) -> list[QuarterlyFinancials]:
         """Fetch XBRL financials from EDGAR and upsert into SQLite."""
-        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        cik = _resolve_cik(self.edgar_client, ticker)
         submissions = self.edgar_client.submissions(cik)
         companyfacts = self.edgar_client.companyfacts(cik)
 
@@ -192,7 +206,7 @@ class FinancialsService:
 
     def enrich_company(self, ticker: str, session: Session | None = None) -> None:
         """Update description, price, and market cap for an existing company."""
-        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
             company = db.get(Company, cik)
@@ -321,7 +335,7 @@ class FinancialsService:
 
     def get_overview(self, ticker: str, session: Session | None = None) -> CompanyOverview:
         """Return everything needed to render the Overview page."""
-        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
             company = db.get(Company, cik)
@@ -373,7 +387,7 @@ class FinancialsService:
         Uses stored EDGAR financials plus the last fetched Yahoo quote — no
         network calls, so it is cheap to render on every page view.
         """
-        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
             company = db.get(Company, cik)
@@ -440,7 +454,7 @@ class FinancialsService:
         session: Session | None = None,
     ) -> DetailContext:
         """Return everything the detail / time-slicer page needs."""
-        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
             company = db.get(Company, cik)
