@@ -8,6 +8,7 @@ from tickerlens.models.base import Base
 # Import models so Base.metadata is populated before create_all / autogenerate
 import tickerlens.models.company  # noqa: F401
 import tickerlens.models.quarterly_financial  # noqa: F401
+import tickerlens.models.valuation_history  # noqa: F401
 
 
 def get_engine(url: str | None = None) -> Engine:

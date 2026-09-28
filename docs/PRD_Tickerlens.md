@@ -230,6 +230,8 @@ The primary way to open a company. Modeled on the **combobox / command-palette p
 
 **Deliberately v1-limited:** single-factor (growth-implied multiple) heuristic, not a DCF; ignores balance-sheet strength, moat, and macro. It is a *precursor* to the §4.4 AI analysis (Phase 5), which will layer the market-cap-tiered factor model and LLM reasoning on top — the Invest / Swing / Watch / Avoid signals there remain the long-term framework. The card carries a one-line "model estimate, not investment advice" note.
 
+**Valuation history & signal-change tracking (added 2026-09-28):** Every refresh (`enrich_company`) writes one snapshot per company per day into a `valuation_history` table (canonical CIK, date, price, target price, upside %, signal, method). The Overview card compares the latest snapshot against the most recent prior one and shows "Signal changed from X to Y" with the prior snapshot's date when the signal flipped — so a returning user sees at a glance that the model's verdict moved, not just today's number. Unchanged signals show nothing extra (no noise).
+
 ---
 
 ## 5. Technical Architecture

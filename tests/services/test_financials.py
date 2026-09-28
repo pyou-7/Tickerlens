@@ -4,7 +4,7 @@ import datetime as dt
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tickerlens.models.base import Base
@@ -852,3 +852,105 @@ def test_yearly_yoy_computed_when_both_years_complete(session: Session) -> None:
 
     ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
     assert ctx.current.yoy.revenue == pytest.approx(0.0)  # identical sums
+
+
+# ── valuation history & signal change (PRD §4.11) ─────────────────────────────
+
+def _seed_growing_company(session: Session, cik: str = "0000320193") -> None:
+    """8 quarters: TTM diluted EPS 20.0 vs prior TTM 16.0 → +25% growth."""
+    c = _company(cik=cik)
+    c.last_price = 100.0
+    c.market_cap = 1_000_000_000.0
+    session.add(c)
+    ends = [
+        (dt.date(2026, 6, 30), 2026, "Q2", 5.0),
+        (dt.date(2026, 3, 31), 2026, "Q1", 5.0),
+        (dt.date(2025, 12, 31), 2025, "Q4", 5.0),
+        (dt.date(2025, 9, 30), 2025, "Q3", 5.0),
+        (dt.date(2025, 6, 30), 2025, "Q2", 4.0),
+        (dt.date(2025, 3, 31), 2025, "Q1", 4.0),
+        (dt.date(2024, 12, 31), 2024, "Q4", 4.0),
+        (dt.date(2024, 9, 30), 2024, "Q3", 4.0),
+    ]
+    for period_end, fy, fp, eps in ends:
+        session.add(_row(cik=cik, period_end=period_end, fiscal_year=fy,
+                         fiscal_period=fp, eps_diluted=eps, revenue=100.0))
+    session.commit()
+
+
+def _svc_with_mock(session: Session, cik: str = "0000320193") -> FinancialsService:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_record_valuation_snapshot_writes_todays_signal(session: Session) -> None:
+    from tickerlens.models.valuation_history import ValuationHistory
+
+    _seed_growing_company(session)
+    snap = _svc_with_mock(session).record_valuation_snapshot("AAPL")
+
+    assert snap.signal == "Strong Buy"
+    assert snap.method == "peg"
+    assert snap.as_of == dt.date.today()
+    assert snap.price == pytest.approx(100.0)
+    assert snap.target_price == pytest.approx(750.0)
+    assert snap.upside_pct == pytest.approx(650.0)
+    rows = session.execute(select(ValuationHistory)).scalars().all()
+    assert len(rows) == 1
+
+
+def test_record_valuation_snapshot_upserts_same_day(session: Session) -> None:
+    from tickerlens.models.valuation_history import ValuationHistory
+
+    _seed_growing_company(session)
+    svc = _svc_with_mock(session)
+    svc.record_valuation_snapshot("AAPL")
+    # Refresh later the same day with a new quote → updates, not duplicates.
+    session.query(Company).first().last_price = 200.0
+    session.commit()
+    snap = svc.record_valuation_snapshot("AAPL")
+
+    rows = session.execute(select(ValuationHistory)).scalars().all()
+    assert len(rows) == 1
+    assert snap.price == pytest.approx(200.0)
+    assert snap.upside_pct == pytest.approx(275.0)
+
+
+def test_get_signal_change_detects_flip(session: Session) -> None:
+    from tickerlens.models.valuation_history import ValuationHistory
+
+    _seed_growing_company(session)
+    yesterday = dt.date.today() - dt.timedelta(days=1)
+    session.add(ValuationHistory(cik="0000320193", as_of=yesterday, price=90.0,
+                                target_price=95.0, upside_pct=5.6,
+                                signal="Hold", method="peg"))
+    session.commit()
+    svc = _svc_with_mock(session)
+    svc.record_valuation_snapshot("AAPL")
+
+    change = svc.get_signal_change("AAPL")
+    assert change is not None
+    assert change.previous_signal == "Hold"
+    assert change.previous_date == yesterday
+    assert change.current_signal == "Strong Buy"
+
+
+def test_get_signal_change_none_when_unchanged(session: Session) -> None:
+    from tickerlens.models.valuation_history import ValuationHistory
+
+    _seed_growing_company(session)
+    session.add(ValuationHistory(cik="0000320193",
+                                as_of=dt.date.today() - dt.timedelta(days=1),
+                                price=100.0, target_price=750.0, upside_pct=650.0,
+                                signal="Strong Buy", method="peg"))
+    session.commit()
+    svc = _svc_with_mock(session)
+    svc.record_valuation_snapshot("AAPL")
+
+    assert svc.get_signal_change("AAPL") is None
+
+
+def test_get_signal_change_none_without_history(session: Session) -> None:
+    _seed_growing_company(session)
+    assert _svc_with_mock(session).get_signal_change("AAPL") is None

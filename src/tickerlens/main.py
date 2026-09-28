@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -7,9 +8,17 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from tickerlens.models.database import create_tables
 from tickerlens.routes import company
 
-app = FastAPI(title="Tickerlens")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Idempotent: creates any missing tables (e.g. after a model is added).
+    create_tables()
+    yield
+
+
+app = FastAPI(title="Tickerlens", lifespan=_lifespan)
 
 _BASE = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=_BASE / "static"), name="static")

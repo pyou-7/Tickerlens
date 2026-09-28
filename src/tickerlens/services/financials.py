@@ -22,6 +22,7 @@ from tickerlens.data.yahoo import get_quote
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
+from tickerlens.models.valuation_history import ValuationHistory
 from tickerlens.services.ir_download import (
     EarningsPeriod,
     discover_earnings_filings,
@@ -83,6 +84,14 @@ class BalanceSheetChange(BaseModel):
     total_liabilities: float | None = None
     total_equity: float | None = None
     cash_and_equivalents: float | None = None
+
+
+class SignalChange(BaseModel):
+    """A valuation-signal flip between two snapshots (PRD §4.11)."""
+
+    previous_signal: str  # e.g. "Hold"
+    previous_date: dt.date  # date of the prior snapshot
+    current_signal: str  # e.g. "Buy"
 
 
 class CompanyOverview(BaseModel):
@@ -237,6 +246,10 @@ class FinancialsService:
             # only rows that don't have them yet, and never wipe a
             # previously-good value on transient failure.
             self._enrich_press_release_highlights(db, ticker, cik)
+
+            # One valuation snapshot per day — powers the "signal changed"
+            # indicator on the Overview card (PRD §4.11).
+            self.record_valuation_snapshot(ticker, session=db)
 
             company.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
@@ -445,6 +458,97 @@ class FinancialsService:
                 shares_outstanding=shares_outstanding,
                 ttm_quarters=min(4, len(rows)),
                 growth_is_fallback=growth_is_fallback,
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def record_valuation_snapshot(
+        self, ticker: str, session: Session | None = None
+    ) -> ValuationHistory | None:
+        """Persist today's valuation signal for ``ticker`` (PRD §4.11).
+
+        One row per (cik, date) — refreshing twice in a day updates the row
+        in place instead of duplicating it. Called from ``enrich_company`` so
+        every refresh leaves a trail; cheap enough to also call standalone.
+        Returns ``None`` (and logs) when there is no quarterly data to value
+        — enrichment must never fail because of a history snapshot.
+        """
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            try:
+                valuation = self.get_valuation(ticker, session=db)
+            except CompanyNotFoundError:
+                logger.info("Skipping valuation snapshot for %s: no quarterly data", ticker)
+                return None
+            today = dt.date.today()
+            stmt = (
+                insert(ValuationHistory)
+                .values(
+                    cik=cik,
+                    as_of=today,
+                    price=valuation.current_price,
+                    target_price=valuation.target_price,
+                    upside_pct=valuation.upside_pct,
+                    signal=valuation.signal,
+                    method=valuation.method,
+                )
+                .on_conflict_do_update(
+                    index_elements=["cik", "as_of"],
+                    set_={
+                        "price": valuation.current_price,
+                        "target_price": valuation.target_price,
+                        "upside_pct": valuation.upside_pct,
+                        "signal": valuation.signal,
+                        "method": valuation.method,
+                    },
+                )
+            )
+            db.execute(stmt)
+            db.flush()
+            snapshot = db.execute(
+                select(ValuationHistory).where(
+                    ValuationHistory.cik == cik, ValuationHistory.as_of == today
+                )
+            ).scalar_one()
+            if session is None and self._session is None:
+                db.commit()
+            return snapshot
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_signal_change(
+        self, ticker: str, session: Session | None = None
+    ) -> SignalChange | None:
+        """Return the signal flip between the two latest snapshots, if any.
+
+        Compares the newest snapshot against the most recent one from an
+        earlier date; ``None`` means no history yet or an unchanged signal.
+        """
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            snaps = (
+                db.execute(
+                    select(ValuationHistory)
+                    .where(ValuationHistory.cik == cik)
+                    .order_by(ValuationHistory.as_of.desc())
+                    .limit(2)
+                )
+                .scalars()
+                .all()
+            )
+            if len(snaps) < 2:
+                return None
+            latest, previous = snaps[0], snaps[1]
+            if latest.as_of == previous.as_of or latest.signal == previous.signal:
+                return None
+            return SignalChange(
+                previous_signal=previous.signal,
+                previous_date=previous.as_of,
+                current_signal=latest.signal,
             )
         finally:
             if session is None and self._session is None:

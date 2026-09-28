@@ -128,6 +128,11 @@
       {% endif %}
       <span class="rounded-lg border px-3 py-1 font-bold text-lg {{ badge }}">{{ sig }}</span>
       <span class="text-xs text-gray-500">confidence: {{ valuation.confidence }}</span>
+      {% if signal_change %}
+      <span class="text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1">
+        Signal changed from {{ signal_change.previous_signal }} to {{ signal_change.current_signal }} since {{ signal_change.previous_date }}
+      </span>
+      {% endif %}
     </div>
     <div class="flex items-baseline gap-6 flex-wrap mb-4">
       <div>
