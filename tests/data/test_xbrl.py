@@ -11,9 +11,23 @@ from tickerlens.data.xbrl import (
 
 
 def test_infer_fiscal_year_handles_calendar_and_september_year_ends() -> None:
-    assert infer_fiscal_year(dt.date(2025, 12, 28), "0103") == 2025
+    # January year-ends label by the year the fiscal year ends in
+    # (verified against Walmart's SEC companyfacts: year ended 2025-01-31 -> fy 2025).
+    assert infer_fiscal_year(dt.date(2025, 12, 28), "0103") == 2026
     assert infer_fiscal_year(dt.date(2025, 12, 27), "0926") == 2026
     assert infer_fiscal_year(dt.date(2026, 3, 28), "0926") == 2026
+
+
+def test_infer_fiscal_year_tolerates_floating_year_ends() -> None:
+    # Regression: Apple reports fiscalYearEnd 0926 but its floating "last
+    # Saturday of September" year-end fell on 2024-09-28. The old hard
+    # day-cutoff mislabeled it FY2025, duplicating the "Q4 FY2025" option.
+    assert infer_fiscal_year(dt.date(2024, 9, 28), "0926") == 2024
+    assert infer_fiscal_year(dt.date(2025, 9, 27), "0926") == 2025
+    # A period just after the nominal year-end still belongs to the year
+    # that just ended, not the next one.
+    assert infer_fiscal_year(dt.date(2025, 1, 4), "1231") == 2024
+    assert infer_fiscal_year(dt.date(2024, 12, 31), "1231") == 2024
 
 
 def test_concept_mapping_falls_back_to_revenues() -> None:

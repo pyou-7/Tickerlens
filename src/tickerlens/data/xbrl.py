@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import calendar
 import logging
 from collections.abc import Callable
 from enum import StrEnum
@@ -298,14 +299,30 @@ def balance_sheet_metric(
     }
 
 
-def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:
-    """Infer the fiscal-year label from a period end date and SEC MMDD year-end."""
+# SEC's fiscalYearEnd is a fixed MMDD, but 52/53-week filers use floating
+# year-ends that can land up to about a week after the nominal date.
+_FLOATING_YEAR_END_GRACE_DAYS = 7
 
+
+def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:
+    """Infer the fiscal-year label from a period end date and SEC MMDD year-end.
+
+    US filers label the fiscal year by the calendar year in which it ends, so
+    the label is the year of the first nominal year-end on or after the period
+    end. SEC's ``fiscalYearEnd`` is a fixed MMDD, but many filers (e.g. Apple:
+    "the last Saturday of September") use a floating year-end that can land a
+    few days after the nominal date, so a short grace window is applied —
+    without it, Apple's 2024-09-28 year-end (nominal 0926) was mislabeled
+    FY2025, duplicating the "Q4 FY2025" selector option.
+    """
     month = int(fiscal_year_end[:2])
     day = int(fiscal_year_end[2:])
-    if month <= 5:
-        return end.year
-    return end.year if (end.month, end.day) <= (month, day) else end.year + 1
+    anchor = end - dt.timedelta(days=_FLOATING_YEAR_END_GRACE_DAYS)
+    for year in (anchor.year - 1, anchor.year, anchor.year + 1, anchor.year + 2):
+        month_len = calendar.monthrange(year, month)[1]
+        if dt.date(year, month, min(day, month_len)) >= anchor:
+            return year
+    raise AssertionError("unreachable: a year-end always falls after the anchor")
 
 
 def _derive_q4_income(
