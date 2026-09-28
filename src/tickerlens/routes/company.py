@@ -35,7 +35,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="company/overview.html",
-        context={"overview": overview},
+        context={"overview": overview, "valuation": _svc.get_valuation(ticker)},
     )
 
 
@@ -104,5 +104,5 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="company/overview.html",
-        context={"overview": overview},
+        context={"overview": overview, "valuation": _svc.get_valuation(ticker)},
     )

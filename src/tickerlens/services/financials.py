@@ -27,6 +27,7 @@ from tickerlens.services.ir_download import (
     discover_earnings_filings,
     er_doc_url,
 )
+from tickerlens.services.valuation import ValuationSignal, compute_valuation
 
 logger = logging.getLogger(__name__)
 
@@ -361,6 +362,70 @@ class FinancialsService:
                 yoy=yoy,
                 ttm_kpi=ttm_kpi,
                 ttm_quarters=len(ttm_rows),
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_valuation(self, ticker: str, session: Session | None = None) -> ValuationSignal:
+        """Compute the rules-based valuation signal for the Overview page.
+
+        Uses stored EDGAR financials plus the last fetched Yahoo quote — no
+        network calls, so it is cheap to render on every page view.
+        """
+        cik = normalize_cik(self.edgar_client.cik_for_ticker(ticker))
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+
+            rows = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.desc())
+                )
+                .scalars()
+                .all()
+            )
+            if not rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+
+            ttm = _compute_ttm(list(rows[:4]))
+            prior_ttm = _compute_ttm(list(rows[4:8])) if len(rows) >= 8 else None
+
+            # Growth input, best available first.
+            growth_pct: float | None = None
+            growth_is_fallback = False
+            if prior_ttm is not None:
+                growth_pct = _pct_change(ttm.eps_diluted, prior_ttm.eps_diluted)
+            if growth_pct is None:
+                yoy = _compute_yoy(rows[0], list(rows))
+                growth_pct = yoy.eps_diluted
+                growth_is_fallback = True
+            if growth_pct is None and prior_ttm is not None:
+                growth_pct = _pct_change(ttm.net_income, prior_ttm.net_income)
+                growth_is_fallback = True
+
+            revenue_growth_pct: float | None = None
+            if prior_ttm is not None:
+                revenue_growth_pct = _pct_change(ttm.revenue, prior_ttm.revenue)
+
+            shares_outstanding: float | None = None
+            if company.market_cap and company.last_price:
+                shares_outstanding = company.market_cap / company.last_price
+
+            return compute_valuation(
+                ticker=ticker.upper(),
+                current_price=company.last_price,
+                ttm_eps_diluted=ttm.eps_diluted,
+                eps_growth_pct=growth_pct,
+                ttm_revenue=ttm.revenue,
+                revenue_growth_pct=revenue_growth_pct,
+                shares_outstanding=shares_outstanding,
+                ttm_quarters=min(4, len(rows)),
+                growth_is_fallback=growth_is_fallback,
             )
         finally:
             if session is None and self._session is None:

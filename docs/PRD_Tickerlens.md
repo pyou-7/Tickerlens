@@ -202,6 +202,32 @@ The primary way to open a company. Modeled on the **combobox / command-palette p
 
 ---
 
+## 4.11 Valuation Signal & Target Price (added 2026-09-28)
+
+**Purpose:** Give a retail investor an at-a-glance answer — "is this stock cheap or expensive right now?" — without reading financials. Financial professionals still get the full statements underneath; this is the top-of-page shortcut.
+
+**Placement:** A "Valuation signal" card on the Overview page (§4.1), below the TTM snapshot. Shows: signal badge, current price, model target price, implied upside %, confidence, and 3–5 reasoning bullets tied to the company's own filings.
+
+**Methodology (v1, rules-based, fully explainable):**
+- Primary (profitable companies): PEG-implied P/E. `fair P/E = 1.5 × TTM diluted-EPS growth %`, with growth clamped to [2%, 40%] and P/E clamped to [8×, 40×]. `target = TTM diluted EPS × fair P/E`. Growth is TTM-over-TTM EPS growth; falls back to latest-quarter EPS YoY, then TTM net-income growth.
+- Fallback (no positive earnings): sales-based. `fair P/S = 0.5 × TTM revenue growth %`, clamped to [1×, 10×]. `target = TTM revenue × fair P/S ÷ shares outstanding` (shares derived from market cap ÷ price).
+- No positive earnings *and* no usable revenue → no target; card shows "Watch — insufficient data" with the reason.
+
+**Signal scale (on implied upside):**
+| Upside | Signal |
+|---|---|
+| ≥ +30% | Strong Buy |
+| +10% to +30% | Buy |
+| −10% to +10% | Hold |
+| −25% to −10% | Sell |
+| < −25% | Strong Sell |
+
+**Confidence:** High = full 4-quarter TTM plus prior-year TTM for growth; Medium = partial history or growth fallback used; the card always names the method and inputs so the number is auditable.
+
+**Deliberately v1-limited:** single-factor (growth-implied multiple) heuristic, not a DCF; ignores balance-sheet strength, moat, and macro. It is a *precursor* to the §4.4 AI analysis (Phase 5), which will layer the market-cap-tiered factor model and LLM reasoning on top — the Invest / Swing / Watch / Avoid signals there remain the long-term framework. The card carries a one-line "model estimate, not investment advice" note.
+
+---
+
 ## 5. Technical Architecture
 
 ### 5.1 Platform

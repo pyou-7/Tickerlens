@@ -27,7 +27,8 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Services layer (`src/tickerlens/services/`)
 
-- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
+- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page), `get_valuation` (valuation inputs from stored rows + quote, no network). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
+- **`valuation.py`** — Pure rules-based valuation (PRD §4.11): `compute_valuation()` → `ValuationSignal` (signal, target price, upside %, confidence, method, reasoning). PEG-implied P/E primary, sales-based fallback, Watch on insufficient data.
 - **`ir_download.py`** — Filing discovery, FY labeling, 8-K matching for earnings PDF download. Companion to `scripts/download_earnings.py`.
 
 ### Routes layer (`src/tickerlens/routes/`)

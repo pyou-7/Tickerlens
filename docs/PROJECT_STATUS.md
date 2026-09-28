@@ -28,6 +28,7 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
   - Overview page (PRD §4.1): header, description, latest-quarter KPI cards w/ YoY, TTM snapshot
   - Time Slicer detail view (PRD §4.3): quarterly/yearly selectors, HTMX swap, Plotly revenue+EPS trend, hero KPIs, tabbed Income/Cash Flow tables — single-period mode
   - Disclosures: Risk Factors (from 10-K Item 1A), Press release highlights (from 8-K ex-99 exhibit, per-period)
+  - **Valuation signal (PRD §4.11, added 2026-09-28):** PEG-implied target price vs current quote with Strong Buy/Buy/Hold/Sell/Strong Sell signal on the Overview page — the retail-investor shortcut; precursor to Phase 5 AI analysis
 
 ---
 
@@ -37,7 +38,8 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
 2. ~~**QoQ toggle** on the hero KPI row~~ *(done — merged in PR #2)*
 3. ~~**Detail collapsible sections** with Risk Factors extraction~~ *(done — merged in PR #3; press release/guidance/transcript sections show "Not available" pending content sources)*
 4. ~~**Press-release highlights content** for the collapsible section~~ *(done 2026-09-27 — extracted from the matched 8-K ex-99 exhibit via `services/ir_download.py` infra; stored per-period on `quarterly_financials`, populated during `enrich_company`, shown for the selected period)*
-5. **Sticky Download button** in the detail view (PRD §4.3 #7) — note: full ZIP download is Phase 3; keep this to a simple per-period PDF link or defer.
+5. ~~**Valuation signal & target price** (PRD §4.11, added 2026-09-28)~~ *(done 2026-09-28 — `services/valuation.py` PEG-implied P/E target vs Yahoo quote, Strong Buy→Strong Sell signal card on Overview; sales-based fallback for unprofitable companies)*
+6. **Sticky Download button** in the detail view (PRD §4.3 #7) — note: full ZIP download is Phase 3; keep this to a simple per-period PDF link or defer.
 6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
@@ -59,6 +61,7 @@ Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or n
 
 | Date | Decision |
 |---|---|
+| 2026-09-28 | Valuation signal & target price (PRD §4.11) shipped: PEG-implied P/E target vs current quote, Strong Buy→Strong Sell signal card on Overview, sales-based fallback, Watch on insufficient data |
 | 2026-09-27 | Press-release highlights (Phase 2 task 4) implemented: per-period storage on `quarterly_financials`, headline + highlights/lede extraction from 8-K ex-99, populated during `enrich_company`, shown for the selected period (yearly → Q4 row) |
 | 2026-06-29 | Reconciled `PROJECT_STATUS.md` with actual state: Phase 1 complete, Phase 2 (Overview + Time Slicer detail) in progress. Set up a daily scheduled cloud agent that picks one Phase 2 task and opens a PR for review |
 | 2026-05-31 | Added `docs/AGENT_HANDOFF.md` as the concise current-state handoff for Codex, Claude Code, Gemini, and future agents |

@@ -106,6 +106,58 @@
   </div>
 </div>
 
+<!-- Valuation signal -->
+{% if valuation %}
+<div class="mb-10">
+  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">Valuation signal</h2>
+  <div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-5 max-w-3xl">
+    <div class="flex items-center gap-3 flex-wrap mb-4">
+      {% set sig = valuation.signal %}
+      {% if sig == "Strong Buy" %}
+        {% set badge = "bg-green-500/20 text-green-300 border-green-500/40" %}
+      {% elif sig == "Buy" %}
+        {% set badge = "bg-green-900/40 text-green-400 border-green-800" %}
+      {% elif sig == "Hold" %}
+        {% set badge = "bg-yellow-900/40 text-yellow-300 border-yellow-800" %}
+      {% elif sig == "Sell" %}
+        {% set badge = "bg-red-900/40 text-red-400 border-red-800" %}
+      {% elif sig == "Strong Sell" %}
+        {% set badge = "bg-red-500/20 text-red-300 border-red-500/40" %}
+      {% else %}
+        {% set badge = "bg-gray-800 text-gray-300 border-gray-700" %}
+      {% endif %}
+      <span class="rounded-lg border px-3 py-1 font-bold text-lg {{ badge }}">{{ sig }}</span>
+      <span class="text-xs text-gray-500">confidence: {{ valuation.confidence }}</span>
+    </div>
+    <div class="flex items-baseline gap-6 flex-wrap mb-4">
+      <div>
+        <div class="text-xs text-gray-500">Current price</div>
+        <div class="text-xl font-semibold text-white">{{ fmt_price(valuation.current_price) }}</div>
+      </div>
+      <div class="text-gray-600 text-xl">→</div>
+      <div>
+        <div class="text-xs text-gray-500">Model target</div>
+        <div class="text-xl font-semibold text-white">{{ fmt_price(valuation.target_price) }}</div>
+      </div>
+      {% if valuation.upside_pct is not none %}
+      <div>
+        <div class="text-xs text-gray-500">Implied upside</div>
+        <div class="text-xl font-bold {% if valuation.upside_pct >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+          {{ "%+.1f"|format(valuation.upside_pct) }}%
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    <ul class="list-disc list-inside text-sm text-gray-400 space-y-1 mb-3">
+      {% for point in valuation.reasoning %}
+      <li>{{ point }}</li>
+      {% endfor %}
+    </ul>
+    <p class="text-xs text-gray-600">Model estimate based on SEC filings — not investment advice.</p>
+  </div>
+</div>
+{% endif %}
+
 <!-- View detail -->
 <div>
   <a href="/company/{{ overview.ticker }}/detail"
