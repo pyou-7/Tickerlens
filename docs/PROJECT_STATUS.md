@@ -29,7 +29,7 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
   - Time Slicer detail view (PRD §4.3): quarterly/yearly selectors, HTMX swap, Plotly revenue+EPS trend, hero KPIs, tabbed Income/Cash Flow tables — single-period mode
   - Disclosures: Risk Factors (from 10-K Item 1A), Press release highlights (from 8-K ex-99 exhibit, per-period)
   - **Valuation signal (PRD §4.11, added 2026-09-28):** PEG-implied target price vs current quote with Strong Buy/Buy/Hold/Sell/Strong Sell signal on the Overview page — the retail-investor shortcut; precursor to Phase 5 AI analysis
-- **Defect-hunt fixes (2026-09-28):** unknown ticker now renders a friendly 404 page instead of a 500 (`_resolve_cik` converts EDGAR `KeyError` → `CompanyNotFoundError`); Wikipedia enrichment tolerates `httpx.InvalidURL` so a broken proxy config no longer 500s refresh; transient Yahoo quote failures no longer wipe a stored `last_price`/`market_cap` (never-wipe policy, matching risk factors / press-release highlights)
+- **Defect-hunt fixes (2026-09-28):** unknown ticker now renders a friendly 404 page instead of a 500 (`_resolve_cik` converts EDGAR `KeyError` → `CompanyNotFoundError`); Wikipedia enrichment tolerates `httpx.InvalidURL` so a broken proxy config no longer 500s refresh; transient Yahoo quote failures no longer wipe a stored `last_price`/`market_cap` (never-wipe policy, matching risk factors / press-release highlights); **batch 2:** bracketed IPv6 literals in `no_proxy` (injected by the runtime) crashed *every* `httpx.Client()` construction — fixed at the root via `data/proxy_env.py::sanitize_proxy_env()` on package import, instead of swallowing the exception per call site
 
 ---
 
