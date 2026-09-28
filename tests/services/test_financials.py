@@ -579,3 +579,181 @@ def test_fetch_and_persist_upsert_is_idempotent(session: Session) -> None:
     svc.fetch_and_persist("AAPL", periods=4, session=session)  # must not raise or duplicate
 
     assert session.query(QuarterlyFinancial).count() == 1
+
+
+# ── press-release highlights ─────────────────────────────────────────────────
+
+from unittest.mock import patch  # noqa: E402
+
+from tickerlens.services.ir_download import EarningsPeriod  # noqa: E402
+
+
+def _er_period(*, period_end: dt.date, label: str = "Q3 FY2025") -> EarningsPeriod:
+    return EarningsPeriod(
+        quarter_label=label,
+        fiscal_year=label.rsplit(" FY", 1)[1],
+        fp="Q3",
+        fy=int(label.rsplit(" FY", 1)[1]),
+        period_end=period_end,
+        sec_form="10-Q",
+        sec_accession="0000320193-25-000010",
+        sec_doc="aapl-20250928.htm",
+        er_accession="0000320193-25-000011",
+        er_doc="ex991.htm",
+    )
+
+
+def _release_html_fixture() -> str:
+    lede = (
+        "CUPERTINO, California — Acme Corp today announced financial results for its "
+        "fiscal 2025 third quarter ended September 28, 2025. The Company posted quarterly "
+        "revenue of 40.1 billion dollars, up 5 percent year over year."
+    )
+    body = ("Additional operating detail and management commentary. " * 30) + lede
+    bullets = "".join(
+        f"<li>Highlight bullet number {i} with year-over-year comparison detail.</li>"
+        for i in range(4)
+    )
+    return (
+        "<html><head><title>EX-99.1</title></head><body>"
+        "<h1>Acme Corp Reports Third Quarter 2025 Results</h1>"
+        f"<p>{body}</p><h2>Financial Highlights</h2><ul>{bullets}</ul>"
+        "<h2>Forward-Looking Statements</h2><p>Safe harbor language.</p>"
+        "</body></html>"
+    )
+
+
+def _enrich_mocks(mock_edgar: MagicMock, periods: list[EarningsPeriod]):
+    """Patch network-touching helpers; returns the discover mock for assertions."""
+    p1 = patch("tickerlens.services.financials.get_quote")
+    p2 = patch("tickerlens.services.financials.get_description", return_value="A description")
+    p3 = patch(
+        "tickerlens.services.financials.discover_earnings_filings", return_value=periods
+    )
+    q = p1.start()
+    q.return_value = MagicMock(last_price=100.0, market_cap=1_000_000.0)
+    p2.start()
+    discover_mock = p3.start()
+    mock_edgar.fetch_text.return_value = _release_html_fixture()
+    return p1, p2, p3, discover_mock
+
+
+def test_enrich_company_fills_highlights_for_matched_period(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    matched = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                   fiscal_period="Q3", revenue=40_100)
+    unmatched = _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=38_000)
+    session.add_all([matched, unmatched])
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))])
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc.enrich_company("AAPL", session=session)
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    session.refresh(matched)
+    session.refresh(unmatched)
+    assert matched.press_release_highlights is not None
+    assert "Acme Corp Reports Third Quarter 2025 Results" in matched.press_release_highlights
+    assert matched.press_release_source == "Earnings release Q3 FY2025"
+    assert unmatched.press_release_highlights is None
+    assert unmatched.press_release_source is None
+
+
+def test_enrich_company_does_not_overwrite_existing_highlights(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    row = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+               fiscal_period="Q3", revenue=40_100)
+    row.press_release_highlights = "existing highlights"
+    row.press_release_source = "Earnings release Q3 FY2025"
+    session.add(row)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))])
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc.enrich_company("AAPL", session=session)
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    session.refresh(row)
+    assert row.press_release_highlights == "existing highlights"
+    mock_edgar.fetch_text.assert_not_called()
+
+
+def test_enrich_company_tolerates_no_matched_8k(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    row = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+               fiscal_period="Q3", revenue=40_100)
+    session.add(row)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [])  # no earnings releases discovered
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc.enrich_company("AAPL", session=session)  # must not raise
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    session.refresh(row)
+    assert row.press_release_highlights is None
+
+
+def test_get_detail_returns_highlights_for_selected_quarter(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    q3.press_release_highlights = "Q3 highlights"
+    q3.press_release_source = "Earnings release Q3 FY2025"
+    q4 = _row(cik=cik, period_end=dt.date(2025, 12, 31), fiscal_year=2025,
+              fiscal_period="Q4", revenue=50_200)
+    q4.press_release_highlights = "Q4 highlights"
+    q4.press_release_source = "Earnings release Q4 FY2025"
+    session.add_all([q3, q4])
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
+    assert ctx.press_release_highlights == "Q3 highlights"
+    assert ctx.press_release_source == "Earnings release Q3 FY2025"
+
+    ctx_latest = svc.get_detail("AAPL")  # defaults to latest = Q4
+    assert ctx_latest.press_release_highlights == "Q4 highlights"
+
+
+def test_get_detail_yearly_uses_q4_highlights(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    q3.press_release_highlights = "Q3 highlights"
+    q4 = _row(cik=cik, period_end=dt.date(2025, 12, 31), fiscal_year=2025,
+              fiscal_period="Q4", revenue=50_200)
+    q4.press_release_highlights = "Q4 annual highlights"
+    q4.press_release_source = "Earnings release Q4 FY2025"
+    session.add_all([q3, q4])
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
+    assert ctx.press_release_highlights == "Q4 annual highlights"
+    assert ctx.press_release_source == "Earnings release Q4 FY2025"

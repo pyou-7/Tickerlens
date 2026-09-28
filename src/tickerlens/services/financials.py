@@ -9,7 +9,12 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
-from tickerlens.data.filings import extract_risk_factors, filing_doc_url, latest_annual_filing
+from tickerlens.data.filings import (
+    extract_press_release_highlights,
+    extract_risk_factors,
+    filing_doc_url,
+    latest_annual_filing,
+)
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
@@ -17,6 +22,11 @@ from tickerlens.data.yahoo import get_quote
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
+from tickerlens.services.ir_download import (
+    EarningsPeriod,
+    discover_earnings_filings,
+    er_doc_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +125,9 @@ class DetailContext(BaseModel):
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
+    # Press-release highlights for the *selected* period (None = not available)
+    press_release_highlights: str | None = None
+    press_release_source: str | None = None
 
 
 # ── service ───────────────────────────────────────────────────────────────────
@@ -200,6 +213,11 @@ class FinancialsService:
                 company.risk_factors = rf_text
                 company.risk_factors_source = rf_source
 
+            # Press-release highlights are per-period and equally expensive; fill
+            # only rows that don't have them yet, and never wipe a
+            # previously-good value on transient failure.
+            self._enrich_press_release_highlights(db, ticker, cik)
+
             company.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
         except Exception:
@@ -230,6 +248,74 @@ class FinancialsService:
             return text, f"10-K filed {filing.filing_date.isoformat()}"
         except Exception:
             logger.warning("Risk-factors extraction failed for CIK %s", cik, exc_info=True)
+            return None, None
+
+    def _enrich_press_release_highlights(
+        self, db: Session, ticker: str, cik: str
+    ) -> None:
+        """Fill missing per-period press-release highlights from 8-K ex-99 exhibits.
+
+        Matches each stored quarter to its earnings-release 8-K by period-end
+        date (the stable period key — not FY/FP labels). Best-effort: rows
+        without a matched exhibit keep None and render "Not available for this
+        period"; a transient failure never wipes a previously-good value.
+        """
+        rows: list[QuarterlyFinancial] = (
+            db.execute(
+                select(QuarterlyFinancial).where(QuarterlyFinancial.cik == cik)
+            )
+            .scalars()
+            .all()
+        )
+        missing = [r for r in rows if r.press_release_highlights is None]
+        if not missing:
+            return
+
+        try:
+            periods = discover_earnings_filings(ticker, self.edgar_client, n_quarters=len(rows))
+        except Exception:
+            logger.warning(
+                "Earnings-release discovery failed for %s", ticker, exc_info=True
+            )
+            return
+        by_period_end = {p.period_end: p for p in periods}
+
+        for row in missing:
+            period = by_period_end.get(row.period_end)
+            if period is None:
+                continue
+            text, source = self._fetch_press_release_highlights(cik, period)
+            if text is not None:
+                row.press_release_highlights = text
+                row.press_release_source = source
+
+    def _fetch_press_release_highlights(
+        self, cik: str, period: EarningsPeriod
+    ) -> tuple[str | None, str | None]:
+        """Fetch an 8-K ex-99 exhibit and extract highlights. Returns (text, source).
+
+        Best-effort: any network or parse failure yields (None, None) and is
+        logged, never raised — enrichment must not fail on missing narrative.
+        """
+        try:
+            url = er_doc_url(cik, period)
+            if url is None:
+                # No ex-99 exhibit found (some companies embed the release in
+                # the 8-K primary document, which we don't yet handle).
+                logger.info(
+                    "No ex-99 exhibit for CIK %s period %s", cik, period.quarter_label
+                )
+                return None, None
+            html = self.edgar_client.fetch_text(url)
+            text = extract_press_release_highlights(html)
+            if text is None:
+                return None, None
+            return text, f"Earnings release {period.quarter_label}"
+        except Exception:
+            logger.warning(
+                "Press-release extraction failed for CIK %s period %s",
+                cik, period.quarter_label, exc_info=True,
+            )
             return None, None
 
     def get_overview(self, ticker: str, session: Session | None = None) -> CompanyOverview:
@@ -342,6 +428,26 @@ class FinancialsService:
             chart_revenue = [r.revenue for r in all_rows]
             chart_eps = [r.eps_diluted for r in all_rows]
 
+            # Press-release highlights belong to the selected period. In yearly
+            # mode the year's earnings release is the Q4 (annual) one; fall back
+            # to the year's latest quarter when no Q4 row exists.
+            if granularity == "yearly":
+                year_rows = [r for r in all_rows if r.fiscal_year == current.fiscal_year]
+                pr_row = next(
+                    (r for r in year_rows if r.fiscal_period == "Q4"),
+                    year_rows[-1] if year_rows else None,
+                )
+            else:
+                pr_row = next(
+                    (
+                        r
+                        for r in all_rows
+                        if r.fiscal_period == current.fiscal_period
+                        and r.fiscal_year == current.fiscal_year
+                    ),
+                    None,
+                )
+
             return DetailContext(
                 cik=cik,
                 name=company.name,
@@ -360,6 +466,8 @@ class FinancialsService:
                 chart_eps=chart_eps,
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
+                press_release_highlights=pr_row.press_release_highlights if pr_row else None,
+                press_release_source=pr_row.press_release_source if pr_row else None,
             )
         finally:
             if session is None and self._session is None:

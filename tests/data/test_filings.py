@@ -126,3 +126,82 @@ def test_filing_doc_url_builds_archive_path() -> None:
         "https://www.sec.gov/Archives/edgar/data/320193/"
         "000032019324000123/aapl-20240928.htm"
     )
+
+
+# ── extract_press_release_highlights ─────────────────────────────────────────
+
+from tickerlens.data.filings import extract_press_release_highlights  # noqa: E402
+
+
+def _release_html(
+    *,
+    headline: str = "Acme Corp Reports Fourth Quarter 2025 Results",
+    include_highlights: bool = True,
+    include_admin_line: bool = True,
+) -> str:
+    lede = (
+        "CUPERTINO, California — Acme Corp today announced financial results for its "
+        "fiscal 2025 fourth quarter ended December 31, 2025. The Company posted quarterly "
+        "revenue of 50.2 billion dollars, up 8 percent year over year, and quarterly diluted "
+        "earnings per share of 2.10 dollars, up 12 percent year over year. Gross margin was "
+        "44 percent, reflecting a strong product mix and continued services growth."
+    )
+    quote = (
+        '"We delivered record revenue this quarter," said Jane Doe, Chief Executive Officer. '
+        '"Our installed base reached a new all-time high across every product category." '
+    ) * 3
+    bullets = "".join(
+        f"<li>{b}. Additional context comparing against prior periods.</li>"
+        for b in [
+            "Revenue of 50.2 billion dollars, up 8 percent year over year",
+            "Diluted EPS of 2.10 dollars, up 12 percent year over year",
+            "Operating cash flow of 15.3 billion dollars, a quarterly record",
+        ]
+    )
+    highlights = f"<h2>Financial Highlights</h2><ul>{bullets}</ul>" if include_highlights else ""
+    admin = "<p>FOR IMMEDIATE RELEASE</p>" if include_admin_line else ""
+    return f"""<html><head><title>EX-99.1</title></head><body>
+{admin}
+<h1>{headline}</h1>
+<p>{lede}</p><p>{quote}</p>
+{highlights}
+<h2>ABOUT ACME CORP</h2><p>Acme Corp designs and sells widgets worldwide.</p>
+<h2>Forward-Looking Statements</h2><p>This press release contains forward-looking statements.</p>
+</body></html>"""
+
+
+def test_extract_pr_highlights_uses_highlights_section() -> None:
+    result = extract_press_release_highlights(_release_html())
+    assert result is not None
+    assert "Acme Corp Reports Fourth Quarter 2025 Results" in result
+    assert "Revenue of 50.2 billion dollars" in result
+    # Boilerplate must not leak in.
+    assert "forward-looking statements" not in result.lower()
+    assert "widgets worldwide" not in result.lower()
+
+
+def test_extract_pr_highlights_skips_admin_line_and_title() -> None:
+    result = extract_press_release_highlights(_release_html())
+    assert result is not None
+    assert "EX-99.1" not in result
+    assert "FOR IMMEDIATE RELEASE" not in result
+
+
+def test_extract_pr_highlights_falls_back_to_lede() -> None:
+    result = extract_press_release_highlights(_release_html(include_highlights=False))
+    assert result is not None
+    assert "CUPERTINO, California" in result
+    assert "forward-looking statements" not in result.lower()
+
+
+def test_extract_pr_highlights_returns_none_for_stub() -> None:
+    assert extract_press_release_highlights("<html><body>too short</body></html>") is None
+
+
+def test_extract_pr_highlights_truncates_to_max_chars() -> None:
+    body = "record revenue quarter. " * 400
+    html = f"<html><body><h1>Acme Reports Results</h1><p>{body}</p></body></html>"
+    result = extract_press_release_highlights(html, max_chars=1000)
+    assert result is not None
+    assert len(result) <= 1001  # 1000 + ellipsis, minus the trailing partial word
+    assert result.endswith("…")

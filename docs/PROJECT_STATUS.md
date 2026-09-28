@@ -27,6 +27,7 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
 - **Phase 2 in progress:**
   - Overview page (PRD §4.1): header, description, latest-quarter KPI cards w/ YoY, TTM snapshot
   - Time Slicer detail view (PRD §4.3): quarterly/yearly selectors, HTMX swap, Plotly revenue+EPS trend, hero KPIs, tabbed Income/Cash Flow tables — single-period mode
+  - Disclosures: Risk Factors (from 10-K Item 1A), Press release highlights (from 8-K ex-99 exhibit, per-period)
 
 ---
 
@@ -35,7 +36,7 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
 1. ~~**Balance Sheet tab** in the detail view~~ *(done — merged in PR #1)*
 2. ~~**QoQ toggle** on the hero KPI row~~ *(done — merged in PR #2)*
 3. ~~**Detail collapsible sections** with Risk Factors extraction~~ *(done — merged in PR #3; press release/guidance/transcript sections show "Not available" pending content sources)*
-4. **Press-release highlights content** for the collapsible section — extract from the matched 8-K ex-99 exhibit (infra exists in `services/ir_download.py`).
+4. ~~**Press-release highlights content** for the collapsible section~~ *(done 2026-09-27 — extracted from the matched 8-K ex-99 exhibit via `services/ir_download.py` infra; stored per-period on `quarterly_financials`, populated during `enrich_company`, shown for the selected period)*
 5. **Sticky Download button** in the detail view (PRD §4.3 #7) — note: full ZIP download is Phase 3; keep this to a simple per-period PDF link or defer.
 6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
@@ -58,6 +59,7 @@ Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or n
 
 | Date | Decision |
 |---|---|
+| 2026-09-27 | Press-release highlights (Phase 2 task 4) implemented: per-period storage on `quarterly_financials`, headline + highlights/lede extraction from 8-K ex-99, populated during `enrich_company`, shown for the selected period (yearly → Q4 row) |
 | 2026-06-29 | Reconciled `PROJECT_STATUS.md` with actual state: Phase 1 complete, Phase 2 (Overview + Time Slicer detail) in progress. Set up a daily scheduled cloud agent that picks one Phase 2 task and opens a PR for review |
 | 2026-05-31 | Added `docs/AGENT_HANDOFF.md` as the concise current-state handoff for Codex, Claude Code, Gemini, and future agents |
 | 2026-05-31 | Moved Phase 0 notebook logic into reusable modules: `data/edgar.py`, `data/xbrl.py`, and `services/financials.py`; XBRL joins are anchored by period end date |

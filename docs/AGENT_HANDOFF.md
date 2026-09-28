@@ -21,13 +21,13 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 ### Models layer (`src/tickerlens/models/`)
 
 - **`company.py`** — `Company` model; CIK (String(10)) as PK; ticker is a display label, not a join key.
-- **`quarterly_financial.py`** — `QuarterlyFinancial` model; unique constraint on `(cik, period_end)`.
+- **`quarterly_financial.py`** — `QuarterlyFinancial` model; unique constraint on `(cik, period_end)`. Holds per-period `press_release_highlights` (Text) + `press_release_source` (String(64)), populated by `enrich_company` from the period's 8-K ex-99 exhibit (None = not available).
 - **`database.py`** — `get_engine`, `get_session`, `create_tables` helpers.
 - **`base.py`** — `DeclarativeBase`.
 
 ### Services layer (`src/tickerlens/services/`)
 
-- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
+- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
 - **`ir_download.py`** — Filing discovery, FY labeling, 8-K matching for earnings PDF download. Companion to `scripts/download_earnings.py`.
 
 ### Routes layer (`src/tickerlens/routes/`)
@@ -55,6 +55,9 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 - `89c6a34083be_*` — Initial `companies` + `quarterly_financials` schema.
 - `44892912880c_*` — Add `description`, `last_price`, `market_cap` columns to `companies`.
+- `017aee7df1c1_*` — Add balance-sheet columns to `quarterly_financials`.
+- `d1f5704c5e60_*` — Add `risk_factors`, `risk_factors_source` columns to `companies`.
+- `3049fff86581_*` — Add `press_release_highlights`, `press_release_source` columns to `quarterly_financials`.
 
 ## Phase 1 Findings To Preserve
 
@@ -68,6 +71,10 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 - `_upsert_company` does NOT overwrite `description`, `last_price`, `market_cap` — those are owned by `enrich_company` to avoid clobbering enrichment data on every refresh.
 
 ## Next Recommended Work (Phase 2)
+
+> Status note (2026-09-27): items 1–3 below are done (see `docs/PROJECT_STATUS.md`
+> for the current task list). The remaining Phase 2 work is the sticky Download
+> button (PRD §4.3 #7) — keep it to a simple per-period PDF link or defer.
 
 1. Flesh out `templates/company/overview.html` to match PRD Section 4.1 (Overview View):
    - Company header (name, ticker, market cap, sector, last price)

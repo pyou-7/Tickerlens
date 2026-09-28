@@ -48,6 +48,28 @@ _RISK_END_RE = re.compile(
 # found" rather than surface a stub. Real Item 1A sections run many KB.
 _MIN_SECTION_CHARS = 500
 
+# Below this length the document is almost certainly not a real press release
+# (an error page, a bare 8-K shell, or a stub) — treat as "not found".
+_MIN_RELEASE_CHARS = 800
+
+# Headline candidates longer than this are usually run-on body text, not a title.
+_MAX_HEADLINE_CHARS = 220
+
+# Lines that mark the start of boilerplate we never want in highlights.
+_BOILERPLATE_RE = re.compile(
+    r"^(about\s|forward-looking|safe harbor|contacts?(\s|:)|press\s+contacts?|"
+    r"investor\s+contacts?|note to editors|###)",
+    re.IGNORECASE,
+)
+
+# Release-admin lines that precede the real headline in many exhibits.
+_ADMIN_LINE_RE = re.compile(
+    r"^(for immediate release|news release|press release)\b", re.IGNORECASE
+)
+
+# An explicit "Highlights" / "Financial Highlights" section heading.
+_HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
+
 
 def latest_annual_filing(submissions: dict[str, Any]) -> AnnualFiling | None:
     """Return the most recently filed 10-K from an SEC submissions payload."""
@@ -108,6 +130,89 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     return best_section
 
 
+def extract_press_release_highlights(
+    document_html: str, max_chars: int = 4000
+) -> str | None:
+    """Best-effort extract headline + key highlights from an earnings-release exhibit.
+
+    Strategy: the release headline (first substantial line) plus an explicit
+    "Highlights" section when one exists; otherwise the opening paragraphs (the
+    lede, which in earnings releases summarizes the quarter's results).
+    Boilerplate — "About …", forward-looking statements, contacts — is excluded.
+
+    Returns None when the document doesn't look like a usable release. Like
+    extract_risk_factors, this degrades gracefully: on any doubt it returns None
+    and the caller shows "Not available for this period".
+    """
+    text = _html_to_text(document_html)
+    if len(text) < _MIN_RELEASE_CHARS:
+        logger.info("Press release too short to be usable (%d chars)", len(text))
+        return None
+
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    if not lines:
+        return None
+
+    headline: str | None = None
+    body_start = 0
+    for i, ln in enumerate(lines):
+        if _ADMIN_LINE_RE.match(ln):
+            continue
+        if len(ln) <= _MAX_HEADLINE_CHARS:
+            headline = ln
+            body_start = i + 1
+        break
+
+    body_lines = lines[body_start:]
+
+    section = _extract_highlights_section(body_lines)
+    if section is not None:
+        body = "\n".join(section)
+    else:
+        # Fallback: the lede — opening paragraphs before boilerplate begins.
+        lede: list[str] = []
+        for ln in body_lines:
+            if _BOILERPLATE_RE.match(ln):
+                break
+            lede.append(ln)
+            if len(lede) >= 6:
+                break
+        body = "\n\n".join(lede)
+
+    result = f"{headline}\n\n{body}".strip() if headline else body.strip()
+    if len(result) < 200:
+        logger.info("Press-release highlights too short after extraction")
+        return None
+    if len(result) > max_chars:
+        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return result
+
+
+def _extract_highlights_section(lines: list[str]) -> list[str] | None:
+    """Return the content lines of an explicit "Highlights" section, or None.
+
+    Collects lines after a highlights heading until boilerplate or what looks
+    like the next section heading (a short ALL-CAPS line). Requires a minimum
+    amount of content — a heading with nothing under it falls back to the lede.
+    """
+    for i, ln in enumerate(lines):
+        if not _HIGHLIGHTS_HEADING_RE.search(ln) or len(ln) > 120:
+            continue
+        collected: list[str] = []
+        for follow in lines[i + 1:]:
+            if _BOILERPLATE_RE.match(follow):
+                break
+            if follow.isupper() and len(follow) <= 80:
+                break
+            collected.append(follow)
+            if len(collected) >= 12:
+                break
+        if len("\n".join(collected)) >= 150:
+            return collected
+        return None  # heading found but section too thin — don't try later headings
+    return None
+
+
 def _html_to_text(document_html: str) -> str:
     """Strip HTML to plain text, preserving block boundaries as line breaks.
 
@@ -115,7 +220,8 @@ def _html_to_text(document_html: str) -> str:
     newlines so risk-factor paragraphs stay readable instead of collapsing into
     one wall of text.
     """
-    text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", document_html)
+    text = re.sub(r"(?is)<head\b.*?</head>", " ", document_html)
+    text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
