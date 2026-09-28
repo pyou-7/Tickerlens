@@ -198,7 +198,9 @@ def quarterly_income_metric(
     metric: Metric,
     fiscal_year_end: str | None = None,
 ) -> list[PeriodMetric]:
-    source_tag, facts = concept_facts(companyfacts, metric)
+    source_tag, facts = concept_facts(
+        companyfacts, metric, staleness_window=(70, 100)
+    )
     standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end)
     return sorted(
@@ -248,20 +250,40 @@ def quarterly_cash_flow_metric(
     return sorted(results, key=lambda item: item.end)
 
 
+# A tag whose newest fact is more than this far behind the freshest tag in the
+# chain is considered abandoned by the filer. Well above a filing cycle
+# (~90 days) so slow filers are never penalized; well below real abandonments
+# (PLUG's stale tag lagged by 5+ years).
+_MAX_TAG_STALENESS_DAYS = 400
+
+
 def concept_facts(
     companyfacts: dict[str, Any],
     metric: Metric,
     *,
     instant: bool = False,
+    staleness_window: tuple[int, int] | None = None,
 ) -> tuple[str, list[XbrlFact]]:
-    """Return (source_tag, facts) for the first tag in the metric's fallback chain.
+    """Return (source_tag, facts) for the best tag in the metric's fallback chain.
 
     Duration facts (income, cash flow) carry both ``start`` and ``end``; instant
     facts (balance sheet) carry only ``end``. Pass ``instant=True`` to keep the
     latter, which would otherwise be filtered out by the ``start`` requirement.
+
+    Chain order expresses semantic preference, but a tag whose newest fact is
+    far older than the newest fact across the whole chain has been abandoned
+    by the filer (e.g. PLUG's ``...IncludingAssessedTax`` quarterly facts end
+    in 2020 while ``Revenues`` runs through 2026). Such stale tags are skipped
+    so the tool never presents years-old data as current. ``staleness_window``
+    optionally restricts which facts count toward a tag's "newest" to a
+    duration range in days — the quarterly path passes its 70–100 day window
+    so a tag kept alive only by half-year facts still counts as abandoned.
+    If no tag is fresh enough, falls back to the first non-empty tag
+    (previous behavior).
     """
     spec = CONCEPTS[metric]
     us_gaap = companyfacts["facts"]["us-gaap"]
+    candidates: list[tuple[str, list[XbrlFact], dt.date | None]] = []
     for tag in spec.tags:
         units = us_gaap.get(tag, {}).get("units", {})
         raw_facts = units.get(spec.unit, [])
@@ -273,8 +295,34 @@ def concept_facts(
             and (instant or raw.get("start"))
         ]
         if facts:
-            return tag, facts
-    raise KeyError(f"No XBRL facts found for metric {metric.value}")
+            newest = _newest_in_window(facts, staleness_window)
+            candidates.append((tag, facts, newest))
+    if not candidates:
+        raise KeyError(f"No XBRL facts found for metric {metric.value}")
+    dated = [(t, f, n) for t, f, n in candidates if n is not None]
+    if dated:
+        newest_overall = max(n for _, _, n in dated)
+        for tag, facts, newest in dated:
+            if (newest_overall - newest).days <= _MAX_TAG_STALENESS_DAYS:
+                return tag, facts
+    return candidates[0][0], candidates[0][1]
+
+
+def _newest_in_window(
+    facts: list[XbrlFact], window: tuple[int, int] | None
+) -> dt.date | None:
+    """Newest end date among facts whose duration falls in ``window``.
+
+    ``None`` window means all duration facts (instant facts have no start and
+    are skipped by callers that pass a window).
+    """
+    ends = [
+        f.end
+        for f in facts
+        if f.start is not None
+        and (window is None or window[0] <= (f.end - f.start).days <= window[1])
+    ]
+    return max(ends) if ends else None
 
 
 def balance_sheet_metric(
@@ -380,12 +428,27 @@ def _choose_fact_for_end(
     candidates: list[XbrlFact],
     fiscal_year_end: str | None,
 ) -> XbrlFact:
-    if fiscal_year_end:
-        expected_fy = infer_fiscal_year(end, fiscal_year_end)
-        matching = [fact for fact in candidates if fact.fy == expected_fy]
-        if matching:
-            candidates = matching
-    return max(candidates, key=lambda fact: fact.filed)
+    """Pick one fact per period end, keeping labels honest.
+
+    The same quarter often appears in several filings: the original 10-Q plus
+    comparative prior-period columns in later 10-Qs/10-Ks. Those comparative
+    facts inherit the *later* filing's ``fy`` label (e.g. JNJ's Q3-2024 quarter
+    re-tagged ``fy=2025`` inside the Q3-2025 10-Q), and SEC's nominal
+    ``fiscalYearEnd`` is not always trustworthy either (JNJ reports "0103"
+    while its own filings label the Dec-2025-ended year FY2025). Trusting
+    either source mislabels rows and duplicates selector options.
+
+    The original filing is authoritative for *what the period is called*,
+    while a later amendment may restate the *number*, so: labels (``fy``,
+    ``fp``) come from the earliest-filed candidate and the value from the
+    latest-filed one.
+    """
+    _ = fiscal_year_end  # kept for signature compatibility; labels come from filings
+    earliest = min(candidates, key=lambda fact: fact.filed)
+    latest = max(candidates, key=lambda fact: fact.filed)
+    if earliest is latest:
+        return latest
+    return latest.model_copy(update={"fy": earliest.fy, "fp": earliest.fp})
 
 
 def _period_metric(metric: Metric, source_tag: str, fact: XbrlFact) -> PeriodMetric:

@@ -7,6 +7,7 @@ from tickerlens.data.xbrl import (
     extract_recent_quarterly_financials,
     infer_fiscal_year,
     quarterly_cash_flow_metric,
+    quarterly_income_metric,
 )
 
 
@@ -263,3 +264,107 @@ def fact(
         "form": "10-Q" if fp != "FY" else "10-K",
         "filed": filed,
     }
+
+
+def _stale_chain_facts() -> dict:
+    """Mirror the PLUG case: first-chain tag abandoned for quarterly facts."""
+    return {
+        "facts": {
+            "us-gaap": {
+                # First in chain, but quarterly facts end in 2020; only a
+                # half-year fact is recent (keeps the tag "alive" overall).
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {
+                        "USD": [
+                            fact("2020-10-01", "2020-12-31", 100.0, 2020, "Q4"),
+                            fact("2026-01-01", "2026-06-30", 999.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+                # Second in chain, with current quarterly facts.
+                "RevenueFromContractWithCustomerIncludingAssessedTax": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 200.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_concept_facts_skips_abandoned_tag_for_quarterly_window():
+    tag, _ = concept_facts(
+        _stale_chain_facts(), Metric.REVENUE, staleness_window=(70, 100)
+    )
+    assert tag == "RevenueFromContractWithCustomerIncludingAssessedTax"
+
+
+def test_concept_facts_prefers_chain_order_when_fresh():
+    cf = _stale_chain_facts()
+    # Without the quarterly window the first tag's half-year fact makes it
+    # look current, so chain order (semantic preference) wins.
+    tag, _ = concept_facts(cf, Metric.REVENUE)
+    assert tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+def test_concept_facts_falls_back_to_first_tag_when_all_stale():
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [fact("2020-10-01", "2020-12-31", 100.0, 2020, "Q4")]}
+                },
+            }
+        }
+    }
+    tag, _ = concept_facts(cf, Metric.REVENUE, staleness_window=(70, 100))
+    assert tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+def _comparative_relabel_facts(restated_val: float | None = None) -> dict:
+    """Mirror the JNJ case: Q3-2024 appears twice — the original 10-Q labels it
+    fy=2024, while the comparative column in next year's 10-Q re-tags it
+    fy=2025. SEC's nominal fiscalYearEnd ("0103") agrees with the wrong one."""
+    original = fact(
+        "2024-06-30", "2024-09-29", 22471.0, 2024, "Q3", filed="2024-10-23"
+    )
+    comparative = fact(
+        "2024-06-30",
+        "2024-09-29",
+        restated_val if restated_val is not None else 22471.0,
+        2025,
+        "Q3",
+        filed="2025-10-22",
+    )
+    return {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [original, comparative]}
+                }
+            }
+        }
+    }
+
+
+def test_duplicate_facts_keep_original_filing_labels():
+    metrics = quarterly_income_metric(
+        _comparative_relabel_facts(), Metric.REVENUE, fiscal_year_end="0103"
+    )
+    assert len(metrics) == 1
+    assert (metrics[0].fy, metrics[0].fp) == (2024, "Q3")
+    assert metrics[0].end == dt.date(2024, 9, 29)
+
+
+def test_duplicate_facts_take_restated_value_from_latest_filing():
+    metrics = quarterly_income_metric(
+        _comparative_relabel_facts(restated_val=22500.0),
+        Metric.REVENUE,
+        fiscal_year_end="0103",
+    )
+    assert len(metrics) == 1
+    # Labels still describe the original period; the number reflects the restatement.
+    assert (metrics[0].fy, metrics[0].fp) == (2024, "Q3")
+    assert metrics[0].value == 22500.0
