@@ -856,3 +856,61 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
         )
     )
     session.execute(stmt)
+
+
+# ── per-period CSV export (PRD §4.3 #7) ───────────────────────────────────────
+
+_CSV_METRICS: list[tuple[str, str, str, str]] = [
+    # (label, KPISnapshot attr, KPIChange attr, BalanceSheet attr)
+    ("Revenue", "revenue", "revenue", ""),
+    ("Net Income", "net_income", "net_income", ""),
+    ("EPS Basic", "eps_basic", "eps_basic", ""),
+    ("EPS Diluted", "eps_diluted", "eps_diluted", ""),
+    ("Free Cash Flow", "free_cash_flow", "free_cash_flow", ""),
+    ("Total Assets", "", "", "total_assets"),
+    ("Total Liabilities", "", "", "total_liabilities"),
+    ("Total Equity", "", "", "total_equity"),
+    ("Cash & Equivalents", "", "", "cash_and_equivalents"),
+]
+
+
+def build_period_csv(ctx: DetailContext) -> str:
+    """Render the selected period's financials as CSV (raw numbers, no formatting).
+
+    Pure function — the download route is a thin wrapper around this.
+    """
+    import csv
+    import io
+
+    cur = ctx.current
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# Company", f"{ctx.name} ({ctx.ticker})" if ctx.ticker else ctx.name])
+    w.writerow(["# Period", cur.label])
+    if cur.period_end:
+        w.writerow(["# Period end", cur.period_end.isoformat()])
+    w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
+    w.writerow(["metric", "value", "yoy_pct", "qoq_pct"])
+    for label, kpi_attr, chg_attr, bs_attr in _CSV_METRICS:
+        if bs_attr:
+            value = getattr(cur.balance_sheet, bs_attr)
+            yoy = getattr(cur.balance_sheet_yoy, bs_attr)
+            qoq = getattr(cur.balance_sheet_qoq, bs_attr) if cur.balance_sheet_qoq else None
+        else:
+            value = getattr(cur.kpi, kpi_attr)
+            yoy = getattr(cur.yoy, chg_attr)
+            qoq = getattr(cur.qoq, chg_attr) if cur.qoq else None
+        w.writerow([
+            label,
+            "" if value is None else repr(value),
+            "" if yoy is None else repr(round(yoy, 2)),
+            "" if qoq is None else repr(round(qoq, 2)),
+        ])
+    return buf.getvalue()
+
+
+def download_filename(ctx: DetailContext) -> str:
+    """Safe attachment filename for the per-period CSV export."""
+    ticker = (ctx.ticker or "company").upper()
+    label = "".join(c if c.isalnum() else "-" for c in ctx.current.label)
+    return f"{ticker}_{label}.csv"

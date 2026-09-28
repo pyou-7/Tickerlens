@@ -294,3 +294,14 @@
   "eps":     {{ ctx.chart_eps     | tojson }}
 }
 </script>
+
+<!-- Sticky per-period CSV download (PRD §4.3 #7). Lives inside the HTMX-swapped
+     region so its href always matches the currently selected period. -->
+<div class="sticky bottom-4 mt-6 flex justify-end pointer-events-none">
+  <a href="/company/{{ ctx.ticker }}/detail/download?granularity={{ ctx.granularity }}&quarter={{ ctx.selected_quarter | urlencode }}&year={{ ctx.selected_year }}"
+     download
+     class="pointer-events-auto inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 font-semibold text-white text-sm shadow-lg shadow-indigo-950/50 transition">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+    Download {{ ctx.current.label }} CSV
+  </a>
+</div>

@@ -54,3 +54,70 @@ def test_unknown_ticker_overview_returns_404_html(client: TestClient) -> None:
 def test_unknown_ticker_detail_returns_404(client: TestClient) -> None:
     resp = client.get("/company/ZZZZ/detail")
     assert resp.status_code == 404
+
+
+# ── per-period CSV download (PRD §4.3 #7) ─────────────────────────────────────
+
+def _detail_ctx():
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        DetailContext,
+        KPIChange,
+        KPISnapshot,
+        PeriodData,
+    )
+
+    cur = PeriodData(
+        label="Q3 FY2025",
+        period_end=__import__("datetime").date(2025, 9, 28),
+        fiscal_year=2025,
+        fiscal_period="Q3",
+        kpi=KPISnapshot(revenue=94_930.0, net_income=23_630.0, eps_basic=1.57,
+                        eps_diluted=1.55, free_cash_flow=26_800.0),
+        yoy=KPIChange(revenue=5.0, net_income=None, eps_basic=None,
+                      eps_diluted=None, free_cash_flow=None),
+        qoq=KPIChange(revenue=10.7, net_income=None, eps_basic=None,
+                      eps_diluted=None, free_cash_flow=None),
+        balance_sheet=BalanceSheet(total_assets=365_000.0, total_liabilities=None,
+                                   total_equity=None, cash_and_equivalents=30_000.0),
+        balance_sheet_yoy=BalanceSheetChange(),
+        balance_sheet_qoq=None,
+    )
+    return DetailContext(
+        cik="0000320193", name="Apple Inc.", ticker="AAPL", sector="Technology",
+        last_price=341.07, market_cap=5e12,
+        granularity="quarterly", quarter_options=["Q3 FY2025"],
+        year_options=[2025], selected_quarter="Q3 FY2025", selected_year=2025,
+        current=cur, chart_labels=["Q3 FY2025"], chart_revenue=[94_930.0],
+        chart_eps=[1.55],
+    )
+
+
+def test_download_csv_returns_attachment(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _detail_ctx()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/download?granularity=quarterly&quarter=Q3%20FY2025")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    assert resp.headers["content-disposition"] == 'attachment; filename="AAPL_Q3-FY2025.csv"'
+    body = resp.text
+    assert "metric,value,yoy_pct,qoq_pct" in body
+    assert "Revenue,94930.0,5.0,10.7" in body
+    assert "Cash & Equivalents,30000.0,," in body
+    assert "# Period,Q3 FY2025" in body
+
+
+def test_build_period_csv_none_values_render_empty() -> None:
+    from tickerlens.services.financials import build_period_csv, download_filename
+
+    ctx = _detail_ctx()
+    csv_text = build_period_csv(ctx)
+    # Net income YoY/QoQ are None -> empty cells, not "None"
+    assert "Net Income,23630.0,," in csv_text
+    assert "None" not in csv_text
+    assert download_filename(ctx) == "AAPL_Q3-FY2025.csv"

@@ -40,7 +40,7 @@ Goal: a usable Overview page and Time Slicer detail view for one company, single
 3. ~~**Detail collapsible sections** with Risk Factors extraction~~ *(done — merged in PR #3; press release/guidance/transcript sections show "Not available" pending content sources)*
 4. ~~**Press-release highlights content** for the collapsible section~~ *(done 2026-09-27 — extracted from the matched 8-K ex-99 exhibit via `services/ir_download.py` infra; stored per-period on `quarterly_financials`, populated during `enrich_company`, shown for the selected period)*
 5. ~~**Valuation signal & target price** (PRD §4.11, added 2026-09-28)~~ *(done 2026-09-28 — `services/valuation.py` PEG-implied P/E target vs Yahoo quote, Strong Buy→Strong Sell signal card on Overview; sales-based fallback for unprofitable companies)*
-6. **Sticky Download button** in the detail view (PRD §4.3 #7) — note: full ZIP download is Phase 3; keep this to a simple per-period PDF link or defer.
+6. ~~**Sticky Download button** in the detail view (PRD §4.3 #7)~~ *(done 2026-09-28 — sticky per-period CSV export inside the HTMX-swapped region; `GET /company/{ticker}/detail/download` → `{TICKER}_{PERIOD}.csv` with raw metric/value/yoy_pct/qoq_pct. Full-history ZIP stays Phase 3.)*
 6. *(deferred)* pin Python to exactly 3.12 in `pyproject.toml requires-python` (currently `>=3.12`).
 
 **Deferred (founder decision 2026-07-10):** Revenue breakdown card (PRD §4.1 #5) — segment revenue is NOT in the `companyfacts` API (verified 2026-07: no dimensional facts; geography tags are annual-only and missing for most filers). Requires a raw-XBRL dimension parser. **Deferred past Phase 2** — do NOT build; revisit after Phase 3. Phase 2 closes without it. Period selector stays detail-view-only (confirmed same date).
@@ -62,6 +62,7 @@ Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or n
 
 | Date | Decision |
 |---|---|
+| 2026-09-28 | Sticky per-period CSV download (PRD §4.3 #7) shipped: `GET /company/{ticker}/detail/download` streams `{TICKER}_{PERIOD}.csv`; button lives in the HTMX-swapped partial so it tracks the selected period; CSV chosen over PDF/XLSX (no new deps, numbers stay computable); full-history ZIP stays Phase 3 |
 | 2026-09-28 | Defect hunt round 2: yearly-mode YoY now requires two complete 4-quarter years — fixes a bogus +338% YoY on FY2025 revenue (prior year had only 1 quarter seeded); incomplete comparisons render "—" |
 | 2026-09-28 | Defect hunt round 1: unknown ticker → friendly 404 page (not 500); refresh POST no longer 500s on Wikipedia network/proxy failure (`httpx.InvalidURL` now swallowed per the module's None-on-error contract); transient Yahoo quote failures no longer wipe stored `last_price`/`market_cap` (extends the never-wipe policy). All HTTP-verified live; suite at 77 passing |
 | 2026-09-28 | Valuation signal & target price (PRD §4.11) shipped: PEG-implied P/E target vs current quote, Strong Buy→Strong Sell signal card on Overview, sales-based fallback, Watch on insufficient data |

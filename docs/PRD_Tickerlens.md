@@ -101,7 +101,11 @@ When you open a company page, you land on the Overview by default. Contents:
    - Management guidance
    - Transcript excerpts (when freely available)
    - Risk factors (from 10-K/10-Q)
-7. **Sticky "Download" button**
+7. **Sticky "Download" button** (specified 2026-09-28)
+
+   Per-period CSV export of the *currently selected* period. A sticky bottom-right button inside the data section (so it re-renders with the correct period on every HTMX swap) downloads `{TICKER}_{PERIOD}.csv` containing: company + period + source metadata header lines, then one row per metric — Revenue, Net Income, EPS Basic, EPS Diluted, Free Cash Flow, Total Assets, Total Liabilities, Total Equity, Cash & Equivalents — with columns `value`, `yoy_pct`, `qoq_pct` (raw numbers, empty when unavailable, so spreadsheets can compute). Values are filing-derived (XBRL), matching exactly what's shown in the tables.
+
+   Deliberately v1-limited: CSV only, no PDF/XLSX; no full-history ZIP (that stays Phase 3 with the watchlist, per Section 7). The button is a plain link (no JS), so it works even if HTMX/Alpine fail to load.
 
 **Missing data UX:** Show "Not available for this period" — section stays visible, you'll know to look elsewhere.
 

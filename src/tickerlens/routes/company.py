@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from tickerlens.services.financials import CompanyNotFoundError, FinancialsService, DetailContext
+from tickerlens.services.financials import (
+    CompanyNotFoundError,
+    DetailContext,
+    FinancialsService,
+    build_period_csv,
+    download_filename,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates")
@@ -88,6 +95,30 @@ def company_detail_data(
         request=request,
         name="partials/detail_data.html",
         context={"ctx": ctx},
+    )
+
+
+@router.get("/company/{ticker}/detail/download")
+def download_period_csv(
+    request: Request,
+    ticker: str,
+    granularity: Literal["quarterly", "yearly"] = "quarterly",
+    quarter: str | None = None,
+    year: int | None = None,
+) -> StreamingResponse:
+    """Per-period CSV export of the selected period's financials (PRD §4.3 #7)."""
+    ticker = ticker.upper()
+    try:
+        ctx = _svc.get_detail(
+            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+        )
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = build_period_csv(ctx).encode("utf-8")
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{download_filename(ctx)}"'},
     )
 
 
