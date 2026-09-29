@@ -86,6 +86,22 @@ def unwatch_company(request: Request, ticker: str):
     return RedirectResponse(url=f"/company/{ticker}", status_code=303)
 
 
+@router.post("/watchlist/refresh", response_class=HTMLResponse)
+def refresh_watchlist(request: Request):
+    """Refresh Yahoo quotes for every watched company (PRD §4.6, slice 2).
+
+    HTMX swaps the pins section in place; plain form POST redirects home.
+    """
+    _svc.refresh_watchlist_quotes()
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/watchlist.html",
+            context={"watchlist": _svc.get_watchlist()},
+        )
+    return RedirectResponse(url="/", status_code=303)
+
+
 @router.get("/company/{ticker}/detail", response_class=HTMLResponse)
 def company_detail(
     request: Request,

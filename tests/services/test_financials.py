@@ -995,3 +995,46 @@ def test_get_history_zip_entries_one_csv_per_quarter(session: Session) -> None:
 def test_get_history_zip_entries_unknown_ticker_raises(session: Session) -> None:
     with pytest.raises(CompanyNotFoundError):
         _svc_with_mock(session).get_history_zip_entries("ZZZZ")
+
+
+# ── watchlist quote refresh (PRD §4.6, slice 2) ─────────────────────────────────
+
+def test_refresh_watchlist_quotes_updates_price_never_wipes(session: Session, monkeypatch) -> None:
+    from tickerlens.models.watchlist import WatchlistEntry
+
+    session.add(_company())
+    session.add(WatchlistEntry(cik="0000320193"))
+    session.commit()
+
+    from tickerlens.services import financials as fin_mod
+
+    class _Quote:
+        last_price = 400.0
+        market_cap = 6e12
+
+    monkeypatch.setattr(fin_mod, "get_quote", lambda ticker: _Quote())
+    svc = _svc_with_mock(session)
+    result = svc.refresh_watchlist_quotes()
+
+    assert result == {"updated": 1, "failed": 0}
+    company = session.get(Company, "0000320193")
+    assert company.last_price == 400.0
+    assert company.market_cap == 6e12
+
+
+def test_refresh_watchlist_quotes_counts_failures(session: Session, monkeypatch) -> None:
+    from tickerlens.models.watchlist import WatchlistEntry
+
+    session.add(_company())
+    session.add(WatchlistEntry(cik="0000320193"))
+    session.commit()
+
+    from tickerlens.services import financials as fin_mod
+
+    def _boom(ticker: str):
+        raise RuntimeError("yahoo down")
+
+    monkeypatch.setattr(fin_mod, "get_quote", _boom)
+    result = _svc_with_mock(session).refresh_watchlist_quotes()
+
+    assert result == {"updated": 0, "failed": 1}

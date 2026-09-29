@@ -640,6 +640,50 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def refresh_watchlist_quotes(
+        self, session: Session | None = None
+    ) -> dict[str, int]:
+        """Refresh Yahoo quotes for every watched company (PRD §4.6, slice 2).
+
+        Quote-only (no Wikipedia / risk-factor / press-release work), so home
+        pins stay current without opening each company. Never wipes a stored
+        price on transient failure; records a valuation snapshot per company
+        so the signal-change pill can fire on quote-driven flips. Per-ticker
+        failures are counted, not raised. Returns {"updated": n, "failed": m}.
+        """
+        db = session or self._session or get_session()
+        try:
+            rows = (
+                db.execute(
+                    select(WatchlistEntry, Company).join(
+                        Company, Company.cik == WatchlistEntry.cik
+                    )
+                )
+                .all()
+            )
+            updated = failed = 0
+            for entry, company in rows:
+                ticker = company.ticker
+                if not ticker:
+                    failed += 1
+                    continue
+                try:
+                    quote = get_quote(ticker)
+                    if quote.last_price is not None:
+                        company.last_price = quote.last_price
+                    if quote.market_cap is not None:
+                        company.market_cap = quote.market_cap
+                    self.record_valuation_snapshot(ticker, session=db)
+                    updated += 1
+                except Exception:
+                    logger.warning("Watchlist quote refresh failed for %s", ticker)
+                    failed += 1
+            db.commit()
+            return {"updated": updated, "failed": failed}
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def get_detail(
         self,
         ticker: str,

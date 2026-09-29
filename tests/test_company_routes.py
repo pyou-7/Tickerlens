@@ -199,3 +199,37 @@ def test_history_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -
 
     resp = client.get("/company/ZZZZ/download/history.zip")
     assert resp.status_code == 404
+
+
+# ── watchlist quote refresh (PRD §4.6, slice 2) ───────────────────────────────
+
+def test_watchlist_refresh_plain_post_redirects_home(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.refresh_watchlist_quotes.return_value = {"updated": 2, "failed": 0}
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/watchlist/refresh", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    mock_svc.refresh_watchlist_quotes.assert_called_once_with()
+
+
+def test_watchlist_refresh_htmx_returns_pins_partial(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import WatchlistRow
+
+    mock_svc = MagicMock()
+    mock_svc.refresh_watchlist_quotes.return_value = {"updated": 1, "failed": 0}
+    mock_svc.get_watchlist.return_value = [
+        WatchlistRow(cik="0000320193", ticker="AAPL", name="Apple Inc.",
+                     last_price=400.0, market_cap=6e12, signal="Buy")
+    ]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/watchlist/refresh", headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert 'id="watchlist-section"' in resp.text
+    assert "AAPL" in resp.text
+    assert "400.00" in resp.text

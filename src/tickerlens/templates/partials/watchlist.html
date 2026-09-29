@@ -1,0 +1,39 @@
+<div class="w-full max-w-md" id="watchlist-section">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="text-xs uppercase tracking-widest text-gray-500">Watchlist</h2>
+    <form action="/watchlist/refresh" method="post" class="inline"
+          hx-post="/watchlist/refresh" hx-target="#watchlist-section" hx-swap="outerHTML">
+      <button type="submit" title="Refresh quotes for all watched companies"
+              class="text-xs text-indigo-300 hover:text-indigo-100 border border-indigo-500/40 hover:border-indigo-400 rounded-lg px-2.5 py-1 transition">
+        ⟳ Refresh quotes
+      </button>
+    </form>
+  </div>
+  <div class="rounded-xl bg-gray-900 border border-gray-800 divide-y divide-gray-800">
+    {% for row in watchlist %}
+    <a href="/company/{{ row.ticker }}" class="flex items-center justify-between px-4 py-2.5 hover:bg-gray-800/50 transition">
+      <div class="flex items-center gap-3 min-w-0">
+        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm shrink-0">{{ row.ticker }}</span>
+        <span class="text-gray-300 text-sm truncate">{{ row.name }}</span>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        {% if row.last_price is not none %}
+        <span class="text-white text-sm font-medium">${{ "%.2f"|format(row.last_price) }}</span>
+        {% endif %}
+        {% if row.signal %}
+          {% if row.signal in ["Strong Buy", "Buy"] %}
+            {% set sc = "text-green-400" %}
+          {% elif row.signal == "Hold" %}
+            {% set sc = "text-yellow-300" %}
+          {% elif row.signal in ["Sell", "Strong Sell"] %}
+            {% set sc = "text-red-400" %}
+          {% else %}
+            {% set sc = "text-gray-400" %}
+          {% endif %}
+        <span class="text-xs font-semibold {{ sc }}">{{ row.signal }}</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
