@@ -1051,6 +1051,52 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_compare_zip_entries(
+        self,
+        ticker: str,
+        *,
+        period_a: str | None = None,
+        period_b: str | None = None,
+        preset: str | None = None,
+        mode: str = "quarterly",
+        year_a: int | None = None,
+        year_b: int | None = None,
+        session: Session | None = None,
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """ZIP entries for the compare view (PRD §4.8, second slice).
+
+        ``{TICKER}/{TICKER}_{A}.csv`` + ``{TICKER}/{TICKER}_{B}.csv`` (reusing
+        the per-period renderer) + ``{TICKER}/{TICKER}_compare_summary.csv``
+        (metric × A | B | Δ | Δ%). Mirrors the compare page's current
+        parameters, so the archive matches what's on screen.
+        """
+        ctx = self.get_compare(
+            ticker,
+            period_a=period_a,
+            period_b=period_b,
+            preset=preset,
+            mode=mode,
+            year_a=year_a,
+            year_b=year_b,
+            session=session,
+        )
+        zip_ticker = (ctx.ticker or ticker).upper()
+        entries = [
+            (
+                f"{zip_ticker}/{_period_csv_filename(zip_ticker, ctx.a.label)}",
+                render_period_csv(ctx.name, ctx.ticker, ctx.a),
+            ),
+            (
+                f"{zip_ticker}/{_period_csv_filename(zip_ticker, ctx.b.label)}",
+                render_period_csv(ctx.name, ctx.ticker, ctx.b),
+            ),
+            (
+                f"{zip_ticker}/{zip_ticker}_compare_summary.csv",
+                render_compare_csv(ctx.name, ctx.ticker, ctx),
+            ),
+        ]
+        return zip_ticker, entries
+
 def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
     return KPISnapshot(
         revenue=row.revenue,
@@ -1421,6 +1467,41 @@ def render_period_csv(name: str, ticker: str | None, period: PeriodData) -> str:
             "" if value is None else repr(value),
             "" if yoy is None else repr(round(yoy, 2)),
             "" if qoq is None else repr(round(qoq, 2)),
+        ])
+    return buf.getvalue()
+
+
+def render_compare_csv(name: str, ticker: str | None, ctx: CompareContext) -> str:
+    """Render the compare view's metric × (A | B | Δ | Δ%) table as CSV.
+
+    Pure function of (company name, ticker, CompareContext) — raw numbers, no
+    formatting, so spreadsheets can compute on the values.
+    """
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# Company", f"{name} ({ticker})" if ticker else name])
+    w.writerow(["# Period A", ctx.period_a_label])
+    w.writerow(["# Period B", ctx.period_b_label])
+    w.writerow(["# Mode", ctx.mode])
+    w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
+    w.writerow(["metric", "period_a", "period_b", "delta", "delta_pct"])
+    for label, kpi_attr, _, bs_attr in _CSV_METRICS:
+        if bs_attr:
+            a_val = getattr(ctx.a.balance_sheet, bs_attr)
+            b_val = getattr(ctx.b.balance_sheet, bs_attr)
+        else:
+            a_val = getattr(ctx.a.kpi, kpi_attr)
+            b_val = getattr(ctx.b.kpi, kpi_attr)
+        delta = getattr(ctx.deltas, bs_attr or kpi_attr)
+        w.writerow([
+            label,
+            "" if a_val is None else repr(a_val),
+            "" if b_val is None else repr(b_val),
+            "" if delta.absolute is None else repr(delta.absolute),
+            "" if delta.pct is None else repr(round(delta.pct, 2)),
         ])
     return buf.getvalue()
 

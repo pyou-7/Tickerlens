@@ -252,6 +252,41 @@ def download_history_zip(ticker: str) -> StreamingResponse:
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{zip_ticker}_history.zip"'},
     )
+
+
+@router.get("/company/{ticker}/compare/download")
+def download_compare_zip(
+    ticker: str,
+    period_a: str | None = None,
+    period_b: str | None = None,
+    preset: Literal["yoy", "qoq", "5y"] | None = None,
+    mode: Literal["quarterly", "yearly"] = "quarterly",
+    year_a: int | None = None,
+    year_b: int | None = None,
+) -> StreamingResponse:
+    """Compare-view ZIP: both periods' CSVs + summary CSV (PRD §4.8, second slice).
+
+    Mirrors the compare page's parameters so the archive matches the screen.
+    """
+    ticker = ticker.upper()
+    try:
+        zip_ticker, entries = _svc.get_compare_zip_entries(
+            ticker,
+            period_a=period_a,
+            period_b=period_b,
+            preset=preset,
+            mode=mode,
+            year_a=year_a,
+            year_b=year_b,
+        )
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = build_history_zip(zip_ticker, entries)
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_ticker}_compare.zip"'},
+    )
 @router.get("/api/search")
 def api_search(q: str = "") -> dict:
     """Autocomplete suggestions for the search combobox (PRD §4.10).

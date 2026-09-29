@@ -123,6 +123,11 @@
     <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
   </form>
   {% endif %}
+  <div class="mt-4 flex items-center gap-2">
+    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Export</span>
+    <a href="/company/{{ ctx.ticker }}/compare/download?mode={{ ctx.mode }}&period_a={{ ctx.period_a_label | urlencode }}&period_b={{ ctx.period_b_label | urlencode }}{% if ctx.preset %}&preset={{ ctx.preset }}{% endif %}{% if ctx.mode == 'yearly' %}&year_a={{ ctx.a.fiscal_year }}&year_b={{ ctx.b.fiscal_year }}{% endif %}"
+       class="rounded-lg px-3 py-1.5 text-sm border border-gray-700 text-gray-300 hover:border-indigo-500 transition">⇓ Compare (ZIP)</a>
+  </div>
 </div>
 
 <!-- Comparison table -->

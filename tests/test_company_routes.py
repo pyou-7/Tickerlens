@@ -201,6 +201,107 @@ def test_history_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -
     assert resp.status_code == 404
 
 
+# ── compare ZIP download (PRD §4.8, second slice) ─────────────────────────────
+
+def test_compare_zip_route_returns_attachment(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_compare_zip_entries.return_value = (
+        "AAPL",
+        [
+            ("AAPL/AAPL_Q3-FY2025.csv", "metric,value,yoy_pct,qoq_pct\n"),
+            ("AAPL/AAPL_Q3-FY2024.csv", "metric,value,yoy_pct,qoq_pct\n"),
+            ("AAPL/AAPL_compare_summary.csv", "metric,period_a,period_b,delta,delta_pct\n"),
+        ],
+    )
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/compare/download?preset=yoy")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == 'attachment; filename="AAPL_compare.zip"'
+    mock_svc.get_compare_zip_entries.assert_called_once_with(
+        "AAPL", period_a=None, period_b=None, preset="yoy",
+        mode="quarterly", year_a=None, year_b=None,
+    )
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert zf.namelist() == [
+            "AAPL/AAPL_Q3-FY2025.csv",
+            "AAPL/AAPL_Q3-FY2024.csv",
+            "AAPL/AAPL_compare_summary.csv",
+        ]
+
+
+def test_compare_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyNotFoundError
+
+    mock_svc = MagicMock()
+    mock_svc.get_compare_zip_entries.side_effect = CompanyNotFoundError("Unknown ticker: ZZZZ")
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/ZZZZ/compare/download")
+    assert resp.status_code == 404
+
+
+def test_compare_zip_route_rejects_bad_preset(client: TestClient, monkeypatch) -> None:
+    """FastAPI validates the preset Literal — an unknown value 422s."""
+    resp = client.get("/company/AAPL/compare/download?preset=decade")
+    assert resp.status_code == 422
+
+
+def test_render_compare_csv_matches_compare_table() -> None:
+    """Summary CSV renders the same metric × (A | B | Δ | Δ%) table the page shows."""
+    import csv
+    import io as _io
+
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        CompareContext,
+        CompareDeltas,
+        KPIChange,
+        KPISnapshot,
+        MetricDelta,
+        PeriodData,
+        render_compare_csv,
+    )
+
+    def period(revenue: float | None) -> PeriodData:
+        return PeriodData(
+            label="Q3 FY2025", period_end=None, fiscal_year=2025,
+            fiscal_period="Q3",
+            kpi=KPISnapshot(revenue=revenue, eps_diluted=1.0),
+            yoy=KPIChange(), qoq=None,
+            balance_sheet=BalanceSheet(),
+            balance_sheet_yoy=BalanceSheetChange(), balance_sheet_qoq=None,
+        )
+
+    ctx = CompareContext(
+        cik="0000320193", name="Apple Inc.", ticker="AAPL", sector=None,
+        last_price=None, market_cap=None,
+        quarter_options=["Q3 FY2025", "Q3 FY2024"],
+        period_a_label="Q3 FY2025", period_b_label="Q3 FY2024", preset=None,
+        a=period(revenue=94_930.0), b=period(revenue=91_000.0),
+        deltas=CompareDeltas(
+            revenue=MetricDelta(absolute=3_930.0, pct=4.3187),
+            eps_diluted=MetricDelta(absolute=0.0, pct=0.0),
+        ),
+    )
+
+    rows = list(csv.reader(_io.StringIO(render_compare_csv("Apple Inc.", "AAPL", ctx))))
+    assert rows[0] == ["# Company", "Apple Inc. (AAPL)"]
+    assert rows[5] == ["metric", "period_a", "period_b", "delta", "delta_pct"]
+    by_metric = {r[0]: r for r in rows[6:]}
+    assert by_metric["Revenue"] == ["Revenue", "94930.0", "91000.0", "3930.0", "4.32"]
+    assert by_metric["EPS Diluted"] == ["EPS Diluted", "1.0", "1.0", "0.0", "0.0"]
+    assert by_metric["Total Assets"] == ["Total Assets", "", "", "", ""]
+
+
 # ── watchlist quote refresh (PRD §4.6, slice 2) ───────────────────────────────
 
 def test_watchlist_refresh_plain_post_redirects_home(client: TestClient, monkeypatch) -> None:
