@@ -368,3 +368,37 @@ def test_duplicate_facts_take_restated_value_from_latest_filing():
     # Labels still describe the original period; the number reflects the restatement.
     assert (metrics[0].fy, metrics[0].fp) == (2024, "Q3")
     assert metrics[0].value == 22500.0
+
+
+def _xbrl_row(fy: int, fp: str, end: dt.date) -> "QuarterlyFinancials":
+    from tickerlens.data.xbrl import QuarterlyFinancials
+
+    return QuarterlyFinancials(fy=fy, fp=fp, end=end, revenue=1.0)
+
+
+def test_dedupe_period_labels_walks_earlier_comparative_back() -> None:
+    """XOM's new-CIK dataset holds only the 2026 10-Q, so the 2025-06-30
+    comparative column is tagged fy=2026 — colliding with real Q2 FY2026."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2026, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _dedupe_period_labels(rows)
+    labels = sorted((r.fy, r.fp) for r in fixed)
+    assert labels == [(2025, "Q2"), (2026, "Q2")]
+    # the later (trustworthy) end keeps its label
+    later = next(r for r in fixed if r.end == dt.date(2026, 6, 30))
+    assert (later.fy, later.fp) == (2026, "Q2")
+
+
+def test_dedupe_period_labels_leaves_unique_labels_alone() -> None:
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+    ]
+    fixed = _dedupe_period_labels(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(2025, "Q1"), (2025, "Q2")]

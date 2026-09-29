@@ -190,6 +190,28 @@ def extract_recent_quarterly_financials(
                 cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
             )
         )
+    return _dedupe_period_labels(rows)
+
+
+def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:
+    """Ensure (fy, fp) labels are unique across rows.
+
+    Comparative prior-period columns in a later filing inherit that filing's
+    ``fy`` — when the original filing is absent from the CIK's dataset (e.g.
+    XOM's new-CIK history holds only the 2026 10-Q), the 2025 comparative
+    column is tagged fy=2026 and collides with the real Q2 FY2026, duplicating
+    selector options. A fiscal year has exactly one of each quarter, so when
+    two period ends share a label the earlier one is the mislabeled
+    comparative: walk its year back until the label is free. The later end
+    keeps its label because its original filing is the trustworthy source.
+    """
+    seen: set[tuple[int, str]] = set()
+    # Latest end first: its original filing is the trustworthy label source,
+    # so it claims the label and earlier (comparative) ends walk back.
+    for row in sorted(rows, key=lambda item: item.end, reverse=True):
+        while (row.fy, row.fp) in seen:
+            row.fy -= 1
+        seen.add((row.fy, row.fp))
     return rows
 
 

@@ -21,19 +21,20 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 ### Models layer (`src/tickerlens/models/`)
 
 - **`company.py`** — `Company` model; CIK (String(10)) as PK; ticker is a display label, not a join key.
+- **`watchlist.py`** — `WatchlistEntry` model; CIK PK + `added_at`; home-screen pins (PRD §4.6).
 - **`quarterly_financial.py`** — `QuarterlyFinancial` model; unique constraint on `(cik, period_end)`. Holds per-period `press_release_highlights` (Text) + `press_release_source` (String(64)), populated by `enrich_company` from the period's 8-K ex-99 exhibit (None = not available).
 - **`database.py`** — `get_engine`, `get_session`, `create_tables` helpers.
 - **`base.py`** — `DeclarativeBase`.
 
 ### Services layer (`src/tickerlens/services/`)
 
-- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page), `get_valuation` (valuation inputs from stored rows + quote, no network). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
+- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page), `get_valuation` (valuation inputs from stored rows + quote, no network), `watch_ticker` / `unwatch_ticker` / `is_watching` / `get_watchlist` (watchlist CRUD + home-screen rows with live signals). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
 - **`valuation.py`** — Pure rules-based valuation (PRD §4.11): `compute_valuation()` → `ValuationSignal` (signal, target price, upside %, confidence, method, reasoning). PEG-implied P/E primary, sales-based fallback, Watch on insufficient data.
 - **`ir_download.py`** — Filing discovery, FY labeling, 8-K matching for earnings PDF download. Companion to `scripts/download_earnings.py`.
 
 ### Routes layer (`src/tickerlens/routes/`)
 
-- **`company.py`** — `GET /` (home), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer), `GET /api/search` (autocomplete suggestions, PRD §4.10).
+- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6).
 
 ### App entry
 
@@ -58,6 +59,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 - `44892912880c_*` — Add `description`, `last_price`, `market_cap` columns to `companies`.
 - `017aee7df1c1_*` — Add balance-sheet columns to `quarterly_financials`.
 - `d1f5704c5e60_*` — Add `risk_factors`, `risk_factors_source` columns to `companies`.
+- `7a3e9c1f4b22_*` — Create `watchlist` table (CIK PK + `added_at`).
 - `3049fff86581_*` — Add `press_release_highlights`, `press_release_source` columns to `quarterly_financials`.
 
 ## Phase 1 Findings To Preserve
