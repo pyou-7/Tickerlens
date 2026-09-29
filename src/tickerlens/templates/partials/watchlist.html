@@ -11,11 +11,11 @@
   </div>
   <div class="rounded-xl bg-gray-900 border border-gray-800 divide-y divide-gray-800">
     {% for row in watchlist %}
-    <a href="/company/{{ row.ticker }}" class="flex items-center justify-between px-4 py-2.5 hover:bg-gray-800/50 transition">
-      <div class="flex items-center gap-3 min-w-0">
+    <div class="flex items-center justify-between px-4 py-2.5 hover:bg-gray-800/50 transition">
+      <a href="/company/{{ row.ticker }}" class="flex items-center gap-3 min-w-0 flex-1">
         <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm shrink-0">{{ row.ticker }}</span>
         <span class="text-gray-300 text-sm truncate">{{ row.name }}</span>
-      </div>
+      </a>
       <div class="flex items-center gap-3 shrink-0">
         {% if row.last_price is not none %}
         <span class="text-white text-sm font-medium">${{ "%.2f"|format(row.last_price) }}</span>
@@ -32,8 +32,13 @@
           {% endif %}
         <span class="text-xs font-semibold {{ sc }}">{{ row.signal }}</span>
         {% endif %}
+        <form action="/company/{{ row.ticker }}/watch/remove?next=home" method="post" class="inline"
+              hx-post="/company/{{ row.ticker }}/watch/remove?next=home" hx-target="#watchlist-section" hx-swap="outerHTML">
+          <button type="submit" title="Remove {{ row.ticker }} from watchlist"
+                  class="text-gray-600 hover:text-red-400 text-sm px-1 transition">✕</button>
+        </form>
       </div>
-    </a>
+    </div>
     {% endfor %}
   </div>
 </div>

@@ -74,16 +74,30 @@ def watch_company(request: Request, ticker: str):
 
 @router.post("/company/{ticker}/watch/remove", response_class=HTMLResponse)
 def unwatch_company(request: Request, ticker: str):
-    """Remove a company from the watchlist. HTMX swaps the button in place."""
+    """Remove a company from the watchlist.
+
+    HTMX swaps the watch button in place; the home-page pin form passes
+    ``?next=home`` so HTMX re-renders the pins section instead and plain
+    form POSTs redirect back home.
+    """
     ticker = ticker.upper()
     _svc.unwatch_ticker(ticker)
+    from_home = request.query_params.get("next") == "home"
     if request.headers.get("HX-Request"):
+        if from_home:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/watchlist.html",
+                context={"watchlist": _svc.get_watchlist()},
+            )
         return templates.TemplateResponse(
             request=request,
             name="partials/watch_button.html",
             context={"ticker": ticker, "watching": False},
         )
-    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
+    return RedirectResponse(
+        url="/" if from_home else f"/company/{ticker}", status_code=303
+    )
 
 
 @router.post("/watchlist/refresh", response_class=HTMLResponse)

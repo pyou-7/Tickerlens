@@ -249,3 +249,52 @@ def test_detail_data_passes_chart_range_params(client: TestClient, monkeypatch) 
     _, kwargs = mock_svc.get_detail.call_args
     assert kwargs["chart_from"] == "Q1 FY2025"
     assert kwargs["chart_to"] == "Q3 FY2025"
+
+
+# ── unwatch from home (PRD §4.6, slice 3) ─────────────────────────────────────
+
+def test_unwatch_from_home_plain_post_redirects_home(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/remove?next=home", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    mock_svc.unwatch_ticker.assert_called_once_with("AAPL")
+
+
+def test_unwatch_from_home_htmx_returns_pins_partial(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import WatchlistRow
+
+    mock_svc = MagicMock()
+    mock_svc.get_watchlist.return_value = [
+        WatchlistRow(cik="0000789019", ticker="MSFT", name="Microsoft Corp.",
+                     last_price=500.0, market_cap=3e12, signal="Hold")
+    ]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/remove?next=home", headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert 'id="watchlist-section"' in resp.text
+    assert "MSFT" in resp.text
+    assert "AAPL" not in resp.text
+    mock_svc.unwatch_ticker.assert_called_once_with("AAPL")
+
+
+def test_unwatch_from_overview_still_swaps_button(client: TestClient, monkeypatch) -> None:
+    """The Overview-header toggle keeps its old behavior without ?next=home."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/remove", headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert "watchlist-section" not in resp.text
+
+    resp = client.post("/company/AAPL/watch/remove", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/company/AAPL"
