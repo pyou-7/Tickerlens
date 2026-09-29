@@ -87,7 +87,20 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         ),
         unit="USD",
     ),
-    Metric.NET_INCOME: ConceptSpec(tags=("NetIncomeLoss",), unit="USD"),
+    # Net income: filers sometimes abandon plain ``NetIncomeLoss`` and report
+    # only per-common-share net income (e.g. Realty Income stopped filing
+    # ``NetIncomeLoss`` quarterly in 2026, filing only
+    # ``NetIncomeLossAvailableToCommonStockholdersBasic`` + ``ProfitLoss``).
+    # The freshness rule below skips abandoned tags, so these fallbacks only
+    # kick in when ``NetIncomeLoss`` is stale or absent.
+    Metric.NET_INCOME: ConceptSpec(
+        tags=(
+            "NetIncomeLoss",
+            "NetIncomeLossAvailableToCommonStockholdersBasic",
+            "ProfitLoss",
+        ),
+        unit="USD",
+    ),
     Metric.EPS_BASIC: ConceptSpec(tags=("EarningsPerShareBasic",), unit="USD/shares"),
     Metric.EPS_DILUTED: ConceptSpec(tags=("EarningsPerShareDiluted",), unit="USD/shares"),
     Metric.OPERATING_CASH_FLOW: ConceptSpec(
@@ -304,10 +317,14 @@ def quarterly_cash_flow_metric(
 
 
 # A tag whose newest fact is more than this far behind the freshest tag in the
-# chain is considered abandoned by the filer. Well above a filing cycle
-# (~90 days) so slow filers are never penalized; well below real abandonments
-# (PLUG's stale tag lagged by 5+ years).
-_MAX_TAG_STALENESS_DAYS = 400
+# chain is considered abandoned by the filer. Two full filing cycles (~180
+# days): the relative rule compares tags from the *same* filer, so a slow
+# filer is never penalized (all its tags lag together); a tag missing for two
+# consecutive quarters while a sibling tag stays current is abandonment, even
+# when the switch is recent (Realty Income dropped quarterly ``NetIncomeLoss``
+# only ~273 days before the replacement tag's newest fact; PLUG's stale tag
+# lagged by 5+ years).
+_MAX_TAG_STALENESS_DAYS = 180
 
 
 def concept_facts(
@@ -429,7 +446,7 @@ def _finance_total_revenue(
     """Quarterly ``Revenues`` for finance filers, when it is actually current.
 
     Unlike the generic chain's *relative* staleness rule (a tag is fresh if it
-    is within 400 days of the freshest tag in the chain), this needs an
+    is within ``_MAX_TAG_STALENESS_DAYS`` of the freshest tag in the chain), this needs an
     *absolute* check: JPM files nothing else quarterly in the chain, so its
     2014 ``Revenues`` would look "fresh" relative to itself. Facts older than
     ``_MAX_TAG_STALENESS_DAYS`` from today count as abandoned and yield [],

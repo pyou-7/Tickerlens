@@ -344,6 +344,86 @@ def test_capex_keeps_ppande_tag_when_fresh():
     assert tag == "PaymentsToAcquirePropertyPlantAndEquipment"
 
 
+def test_net_income_falls_back_to_common_stockholders_tag_when_abandoned() -> None:
+    """Mirror the Realty Income (O) case: ``NetIncomeLoss`` quarterly facts
+    stop at 2025-09-30 (273 days behind); the filer now reports net income as
+    ``NetIncomeLossAvailableToCommonStockholdersBasic`` through 2026-06-30.
+    The lag exceeds the staleness threshold, so the fallback wins.
+    """
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            fact("2025-07-01", "2025-09-30", 315_771_000.0, 2025, "Q3"),
+                        ]
+                    }
+                },
+                "NetIncomeLossAvailableToCommonStockholdersBasic": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 311_766_000.0, 2026, "Q1"),
+                            fact("2026-04-01", "2026-06-30", 343_955_000.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, facts = concept_facts(companyfacts, Metric.NET_INCOME, staleness_window=(70, 100))
+    assert tag == "NetIncomeLossAvailableToCommonStockholdersBasic"
+    assert max(f.end for f in facts).isoformat() == "2026-06-30"
+
+
+def test_net_income_prefers_classic_tag_when_both_fresh() -> None:
+    """Chain order (semantic preference) wins when both net-income tags are
+    current — the fallback only kicks in for abandoned tags."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 500_000_000.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+                "NetIncomeLossAvailableToCommonStockholdersBasic": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 480_000_000.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, _ = concept_facts(companyfacts, Metric.NET_INCOME, staleness_window=(70, 100))
+    assert tag == "NetIncomeLoss"
+
+
+def test_net_income_falls_back_to_profit_loss_when_nothing_else() -> None:
+    """``ProfitLoss`` serves as the last-resort net-income tag when the filer
+    reports neither ``NetIncomeLoss`` nor the common-stockholders tag."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "ProfitLoss": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 123_000_000.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, facts = concept_facts(companyfacts, Metric.NET_INCOME, staleness_window=(70, 100))
+    assert tag == "ProfitLoss"
+    assert facts[0].val == 123_000_000.0
+
+
 def test_concept_facts_prefers_chain_order_when_fresh():
     cf = _stale_chain_facts()
     # Without the quarterly window the first tag's half-year fact makes it
