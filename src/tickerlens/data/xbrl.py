@@ -95,7 +95,12 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         unit="USD",
     ),
     Metric.CAPEX: ConceptSpec(
-        tags=("PaymentsToAcquirePropertyPlantAndEquipment",),
+        tags=(
+            "PaymentsToAcquirePropertyPlantAndEquipment",
+            # NVDA abandoned the tag above after 2020 and now files CapEx as
+            # "Purchases of property and equipment" under this tag.
+            "PaymentsToAcquireProductiveAssets",
+        ),
         unit="USD",
     ),
     Metric.TOTAL_ASSETS: ConceptSpec(tags=("Assets",), unit="USD"),

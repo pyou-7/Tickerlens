@@ -301,6 +301,49 @@ def test_concept_facts_skips_abandoned_tag_for_quarterly_window():
     assert tag == "RevenueFromContractWithCustomerIncludingAssessedTax"
 
 
+def _nvda_capex_tag_switch_facts() -> dict:
+    """Mirror the NVDA case: ``PaymentsToAcquirePropertyPlantAndEquipment``
+    has facts ending in 2020; CapEx is now filed quarterly under
+    ``PaymentsToAcquireProductiveAssets``."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "PaymentsToAcquirePropertyPlantAndEquipment": {
+                    "units": {
+                        "USD": [
+                            fact("2020-04-27", "2020-07-26", 217_000_000.0, 2021, "Q2"),
+                        ]
+                    }
+                },
+                "PaymentsToAcquireProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-26", "2026-04-26", 1_757_000_000.0, 2027, "Q1"),
+                            fact("2026-01-26", "2026-07-26", 4_434_000_000.0, 2027, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_capex_falls_back_to_productive_assets_tag():
+    tag, _ = concept_facts(_nvda_capex_tag_switch_facts(), Metric.CAPEX)
+    assert tag == "PaymentsToAcquireProductiveAssets"
+
+
+def test_capex_keeps_ppande_tag_when_fresh():
+    cf = _nvda_capex_tag_switch_facts()
+    # A filer still using the classic tag: chain order (semantic preference)
+    # wins because both tags are current.
+    cf["facts"]["us-gaap"]["PaymentsToAcquirePropertyPlantAndEquipment"]["units"][
+        "USD"
+    ].append(fact("2026-01-01", "2026-03-31", 500_000_000.0, 2026, "Q1"))
+    tag, _ = concept_facts(cf, Metric.CAPEX)
+    assert tag == "PaymentsToAcquirePropertyPlantAndEquipment"
+
+
 def test_concept_facts_prefers_chain_order_when_fresh():
     cf = _stale_chain_facts()
     # Without the quarterly window the first tag's half-year fact makes it
