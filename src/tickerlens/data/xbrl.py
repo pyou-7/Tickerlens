@@ -181,6 +181,10 @@ def extract_recent_quarterly_financials(
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
     balance_sheet = {metric: _safe_bs(metric) for metric in BALANCE_SHEET_METRICS}
+    # Filers that never report a standalone ``Liabilities`` tag (e.g. Eli
+    # Lilly files only LiabilitiesAndStockholdersEquity + StockholdersEquity)
+    # get total liabilities from the accounting identity instead of "—".
+    _derive_missing_liabilities(balance_sheet)
 
     canonical = sorted(revenue, key=lambda item: item.end)[-periods:]
     by_end = {
@@ -570,6 +574,26 @@ def balance_sheet_metric(
         end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
         for end, candidates in grouped.items()
     }
+
+
+def _derive_missing_liabilities(
+    balance_sheet: dict[Metric, dict[dt.date, float]],
+) -> None:
+    """Fill missing total-liability instants via the accounting identity.
+
+    Some filers (e.g. Eli Lilly) never report a standalone ``Liabilities``
+    tag — only ``LiabilitiesAndStockholdersEquity`` alongside
+    ``StockholdersEquity`` — so the balance-sheet tab and compare table
+    showed "—". Assets = Liabilities + Equity recovers the exact value from
+    the same filing's Assets and StockholdersEquity; only ends where both
+    components exist are filled, and an explicitly filed Liabilities value
+    is never overwritten.
+    """
+    liabilities = balance_sheet[Metric.TOTAL_LIABILITIES]
+    assets = balance_sheet[Metric.TOTAL_ASSETS]
+    equity = balance_sheet[Metric.TOTAL_EQUITY]
+    for end in sorted(set(assets) & set(equity)):
+        liabilities.setdefault(end, assets[end] - equity[end])
 
 
 # SEC's fiscalYearEnd is a fixed MMDD, but 52/53-week filers use floating

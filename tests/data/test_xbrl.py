@@ -198,6 +198,61 @@ def test_extract_joins_balance_sheet_by_period_end() -> None:
     assert rows[0].total_assets == 331_233
 
 
+def test_missing_liabilities_derived_from_assets_minus_equity() -> None:
+    """Mirror the Eli Lilly (LLY) case: no standalone ``Liabilities`` tag —
+    only Assets and StockholdersEquity instants. Total liabilities is derived
+    from the accounting identity instead of showing None."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [fact("2026-01-01", "2026-03-31", 10_000, 2026, "Q1")]}
+                },
+                "Assets": {
+                    "units": {"USD": [instant_fact("2026-03-31", 142_283, 2026, "Q1")]}
+                },
+                "StockholdersEquity": {
+                    "units": {"USD": [instant_fact("2026-03-31", 33_879, 2026, "Q1")]}
+                },
+            }
+        }
+    }
+
+    rows = extract_recent_quarterly_financials(companyfacts, fiscal_year_end="1231", periods=4)
+
+    assert len(rows) == 1
+    assert rows[0].total_assets == 142_283
+    assert rows[0].total_equity == 33_879
+    assert rows[0].total_liabilities == 142_283 - 33_879
+
+
+def test_explicit_liabilities_tag_never_overwritten_by_identity() -> None:
+    """A filed Liabilities value wins over the Assets − Equity derivation."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [fact("2026-01-01", "2026-03-31", 10_000, 2026, "Q1")]}
+                },
+                "Assets": {
+                    "units": {"USD": [instant_fact("2026-03-31", 142_283, 2026, "Q1")]}
+                },
+                "StockholdersEquity": {
+                    "units": {"USD": [instant_fact("2026-03-31", 33_879, 2026, "Q1")]}
+                },
+                "Liabilities": {
+                    "units": {"USD": [instant_fact("2026-03-31", 100_000, 2026, "Q1")]}
+                },
+            }
+        }
+    }
+
+    rows = extract_recent_quarterly_financials(companyfacts, fiscal_year_end="1231", periods=4)
+
+    assert len(rows) == 1
+    assert rows[0].total_liabilities == 100_000
+
+
 def make_companyfacts(
     *,
     revenue_values: list[tuple[str, str, float, int, str]],
