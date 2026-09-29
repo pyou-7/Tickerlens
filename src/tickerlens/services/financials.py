@@ -23,6 +23,7 @@ from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
 from tickerlens.models.valuation_history import ValuationHistory
+from tickerlens.models.watchlist import WatchlistEntry
 from tickerlens.services.ir_download import (
     EarningsPeriod,
     discover_earnings_filings,
@@ -92,6 +93,17 @@ class SignalChange(BaseModel):
     previous_signal: str  # e.g. "Hold"
     previous_date: dt.date  # date of the prior snapshot
     current_signal: str  # e.g. "Buy"
+
+
+class WatchlistRow(BaseModel):
+    """One pinned company for the home screen (PRD §4.6)."""
+
+    cik: str
+    ticker: str | None
+    name: str
+    last_price: float | None
+    market_cap: float | None
+    signal: str | None  # current valuation signal; None when not computable
 
 
 class CompanyOverview(BaseModel):
@@ -552,6 +564,78 @@ class FinancialsService:
                 previous_date=previous.as_of,
                 current_signal=latest.signal,
             )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def watch_ticker(self, ticker: str, session: Session | None = None) -> bool:
+        """Pin a company to the watchlist. Returns True (now watching)."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            if db.get(Company, cik) is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+            if db.get(WatchlistEntry, cik) is None:
+                db.add(WatchlistEntry(cik=cik))
+                db.commit()
+            return True
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def unwatch_ticker(self, ticker: str, session: Session | None = None) -> bool:
+        """Remove a company from the watchlist. Returns False (not watching)."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            entry = db.get(WatchlistEntry, cik)
+            if entry is not None:
+                db.delete(entry)
+                db.commit()
+            return False
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def is_watching(self, ticker: str, session: Session | None = None) -> bool:
+        """Whether the ticker's company is on the watchlist."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            return db.get(WatchlistEntry, cik) is not None
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_watchlist(self, session: Session | None = None) -> list[WatchlistRow]:
+        """Pinned companies, most recently added first, with live signals."""
+        db = session or self._session or get_session()
+        try:
+            rows = (
+                db.execute(
+                    select(WatchlistEntry, Company)
+                    .join(Company, Company.cik == WatchlistEntry.cik)
+                    .order_by(WatchlistEntry.added_at.desc())
+                )
+                .all()
+            )
+            result: list[WatchlistRow] = []
+            for entry, company in rows:
+                try:
+                    signal = self.get_valuation(company.ticker or entry.cik, session=db).signal
+                except CompanyNotFoundError:
+                    signal = None
+                result.append(
+                    WatchlistRow(
+                        cik=entry.cik,
+                        ticker=company.ticker,
+                        name=company.name,
+                        last_price=company.last_price,
+                        market_cap=company.market_cap,
+                        signal=signal,
+                    )
+                )
+            return result
         finally:
             if session is None and self._session is None:
                 db.close()

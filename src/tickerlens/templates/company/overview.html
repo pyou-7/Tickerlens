@@ -63,12 +63,16 @@
     </div>
   </div>
 
-  <form method="post" action="/company/{{ overview.ticker }}/refresh">
-    <button type="submit"
-            class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
-      ↻ Refresh
-    </button>
-  </form>
+  <div class="flex gap-2">
+    {% set ticker = overview.ticker %}
+    {% include "partials/watch_button.html" %}
+    <form method="post" action="/company/{{ overview.ticker }}/refresh">
+      <button type="submit"
+              class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
+        ↻ Refresh
+      </button>
+    </form>
+  </div>
 </div>
 
 <!-- Description -->

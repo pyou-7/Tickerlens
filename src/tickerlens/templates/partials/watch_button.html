@@ -1,0 +1,9 @@
+{# Watch toggle button. Swapped in place via HTMX; plain POST works without JS. #}
+<form method="post" action="/company/{{ ticker }}/watch{% if watching %}/remove{% endif %}"
+      hx-post="/company/{{ ticker }}/watch{% if watching %}/remove{% endif %}"
+      hx-swap="outerHTML" class="inline">
+  <button type="submit"
+          class="rounded-lg border px-4 py-1.5 text-sm transition {% if watching %}border-amber-600/60 text-amber-300 hover:bg-amber-950/40{% else %}border-gray-700 text-gray-300 hover:bg-gray-800{% endif %}">
+    {% if watching %}★ Watching{% else %}☆ Watch{% endif %}
+  </button>
+</form>

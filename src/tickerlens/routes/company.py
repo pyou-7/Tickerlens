@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from tickerlens.services.financials import (
@@ -24,7 +24,9 @@ _svc = FinancialsService()
 
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request=request, name="index.html")
+    return templates.TemplateResponse(
+        request=request, name="index.html", context={"watchlist": _svc.get_watchlist()}
+    )
 
 
 @router.get("/company/{ticker}", response_class=HTMLResponse)
@@ -47,8 +49,40 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "overview": overview,
             "valuation": _svc.get_valuation(ticker),
             "signal_change": _svc.get_signal_change(ticker),
+            "watching": _svc.is_watching(ticker),
         },
     )
+
+
+@router.post("/company/{ticker}/watch", response_class=HTMLResponse)
+def watch_company(request: Request, ticker: str):
+    """Pin a company to the watchlist. HTMX swaps the button in place."""
+    ticker = ticker.upper()
+    try:
+        _svc.watch_ticker(ticker)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/watch_button.html",
+            context={"ticker": ticker, "watching": True},
+        )
+    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
+
+
+@router.post("/company/{ticker}/watch/remove", response_class=HTMLResponse)
+def unwatch_company(request: Request, ticker: str):
+    """Remove a company from the watchlist. HTMX swaps the button in place."""
+    ticker = ticker.upper()
+    _svc.unwatch_ticker(ticker)
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/watch_button.html",
+            context={"ticker": ticker, "watching": False},
+        )
+    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
 
 
 @router.get("/company/{ticker}/detail", response_class=HTMLResponse)
@@ -155,5 +189,6 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
             "overview": overview,
             "valuation": _svc.get_valuation(ticker),
             "signal_change": _svc.get_signal_change(ticker),
+            "watching": _svc.is_watching(ticker),
         },
     )

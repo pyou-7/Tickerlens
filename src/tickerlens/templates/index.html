@@ -3,6 +3,40 @@
 {% block content %}
 <div class="flex flex-col items-center justify-center min-h-[60vh] gap-6">
   <h1 class="text-4xl font-bold text-white">Tickerlens</h1>
+
+  {% if watchlist %}
+  <div class="w-full max-w-md">
+    <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-2">Watchlist</h2>
+    <div class="rounded-xl bg-gray-900 border border-gray-800 divide-y divide-gray-800">
+      {% for row in watchlist %}
+      <a href="/company/{{ row.ticker }}" class="flex items-center justify-between px-4 py-2.5 hover:bg-gray-800/50 transition">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm shrink-0">{{ row.ticker }}</span>
+          <span class="text-gray-300 text-sm truncate">{{ row.name }}</span>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          {% if row.last_price is not none %}
+          <span class="text-white text-sm font-medium">${{ "%.2f"|format(row.last_price) }}</span>
+          {% endif %}
+          {% if row.signal %}
+            {% if row.signal in ["Strong Buy", "Buy"] %}
+              {% set sc = "text-green-400" %}
+            {% elif row.signal == "Hold" %}
+              {% set sc = "text-yellow-300" %}
+            {% elif row.signal in ["Sell", "Strong Sell"] %}
+              {% set sc = "text-red-400" %}
+            {% else %}
+              {% set sc = "text-gray-400" %}
+            {% endif %}
+          <span class="text-xs font-semibold {{ sc }}">{{ row.signal }}</span>
+          {% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   <p class="text-gray-400">Search a ticker or company name to get started.</p>
   <form action="" method="get" id="ticker-form"
         onsubmit="var v=document.getElementById('ticker-input').value.trim();if(v)window.location='/company/'+encodeURIComponent(v.toUpperCase());return false;"
