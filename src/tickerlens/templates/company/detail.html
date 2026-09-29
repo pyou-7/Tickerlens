@@ -112,6 +112,34 @@
       </select>
     </div>
 
+    <!-- Chart range window (PRD §4.2, range-mode slice 1). Quarterly only;
+         bounds the trend chart; KPI cards and tables still follow the
+         selected period above. Submitted with the form on change. -->
+    <div x-show="gran === 'quarterly'" x-cloak class="flex items-center gap-2">
+      <span class="text-xs text-gray-500">Chart:</span>
+      <select
+        name="chart_from"
+        :disabled="gran !== 'quarterly'"
+        aria-label="Chart range start"
+        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {% for opt in ctx.chart_range_options %}
+          <option value="{{ opt }}" {% if opt == ctx.selected_chart_from %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+      <span class="text-xs text-gray-500">→</span>
+      <select
+        name="chart_to"
+        :disabled="gran !== 'quarterly'"
+        aria-label="Chart range end"
+        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        {% for opt in ctx.chart_range_options %}
+          <option value="{{ opt }}" {% if opt == ctx.selected_chart_to %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <!-- Loading indicator -->
     <span id="slicer-spinner" class="htmx-indicator text-xs text-gray-500">Loading…</span>
   </form>

@@ -109,18 +109,22 @@ def company_detail(
     granularity: Literal["quarterly", "yearly"] = "quarterly",
     quarter: str | None = None,
     year: int | None = None,
+    chart_from: str | None = None,
+    chart_to: str | None = None,
 ) -> HTMLResponse:
     ticker = ticker.upper()
     try:
         ctx = _svc.get_detail(
-            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
+            chart_from=chart_from, chart_to=chart_to,
         )
     except CompanyNotFoundError:
         try:
             _svc.fetch_and_persist(ticker, periods=8)
             _svc.enrich_company(ticker)
             ctx = _svc.get_detail(
-                ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+                ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
+                chart_from=chart_from, chart_to=chart_to,
             )
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -138,12 +142,15 @@ def company_detail_data(
     granularity: Literal["quarterly", "yearly"] = "quarterly",
     quarter: str | None = None,
     year: int | None = None,
+    chart_from: str | None = None,
+    chart_to: str | None = None,
 ) -> HTMLResponse:
     """HTMX endpoint — returns only the swappable data section of the detail page."""
     ticker = ticker.upper()
     try:
         ctx = _svc.get_detail(
-            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year
+            ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
+            chart_from=chart_from, chart_to=chart_to,
         )
     except CompanyNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -34,7 +34,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Routes layer (`src/tickerlens/routes/`)
 
-- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1).
+- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer, chart range window via `chart_from`/`chart_to`), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /watchlist/refresh` (refresh-all quotes, PRD §4.6), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1).
 
 ### App entry
 

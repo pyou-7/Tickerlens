@@ -233,3 +233,19 @@ def test_watchlist_refresh_htmx_returns_pins_partial(client: TestClient, monkeyp
     assert 'id="watchlist-section"' in resp.text
     assert "AAPL" in resp.text
     assert "400.00" in resp.text
+
+
+# ── chart range window (PRD §4.2, range-mode slice 1) ──────────────────────────
+
+def test_detail_data_passes_chart_range_params(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _detail_ctx()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data?chart_from=Q1%20FY2025&chart_to=Q3%20FY2025")
+    assert resp.status_code == 200
+    _, kwargs = mock_svc.get_detail.call_args
+    assert kwargs["chart_from"] == "Q1 FY2025"
+    assert kwargs["chart_to"] == "Q3 FY2025"

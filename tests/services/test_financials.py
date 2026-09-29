@@ -1038,3 +1038,63 @@ def test_refresh_watchlist_quotes_counts_failures(session: Session, monkeypatch)
     result = _svc_with_mock(session).refresh_watchlist_quotes()
 
     assert result == {"updated": 0, "failed": 1}
+
+
+# ── chart range window (PRD §4.2, range-mode slice 1) ───────────────────────────
+
+def _seed_five_quarters(session: Session, cik: str = "0000320193") -> None:
+    session.add(_company(cik=cik))
+    for end, fy, fp, rev in [
+        (dt.date(2024, 9, 30), 2024, "Q3", 91_000),
+        (dt.date(2024, 12, 31), 2024, "Q4", 119_575),
+        (dt.date(2025, 3, 31), 2025, "Q1", 95_359),
+        (dt.date(2025, 6, 30), 2025, "Q2", 85_777),
+        (dt.date(2025, 9, 28), 2025, "Q3", 94_930),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, eps_diluted=1.0))
+    session.commit()
+
+
+def test_get_detail_chart_range_windows_trend_chart(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    assert ctx.chart_labels == ["Q4 FY2024", "Q1 FY2025", "Q2 FY2025"]
+    assert ctx.chart_revenue == [119_575, 95_359, 85_777]
+    assert ctx.selected_chart_from == "Q4 FY2024"
+    assert ctx.selected_chart_to == "Q2 FY2025"
+    assert ctx.chart_range_options == [
+        "Q3 FY2024", "Q4 FY2024", "Q1 FY2025", "Q2 FY2025", "Q3 FY2025",
+    ]
+    # KPI cards and tables still follow the selected period (latest default).
+    assert ctx.current.label == "Q3 FY2025"
+
+
+def test_get_detail_chart_range_inverted_is_swapped(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q2 FY2025", chart_to="Q4 FY2024"
+    )
+    assert ctx.chart_labels == ["Q4 FY2024", "Q1 FY2025", "Q2 FY2025"]
+    assert ctx.selected_chart_from == "Q4 FY2024"
+    assert ctx.selected_chart_to == "Q2 FY2025"
+
+
+def test_get_detail_chart_range_defaults_to_full_history(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail("AAPL")
+    assert ctx.chart_labels == [
+        "Q3 FY2024", "Q4 FY2024", "Q1 FY2025", "Q2 FY2025", "Q3 FY2025",
+    ]
+    assert ctx.selected_chart_from == "Q3 FY2024"
+    assert ctx.selected_chart_to == "Q3 FY2025"
+
+
+def test_get_detail_chart_range_unknown_label_falls_back(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail("AAPL", chart_from="Q9 FY2099")
+    assert ctx.chart_labels[0] == "Q3 FY2024"
+    assert len(ctx.chart_labels) == 5

@@ -158,6 +158,12 @@ class DetailContext(BaseModel):
     chart_labels: list[str]
     chart_revenue: list[float | None]
     chart_eps: list[float | None]
+    # Chart range window (PRD §4.2, range-mode slice 1): From/To quarter labels
+    # bounding the trend chart. Chronological option list; None-safe defaults
+    # cover the full history.
+    chart_range_options: list[str] = []
+    selected_chart_from: str | None = None
+    selected_chart_to: str | None = None
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
@@ -690,9 +696,18 @@ class FinancialsService:
         granularity: str = "quarterly",
         selected_quarter: str | None = None,
         selected_year: int | None = None,
+        chart_from: str | None = None,
+        chart_to: str | None = None,
         session: Session | None = None,
     ) -> DetailContext:
-        """Return everything the detail / time-slicer page needs."""
+        """Return everything the detail / time-slicer page needs.
+
+        ``chart_from``/``chart_to`` are quarter labels (e.g. "Q1 FY2025") that
+        bound the trend chart's range window (PRD §4.2, range-mode slice 1);
+        KPI cards, tables, and downloads still follow the selected period.
+        Unknown labels fall back to the full history; an inverted range is
+        swapped rather than rejected.
+        """
         cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
@@ -741,10 +756,16 @@ class FinancialsService:
                     all_rows, selected_quarter, latest
                 )
 
-            # Chart data — chronological order across all quarters
-            chart_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
-            chart_revenue = [r.revenue for r in all_rows]
-            chart_eps = [r.eps_diluted for r in all_rows]
+            # Chart data — chronological order across all quarters, windowed
+            # by the range selectors (PRD §4.2, slice 1).
+            chrono_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
+            from_idx = chrono_labels.index(chart_from) if chart_from in chrono_labels else 0
+            to_idx = chrono_labels.index(chart_to) if chart_to in chrono_labels else len(chrono_labels) - 1
+            if from_idx > to_idx:
+                from_idx, to_idx = to_idx, from_idx
+            chart_labels = chrono_labels[from_idx : to_idx + 1]
+            chart_revenue = [r.revenue for r in all_rows[from_idx : to_idx + 1]]
+            chart_eps = [r.eps_diluted for r in all_rows[from_idx : to_idx + 1]]
 
             # Press-release highlights belong to the selected period. In yearly
             # mode the year's earnings release is the Q4 (annual) one; fall back
@@ -782,6 +803,9 @@ class FinancialsService:
                 chart_labels=chart_labels,
                 chart_revenue=chart_revenue,
                 chart_eps=chart_eps,
+                chart_range_options=chrono_labels,
+                selected_chart_from=chart_labels[0],
+                selected_chart_to=chart_labels[-1],
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
                 press_release_highlights=pr_row.press_release_highlights if pr_row else None,
