@@ -234,16 +234,22 @@ def quarterly_income_metric(
     fiscal_year_end: str | None = None,
     sic: str | int | None = None,
 ) -> list[PeriodMetric]:
-    # Banks report revenue as noninterest + net interest income; the generic
-    # chain's quarterly facts may be long abandoned (JPM: 2014), so prefer the
-    # composite for finance SICs. Falls back to the generic chain when the
-    # components are absent (e.g. insurers).
-    if metric is Metric.REVENUE and _is_bank_sic(sic):
-        composite = _bank_quarterly_revenue(companyfacts, fiscal_year_end)
-        if composite:
-            return composite
+    # Finance filers (SIC Division H) report revenue differently: prefer the
+    # filer's own total-revenue tag when current (MET's contract-revenue tag
+    # is a $0.7B fee-income sub-component vs $19B total Revenues); banks that
+    # file Revenues only annually fall through to the component composite.
+    # Falls back to the generic chain when neither is available (e.g.
+    # insurers without quarterly Revenues).
+    if metric is Metric.REVENUE and _is_finance_sic(sic):
+        total = _finance_total_revenue(companyfacts, fiscal_year_end)
+        if total:
+            return total
+        if _is_bank_sic(sic):
+            composite = _bank_quarterly_revenue(companyfacts, fiscal_year_end)
+            if composite:
+                return composite
         logger.warning(
-            "bank revenue composite unavailable — falling back to generic chain"
+            "finance revenue preference unavailable — falling back to generic chain"
         )
     source_tag, facts = concept_facts(
         companyfacts, metric, staleness_window=(70, 100)
@@ -394,6 +400,56 @@ _BANK_REVENUE_COMPONENTS: tuple[tuple[str, ...], ...] = (
     ("NoninterestIncome",),
     ("InterestIncomeExpenseNet", "NetInterestIncome"),
 )
+
+
+# Finance filers (SIC Division H, 6000-6999) report revenue differently from
+# operating companies: the contract-revenue tags the generic chain prefers
+# are often small sub-components (MET: $0.7B fee income) while the filer's own
+# total-revenue tag ``Revenues`` is the true top line ($19B). Prefer
+# ``Revenues`` when its quarterly facts are current; banks that file it only
+# annually (JPM's quarterly ``Revenues`` stops in 2014) fall through to the
+# component composite below.
+_FINANCE_SIC_LO, _FINANCE_SIC_HI = 6000, 7000
+
+
+def _is_finance_sic(sic: str | int | None) -> bool:
+    """True for finance SICs (Division H: banks, insurers, real estate)."""
+    if sic is None:
+        return False
+    try:
+        return _FINANCE_SIC_LO <= int(str(sic).strip()) < _FINANCE_SIC_HI
+    except (TypeError, ValueError):
+        return False
+
+
+def _finance_total_revenue(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly ``Revenues`` for finance filers, when it is actually current.
+
+    Unlike the generic chain's *relative* staleness rule (a tag is fresh if it
+    is within 400 days of the freshest tag in the chain), this needs an
+    *absolute* check: JPM files nothing else quarterly in the chain, so its
+    2014 ``Revenues`` would look "fresh" relative to itself. Facts older than
+    ``_MAX_TAG_STALENESS_DAYS`` from today count as abandoned and yield [],
+    letting bank-SIC filers fall through to the component composite.
+    """
+    try:
+        source_tag, facts = _select_tag_facts(
+            companyfacts, ("Revenues",), "USD", staleness_window=(70, 100)
+        )
+    except KeyError:
+        return []
+    newest = _newest_in_window(facts, (70, 100))
+    if newest is None or (dt.date.today() - newest).days > _MAX_TAG_STALENESS_DAYS:
+        return []
+    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    return sorted(
+        [_period_metric(Metric.REVENUE, source_tag, fact) for fact in standalone] + q4,
+        key=lambda item: item.end,
+    )
 
 
 def _is_bank_sic(sic: str | int | None) -> bool:

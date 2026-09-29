@@ -506,21 +506,22 @@ def test_bank_revenue_composite_beats_stale_revenues_chain() -> None:
     assert metrics[0].value == 45300.0
 
 
-def test_bank_revenue_falls_back_to_generic_chain_without_components() -> None:
-    """Finance SIC with no bank-component facts falls back to the generic chain."""
+def test_bank_revenue_uses_fresh_revenues_when_available() -> None:
+    """Finance SIC with current quarterly Revenues uses it directly (the
+    finance preference), even without bank components."""
     companyfacts = _bank_companyfacts(
         noninterest=None,
         interest_net=None,
-        revenues=[fact("2026-01-01", "2026-03-31", 50000.0, 2026, "Q1")],
+        revenues=[_recent_fact(149, 60, 50000.0)],
     )
 
     metrics = quarterly_income_metric(
         companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6021"
     )
 
-    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
-        (dt.date(2026, 3, 31), 50000.0, "Revenues")
-    ]
+    assert len(metrics) == 1
+    assert metrics[0].value == 50000.0
+    assert metrics[0].source_tag == "Revenues"
 
 
 def test_non_bank_sic_uses_generic_chain() -> None:
@@ -574,3 +575,102 @@ def test_bank_composite_end_to_end_anchors_recent_quarters() -> None:
     assert [(r.end, r.revenue, r.net_income) for r in rows] == [
         (dt.date(2026, 3, 31), 45300.0, 15000.0)
     ]
+
+
+def _recent_fact(start_offset: int, end_offset: int, val: float, filed_offset: int = 20) -> dict:
+    """A 10-Q fact ending ``end_offset`` days ago (durations in the 70-100d window)."""
+    today = dt.date.today()
+    end = today - dt.timedelta(days=end_offset)
+    start = end - dt.timedelta(days=89)
+    filed = today - dt.timedelta(days=filed_offset)
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "val": val,
+        "fy": end.year,
+        "fp": f"Q{(end.month - 1) // 3 + 1}",
+        "form": "10-Q",
+        "filed": filed.isoformat(),
+    }
+
+
+def test_finance_revenue_prefers_total_revenues_over_contract_subcomponent() -> None:
+    """MET case: insurer SIC with fresh Revenues ($19B total) and a fresh but
+    tiny contract-revenue tag ($0.7B fee income) must use Revenues."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_recent_fact(149, 60, 724_000_000.0)]}
+                },
+                "Revenues": {
+                    "units": {"USD": [_recent_fact(149, 60, 19_154_000_000.0)]}
+                },
+            }
+        }
+    }
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6331"
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 19_154_000_000.0
+    assert metrics[0].source_tag == "Revenues"
+
+
+def test_finance_revenue_stale_revenues_nonbank_falls_back_to_generic_chain() -> None:
+    """Insurer whose Revenues quarterly facts are absolutely stale (>400d)
+    falls back to the generic chain (fresh contract tag wins there)."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_recent_fact(149, 60, 724_000_000.0)]}
+                },
+                "Revenues": {
+                    "units": {"USD": [_recent_fact(789, 700, 15_000_000_000.0)]}
+                },
+            }
+        }
+    }
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6331"
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 724_000_000.0
+    assert metrics[0].source_tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+def test_finance_revenue_stale_revenues_bank_uses_composite() -> None:
+    """Bank SIC with absolutely-stale Revenues skips the finance preference
+    and uses the NoninterestIncome + net-interest-income composite."""
+    companyfacts = _bank_companyfacts(
+        noninterest=[_recent_fact(149, 60, 22_000_000_000.0)],
+        interest_net=[_recent_fact(149, 60, 23_300_000_000.0)],
+        revenues=[_recent_fact(789, 700, 25_000_000_000.0)],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6021"
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 45_300_000_000.0
+    assert "NoninterestIncome" in metrics[0].source_tag
+
+
+def test_is_finance_sic_boundaries() -> None:
+    from tickerlens.data.xbrl import _is_finance_sic
+
+    assert _is_finance_sic(6021)   # bank
+    assert _is_finance_sic(6331)   # insurer
+    assert _is_finance_sic("6798")  # REIT
+    assert _is_finance_sic(6000)
+    assert _is_finance_sic(6999)
+    assert not _is_finance_sic(5999)
+    assert not _is_finance_sic(7000)
+    assert not _is_finance_sic(None)
+    assert not _is_finance_sic("n/a")
