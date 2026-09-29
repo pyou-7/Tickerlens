@@ -134,11 +134,19 @@ def extract_recent_quarterly_financials(
     *,
     fiscal_year_end: str | None = None,
     periods: int = 4,
+    sic: str | int | None = None,
 ) -> list[QuarterlyFinancials]:
-    """Extract recent Revenue, Net Income, EPS, and FCF from SEC companyfacts."""
+    """Extract recent Revenue, Net Income, EPS, and FCF from SEC companyfacts.
+
+    ``sic`` selects the revenue concept: finance filers (SIC 6000-6299) report
+    revenue as noninterest income + net interest income rather than a single
+    ``Revenues`` tag.
+    """
 
     # Revenue is the canonical anchor — hard failure if missing.
-    revenue = quarterly_income_metric(companyfacts, Metric.REVENUE, fiscal_year_end)
+    revenue = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end, sic=sic
+    )
 
     def _safe(fn: Callable, metric: Metric) -> list[PeriodMetric]:
         try:
@@ -224,7 +232,19 @@ def quarterly_income_metric(
     companyfacts: dict[str, Any],
     metric: Metric,
     fiscal_year_end: str | None = None,
+    sic: str | int | None = None,
 ) -> list[PeriodMetric]:
+    # Banks report revenue as noninterest + net interest income; the generic
+    # chain's quarterly facts may be long abandoned (JPM: 2014), so prefer the
+    # composite for finance SICs. Falls back to the generic chain when the
+    # components are absent (e.g. insurers).
+    if metric is Metric.REVENUE and _is_bank_sic(sic):
+        composite = _bank_quarterly_revenue(companyfacts, fiscal_year_end)
+        if composite:
+            return composite
+        logger.warning(
+            "bank revenue composite unavailable — falling back to generic chain"
+        )
     source_tag, facts = concept_facts(
         companyfacts, metric, staleness_window=(70, 100)
     )
@@ -309,11 +329,36 @@ def concept_facts(
     (previous behavior).
     """
     spec = CONCEPTS[metric]
+    return _select_tag_facts(
+        companyfacts,
+        spec.tags,
+        spec.unit,
+        instant=instant,
+        staleness_window=staleness_window,
+        metric_name=metric.value,
+    )
+
+
+def _select_tag_facts(
+    companyfacts: dict[str, Any],
+    tags: tuple[str, ...],
+    unit: str,
+    *,
+    instant: bool = False,
+    staleness_window: tuple[int, int] | None = None,
+    metric_name: str = "",
+) -> tuple[str, list[XbrlFact]]:
+    """Return (source_tag, facts) for the best tag among ``tags``.
+
+    Same semantics as :func:`concept_facts`, but takes an explicit tag chain
+    instead of a :class:`Metric` — used for the bank revenue composite, whose
+    components (e.g. ``NoninterestIncome``) are not full ``Metric`` entries.
+    """
     us_gaap = companyfacts["facts"]["us-gaap"]
     candidates: list[tuple[str, list[XbrlFact], dt.date | None]] = []
-    for tag in spec.tags:
+    for tag in tags:
         units = us_gaap.get(tag, {}).get("units", {})
-        raw_facts = units.get(spec.unit, [])
+        raw_facts = units.get(unit, [])
         facts = [
             XbrlFact.model_validate(raw)
             for raw in raw_facts
@@ -325,7 +370,7 @@ def concept_facts(
             newest = _newest_in_window(facts, staleness_window)
             candidates.append((tag, facts, newest))
     if not candidates:
-        raise KeyError(f"No XBRL facts found for metric {metric.value}")
+        raise KeyError(f"No XBRL facts found for metric {metric_name or 'composite'}")
     dated = [(t, f, n) for t, f, n in candidates if n is not None]
     if dated:
         newest_overall = max(n for _, _, n in dated)
@@ -333,6 +378,86 @@ def concept_facts(
             if (newest_overall - newest).days <= _MAX_TAG_STALENESS_DAYS:
                 return tag, facts
     return candidates[0][0], candidates[0][1]
+
+
+# Banks and broker-dealers (SIC Division H, 6000-6299) report revenue as two
+# components — noninterest income plus net interest income — and the generic
+# ``Revenues`` fallback chain often holds only *annual* facts for them (JPM's
+# quarterly ``Revenues`` facts stop in 2014; GS files none at all), which
+# pinned the revenue anchor — and therefore every joined metric — a decade in
+# the past. The components sum exactly to quarterly ``Revenues`` (verified on
+# BAC 2026 Q1/Q2: diff 0), so finance filers use this composite. Insurers
+# (6300s) have a different revenue structure and fall through to the generic
+# chain when their components are absent.
+_BANK_SIC_LO, _BANK_SIC_HI = 6000, 6300
+_BANK_REVENUE_COMPONENTS: tuple[tuple[str, ...], ...] = (
+    ("NoninterestIncome",),
+    ("InterestIncomeExpenseNet", "NetInterestIncome"),
+)
+
+
+def _is_bank_sic(sic: str | int | None) -> bool:
+    """True for finance SICs (Division H: banks, brokers) with bank revenue tags."""
+    if sic is None:
+        return False
+    try:
+        return _BANK_SIC_LO <= int(str(sic).strip()) < _BANK_SIC_HI
+    except (TypeError, ValueError):
+        return False
+
+
+def _bank_quarterly_revenue(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly revenue for banks as NoninterestIncome + net interest income.
+
+    Each component goes through the same tag selection (with the same
+    quarterly-freshness staleness rule), standalone-quarter extraction, and
+    Q4-from-annual derivation as a regular income metric; the component
+    series are then summed by period-end date. A missing component (no facts
+    at all) aborts the composite so the caller can fall back to the generic
+    chain. Ends where only one component is present use that component alone —
+    in practice both are filed in the same 10-Q.
+    """
+    component_series: list[list[PeriodMetric]] = []
+    for tags in _BANK_REVENUE_COMPONENTS:
+        try:
+            source_tag, facts = _select_tag_facts(
+                companyfacts, tags, "USD", staleness_window=(70, 100)
+            )
+        except KeyError:
+            logger.warning(
+                "bank revenue component %s missing — composite skipped", tags[0]
+            )
+            return []
+        standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+        q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+        component_series.append(
+            sorted(
+                [_period_metric(Metric.REVENUE, source_tag, fact) for fact in standalone]
+                + q4,
+                key=lambda item: item.end,
+            )
+        )
+    by_end: dict[dt.date, list[PeriodMetric]] = {}
+    for series in component_series:
+        for item in series:
+            by_end.setdefault(item.end, []).append(item)
+    return sorted(
+        (
+            _metric_value(
+                Metric.REVENUE,
+                "+".join(item.source_tag for item in items),
+                items[0].fy,
+                items[0].fp,
+                end,
+                sum(item.value for item in items),
+            )
+            for end, items in by_end.items()
+        ),
+        key=lambda item: item.end,
+    )
 
 
 def _newest_in_window(

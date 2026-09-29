@@ -445,3 +445,132 @@ def test_dedupe_period_labels_leaves_unique_labels_alone() -> None:
     ]
     fixed = _dedupe_period_labels(rows)
     assert [(r.fy, r.fp) for r in fixed] == [(2025, "Q1"), (2025, "Q2")]
+
+
+def _bank_companyfacts(
+    noninterest: list[dict] | None,
+    interest_net: list[dict] | None,
+    revenues: list[dict] | None = None,
+) -> dict:
+    tags: dict[str, dict] = {}
+    if noninterest is not None:
+        tags["NoninterestIncome"] = {"units": {"USD": noninterest}}
+    if interest_net is not None:
+        tags["InterestIncomeExpenseNet"] = {"units": {"USD": interest_net}}
+    if revenues is not None:
+        tags["Revenues"] = {"units": {"USD": revenues}}
+    return {"facts": {"us-gaap": tags}}
+
+
+def test_bank_revenue_composite_sums_components() -> None:
+    """Finance SICs get NoninterestIncome + InterestIncomeExpenseNet summed."""
+    companyfacts = _bank_companyfacts(
+        noninterest=[
+            fact("2026-01-01", "2026-03-31", 22000.0, 2026, "Q1"),
+            fact("2026-04-01", "2026-06-30", 21700.0, 2026, "Q2"),
+        ],
+        interest_net=[
+            fact("2026-01-01", "2026-03-31", 23300.0, 2026, "Q1"),
+            fact("2026-04-01", "2026-06-30", 23200.0, 2026, "Q2"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6021"
+    )
+
+    assert [(m.end, m.value) for m in metrics] == [
+        (dt.date(2026, 3, 31), 45300.0),
+        (dt.date(2026, 6, 30), 44900.0),
+    ]
+
+
+def test_bank_revenue_composite_beats_stale_revenues_chain() -> None:
+    """JPM case: generic chain's quarterly facts end in 2014; fresh bank
+    components must win so the revenue anchor (and every joined metric)
+    stays current."""
+    companyfacts = _bank_companyfacts(
+        noninterest=[fact("2026-01-01", "2026-03-31", 22000.0, 2026, "Q1")],
+        interest_net=[fact("2026-01-01", "2026-03-31", 23300.0, 2026, "Q1")],
+        revenues=[
+            fact("2014-01-01", "2014-03-31", 25000.0, 2014, "Q1"),
+            fact("2025-01-01", "2025-12-31", 182000.0, 2025, "FY"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=6021
+    )
+
+    assert [m.end for m in metrics] == [dt.date(2026, 3, 31)]
+    assert metrics[0].value == 45300.0
+
+
+def test_bank_revenue_falls_back_to_generic_chain_without_components() -> None:
+    """Finance SIC with no bank-component facts falls back to the generic chain."""
+    companyfacts = _bank_companyfacts(
+        noninterest=None,
+        interest_net=None,
+        revenues=[fact("2026-01-01", "2026-03-31", 50000.0, 2026, "Q1")],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6021"
+    )
+
+    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
+        (dt.date(2026, 3, 31), 50000.0, "Revenues")
+    ]
+
+
+def test_non_bank_sic_uses_generic_chain() -> None:
+    """A manufacturer with both generic and bank-component tags uses the
+    generic chain — the composite must not leak outside finance SICs."""
+    companyfacts = _bank_companyfacts(
+        noninterest=[fact("2026-01-01", "2026-03-31", 1000.0, 2026, "Q1")],
+        interest_net=[fact("2026-01-01", "2026-03-31", 2000.0, 2026, "Q1")],
+        revenues=[fact("2026-01-01", "2026-03-31", 50000.0, 2026, "Q1")],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="3571"
+    )
+
+    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
+        (dt.date(2026, 3, 31), 50000.0, "Revenues")
+    ]
+
+
+def test_is_bank_sic_boundaries() -> None:
+    from tickerlens.data.xbrl import _is_bank_sic
+
+    assert _is_bank_sic(6021)
+    assert _is_bank_sic("6211")
+    assert _is_bank_sic(6000)
+    assert _is_bank_sic(6299)
+    assert not _is_bank_sic(5999)
+    assert not _is_bank_sic(6300)  # insurers have a different revenue structure
+    assert not _is_bank_sic(None)
+    assert not _is_bank_sic("n/a")
+
+
+def test_bank_composite_end_to_end_anchors_recent_quarters() -> None:
+    """extract_recent_quarterly_financials with a bank SIC anchors on the
+    composite, so joined metrics (net income) follow recent ends."""
+    companyfacts = _bank_companyfacts(
+        noninterest=[fact("2026-01-01", "2026-03-31", 22000.0, 2026, "Q1")],
+        interest_net=[fact("2026-01-01", "2026-03-31", 23300.0, 2026, "Q1")],
+    )
+    companyfacts["facts"]["us-gaap"]["NetIncomeLoss"] = {
+        "units": {
+            "USD": [fact("2026-01-01", "2026-03-31", 15000.0, 2026, "Q1")]
+        }
+    }
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4, sic="6021"
+    )
+
+    assert [(r.end, r.revenue, r.net_income) for r in rows] == [
+        (dt.date(2026, 3, 31), 45300.0, 15000.0)
+    ]

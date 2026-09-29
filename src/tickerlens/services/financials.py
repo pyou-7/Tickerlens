@@ -235,6 +235,7 @@ class FinancialsService:
             companyfacts,
             fiscal_year_end=submissions.get("fiscalYearEnd"),
             periods=periods,
+            sic=submissions.get("sic"),
         )
 
     def fetch_and_persist(
@@ -252,6 +253,7 @@ class FinancialsService:
             companyfacts,
             fiscal_year_end=submissions.get("fiscalYearEnd"),
             periods=periods,
+            sic=submissions.get("sic"),
         )
 
         db = session or self._session or get_session()
