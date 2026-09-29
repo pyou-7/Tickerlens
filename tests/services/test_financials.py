@@ -1123,6 +1123,45 @@ def test_get_compare_qoq_preset(session: Session) -> None:
     assert ctx.deltas.revenue.absolute == pytest.approx(94_930 - 85_777)
 
 
+def test_get_compare_5y_preset_exact_quarter(session: Session) -> None:
+    """A quarter exactly five years back is used as B."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    for end, fy, fp, rev in [
+        (dt.date(2020, 9, 30), 2020, "Q3", 64_000),
+        (dt.date(2025, 9, 28), 2025, "Q3", 94_930),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, eps_diluted=1.0))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL", preset="5y")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q3 FY2020"
+    assert ctx.preset == "5y"
+    assert ctx.deltas.revenue.absolute == pytest.approx(94_930 - 64_000)
+
+
+def test_get_compare_5y_preset_falls_back_to_oldest(session: Session) -> None:
+    """With the 3-year history depth the exact 5y-ago quarter rarely exists;
+    B becomes the oldest available quarter (maximum span), not YoY."""
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", preset="5y")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q3 FY2024"  # oldest of the five seeded
+    assert ctx.preset == "5y"
+
+
+def test_get_compare_5y_preset_single_quarter_compares_to_itself(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=94_930, eps_diluted=1.0))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL", preset="5y")
+    assert ctx.period_b_label == ctx.period_a_label == "Q3 FY2025"
+    assert ctx.deltas.revenue.absolute == pytest.approx(0.0)
+
+
 def test_get_compare_freeform_labels(session: Session) -> None:
     _seed_five_quarters(session)
     ctx = _svc_with_mock(session).get_compare(

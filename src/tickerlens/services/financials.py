@@ -209,7 +209,7 @@ class CompareContext(BaseModel):
     year_options: list[int] = []  # most recent first, e.g. [2025, 2024]
     period_a_label: str
     period_b_label: str
-    preset: str | None          # "yoy" | "qoq" | None (free-form); quarterly only
+    preset: str | None          # "yoy" | "qoq" | "5y" | None (free-form); quarterly only
     # The two periods + cross deltas (A minus B)
     a: PeriodData
     b: PeriodData
@@ -877,9 +877,10 @@ class FinancialsService:
         mode="quarterly" (slice 1): two quarters. A defaults to the latest
         quarter. B follows an explicit ``period_b`` label, the ``preset``
         ("yoy" = same quarter prior year, "qoq" = immediately preceding
-        quarter), or defaults to YoY. Unknown labels fall back to the
-        YoY-ago quarter; when no earlier quarter exists at all, B = A and
-        deltas are zero.
+        quarter, "5y" = same quarter five years ago, else the oldest
+        available quarter), or defaults to YoY. Unknown labels fall back to
+        the YoY-ago quarter; when no earlier quarter exists at all, B = A
+        and deltas are zero.
 
         mode="yearly" (slice 2): two fiscal-year aggregates (4-quarter sums
         for flow metrics, year-end values for balance sheet). A defaults to
@@ -966,6 +967,20 @@ class FinancialsService:
             if target is None and preset == "qoq" and a_idx > 0:
                 prev = all_rows[a_idx - 1]
                 target = (prev.fiscal_period, prev.fiscal_year)
+            if target is None and preset == "5y":
+                # Same quarter five years back. The 3-year history depth
+                # means the exact quarter rarely exists, so fall back to the
+                # oldest available quarter (maximum span). The B label always
+                # shows the real period, so the button never misleads.
+                five = (a_data.fiscal_period, a_data.fiscal_year - 5)
+                if any(
+                    r.fiscal_period == five[0] and r.fiscal_year == five[1]
+                    for r in all_rows
+                ):
+                    target = five
+                elif a_idx > 0:
+                    oldest = all_rows[0]
+                    target = (oldest.fiscal_period, oldest.fiscal_year)
             if target is None:
                 # YoY default (also the preset="yoy" path and every fallback).
                 target = (a_data.fiscal_period, a_data.fiscal_year - 1)
@@ -989,7 +1004,7 @@ class FinancialsService:
                 **common,
                 period_a_label=a_label,
                 period_b_label=b_label,
-                preset=preset if preset in ("yoy", "qoq") else None,
+                preset=preset if preset in ("yoy", "qoq", "5y") else None,
                 a=a_data,
                 b=b_data,
                 deltas=_compare_periods(a_data, b_data),

@@ -155,7 +155,7 @@ def company_compare(
     ticker: str,
     period_a: str | None = None,
     period_b: str | None = None,
-    preset: Literal["yoy", "qoq"] | None = None,
+    preset: Literal["yoy", "qoq", "5y"] | None = None,
     mode: Literal["quarterly", "yearly"] = "quarterly",
     year_a: int | None = None,
     year_b: int | None = None,
