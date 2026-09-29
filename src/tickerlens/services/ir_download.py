@@ -187,12 +187,50 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
 
 # ── ex-99 exhibit discovery ───────────────────────────────────────────────────
 
+def _pick_release_doc(links: list[str]) -> str | None:
+    """Pick the earnings-release exhibit filename from 8-K filing-index links.
+
+    Pure (no network) so it can be unit-tested. Priority order:
+      1. ex99-style names (ex99, ex-99, ex991, EX-99.1) — AAPL/MSFT/PLUG style.
+      2. Press-release naming: *pressrelease*, *earningsrelease*, *-pr/_pr
+         suffixes, or a quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
+    Returns the bare filename, or None when nothing looks like a release.
+    """
+    candidates = [
+        lnk.split("/")[-1]
+        for lnk in links
+        if not lnk.startswith("http")
+        and not lnk.startswith("/cgi")
+        and lnk.split("/")[-1].lower() != "index.htm"
+        and not re.match(r"^R\d+\.htm[l]?$", lnk.split("/")[-1], re.IGNORECASE)
+    ]
+
+    def _rank(name: str) -> int | None:
+        stem = re.sub(r"\.html?$", "", name, flags=re.IGNORECASE)
+        if re.search(r"ex(hibit)?[^a-z0-9]?99", name, re.IGNORECASE):
+            return 0
+        if re.search(r"(press|earnings)[-_]?release", stem, re.IGNORECASE):
+            return 1
+        if re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
+            return 1
+        # Quarter-style stem ending in "pr" with a digit (year/fy marker),
+        # e.g. q2fy27pr — excludes lookalikes like proper.htm / super.htm.
+        if re.search(r"pr$", stem, re.IGNORECASE) and re.search(r"\d", stem):
+            return 2
+        return None
+
+    ranked = [(rank, name) for name in candidates if (rank := _rank(name)) is not None]
+    if not ranked:
+        return None
+    return min(ranked, key=lambda item: item[0])[1]
+
+
 def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str | None:
     """
-    Fetch the 8-K filing index and return the ex-99 exhibit filename.
+    Fetch the 8-K filing index and return the earnings-release exhibit filename.
 
-    Returns None if no ex-99 file is found (some companies embed the press
-    release directly in the primary 8-K document).
+    Returns None if no release-looking file is found (some companies embed the
+    press release directly in the primary 8-K document).
     """
     url = edgar_client.filing_index_url(cik, accession)
     try:
@@ -200,17 +238,9 @@ def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str |
     except Exception:
         return None
 
-    # Look for links that indicate an exhibit 99 file
-    # Patterns: ex99, ex-99, ex991, EX-99.1, etc.
+    # Look for links that indicate an exhibit 99 file or press-release doc.
     links = re.findall(r'href="([^"]+\.htm[l]?)"', html, re.IGNORECASE)
-    ex99_candidates = [
-        lnk.split("/")[-1]
-        for lnk in links
-        if re.search(r'ex.?99', lnk, re.IGNORECASE)
-        and not lnk.startswith("http")
-        and not lnk.startswith("/cgi")
-    ]
-    return ex99_candidates[0] if ex99_candidates else None
+    return _pick_release_doc(links)
 
 
 # ── result builder ────────────────────────────────────────────────────────────
@@ -218,9 +248,10 @@ def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str |
 def _to_period(f: dict, cik: str) -> EarningsPeriod:
     fy = f["fy"]
     fp = f["fp"]
-    # Determine which URL to use for the earnings release document
-    # If we found an ex99 exhibit, use it; otherwise fall back to the 8-K primaryDocument
-    # (er_doc is the filename only; full URL constructed by the caller from accession)
+    # Determine which URL to use for the earnings release document.
+    # er_doc is the exhibit filename (None when no release-looking exhibit
+    # was found); full URL constructed by the caller from the 8-K accession.
+    # Releases embedded directly in the primary 8-K document are not handled.
     return EarningsPeriod(
         quarter_label=f"{fp} FY{fy}",
         fiscal_year=f"FY{fy}",
