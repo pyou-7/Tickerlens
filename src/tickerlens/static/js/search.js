@@ -200,4 +200,25 @@
       .querySelectorAll("input[data-search-combobox]")
       .forEach(initSearchCombobox);
   });
+
+  // Cmd+K / Ctrl+K focuses the search box (PRD §4.10). Prefer the header
+  // (persistent) box; fall back to the home-page input. Skips inputs that
+  // are hidden (e.g. the header box on small screens).
+  document.addEventListener("keydown", function (e) {
+    if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+    var boxes = Array.prototype.filter.call(
+      document.querySelectorAll("input[data-search-combobox]"),
+      function (el) {
+        return el.offsetParent !== null;
+      }
+    );
+    if (!boxes.length) return;
+    e.preventDefault();
+    var target = boxes[0];
+    boxes.forEach(function (el) {
+      if (el.closest("nav")) target = el;
+    });
+    target.focus();
+    target.select();
+  });
 })();

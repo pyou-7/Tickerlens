@@ -185,7 +185,7 @@ The primary way to open a company. Modeled on the **combobox / command-palette p
 **Where it appears:**
 1. Home page — the main input (replaces the current raw ticker field)
 2. Persistent header on every page — compact search box
-3. `Cmd+K` / `Ctrl+K` anywhere → focuses/opens the search (nice-to-have, not a blocker)
+3. `Cmd+K` / `Ctrl+K` anywhere → focuses/opens the search ~~(nice-to-have, not a blocker)~~ *(shipped 2026-09-28 — focuses the header search box when present, else the home input; `⌘K` hint badge on the header box)*
 
 **Matching — ticker and company name are equivalent:**
 - `AAPL` and `Apple` (and `apple inc`) all resolve to the same company (CIK `0000320193`)
