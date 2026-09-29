@@ -83,7 +83,7 @@ When you open a company page, you land on the Overview by default. Contents:
 **Three modes:**
 1. **Single period** — view one quarter OR one year
 2. **Range** — view multiple consecutive periods (e.g., Q1 FY2023 → Q4 FY2025)
-3. **Side-by-side compare** — view two specific periods in parallel; supports presets (YoY, QoQ, 5-year-ago) and free-form
+3. **Side-by-side compare** — view two specific periods in parallel; supports presets (YoY, QoQ, 5-year-ago) and free-form *(all three presets shipped 2026-09-29 — 5-year-ago falls back to the oldest available quarter given the 3-year history depth)*
 
 **Fiscal year handling:** Years use the company's actual fiscal year (e.g., "FY2025 (ended Sept 2025)").
 
@@ -165,6 +165,8 @@ If free APIs become unreliable, this feature degrades gracefully — calendar an
 Organized by year, with quarterly subfolders. Synchronous generation with progress bar. File naming: `TICKER_period_doc-type.pdf`. Includes both your generated PDFs and renamed original SEC PDFs.
 
 Single Quarter, Single Year, Range, and Compare ZIP structures are unchanged from prior PRD — see Section 5.7 of v0.4 if you want the exact folder trees.
+
+*Shipped 2026-09-29 (CSV-only first slices): full-history ZIP (`{TICKER}_history.zip` with one `{TICKER}/{TICKER}_{PERIOD}.csv` per stored quarter) and compare-view ZIP (`{TICKER}_compare.zip` with both periods' CSVs + a `compare_summary.csv` of metric × A | B | Δ | Δ%). PDF exports, renamed original SEC PDFs, and Range/Single-Year ZIPs stay future.*
 
 ### 4.9 Edge Case Handling
 

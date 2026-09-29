@@ -13,7 +13,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 ### Data layer (`src/tickerlens/data/`)
 
 - **`edgar.py`** — SEC JSON client. Requires `EDGAR_USER_AGENT` env var. Caches raw JSON by URL hash under `.edgar_cache/`. Throttles uncached requests to ≤10/sec. Provides CIK normalization, ticker lookup, submissions, and companyfacts.
-- **`xbrl.py`** — Central concept-mapping layer. Extracts recent quarterly Revenue, Net Income, EPS Basic, EPS Diluted, and FCF. Handles revenue tag fallback chain (post- and pre-ASC 606). Un-cumulates cash-flow YTD facts into standalone quarters. Derives Q4 from FY − 9M. Joins metrics by period `end` date (not `fy/fp` label).
+- **`xbrl.py`** — Central concept-mapping layer. Extracts recent quarterly Revenue, Net Income, EPS Basic, EPS Diluted, and FCF. Handles revenue tag fallback chain (post- and pre-ASC 606). Un-cumulates cash-flow YTD facts into standalone quarters. Derives Q4 from FY − 9M. Joins metrics by period `end` date (not `fy/fp` label). Tag-abandonment rule: a tag whose newest fact lags the chain's freshest by >180 days is skipped (catches recent switches like O's `NetIncomeLoss`→common-stockholders tags). Missing total-liabilities instants are derived from the accounting identity (Assets − Equity) when the filer reports no `Liabilities` tag (LLY).
 - **`sic.py`** — Maps SIC codes to simplified sector buckets for the UI.
 - **`wikipedia.py`** — Fetches company description via Wikipedia API; graceful fallback if result is under 50 words.
 - **`yahoo.py`** — Last price and market cap via yfinance.
@@ -34,7 +34,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Routes layer (`src/tickerlens/routes/`)
 
-- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer, chart range window via `chart_from`/`chart_to`), `GET /company/{ticker}/compare` (side-by-side two-quarter compare, PRD §4.2; `period_a`/`period_b` labels or `preset=yoy|qoq`, YoY-ago default), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /watchlist/refresh` (refresh-all quotes, PRD §4.6), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1).
+- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer, chart range window via `chart_from`/`chart_to`), `GET /company/{ticker}/compare` (side-by-side two-quarter/two-year compare, PRD §4.2; `period_a`/`period_b` labels or `preset=yoy|qoq|5y`, YoY-ago default), `GET /company/{ticker}/compare/download` (compare-view ZIP: both periods' CSVs + summary CSV, PRD §4.8 slice 2), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /watchlist/refresh` (refresh-all quotes, PRD §4.6), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1).
 
 ### App entry
 
