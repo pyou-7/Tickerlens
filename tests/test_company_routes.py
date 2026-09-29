@@ -298,3 +298,49 @@ def test_unwatch_from_overview_still_swaps_button(client: TestClient, monkeypatc
     resp = client.post("/company/AAPL/watch/remove", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/company/AAPL"
+
+
+# ── compare yearly mode (PRD §4.2, compare-mode slice 2) ──────────────────────
+
+def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+    mock_ctx = MagicMock()
+    mock_ctx.ticker = "AAPL"
+    mock_ctx.name = "Apple Inc."
+    mock_ctx.sector = None
+    mock_ctx.mode = "yearly"
+    mock_ctx.quarter_options = []
+    mock_ctx.year_options = [2025, 2024]
+    mock_ctx.period_a_label = "FY2025"
+    mock_ctx.period_b_label = "FY2024"
+    mock_ctx.preset = None
+    for side in ("a", "b"):
+        kpi = getattr(mock_ctx, side).kpi
+        kpi.revenue = 400_000.0
+        kpi.net_income = 90_000.0
+        kpi.eps_basic = 5.0
+        kpi.eps_diluted = 4.9
+        kpi.free_cash_flow = 100_000.0
+        bs = getattr(mock_ctx, side).balance_sheet
+        bs.total_assets = 350_000.0
+        bs.total_liabilities = 250_000.0
+        bs.total_equity = 100_000.0
+        bs.cash_and_equivalents = 50_000.0
+    for field in ("revenue", "net_income", "eps_basic", "eps_diluted",
+                  "free_cash_flow", "total_assets", "total_liabilities",
+                  "total_equity", "cash_and_equivalents"):
+        getattr(mock_ctx.deltas, field).absolute = 1_000.0
+        getattr(mock_ctx.deltas, field).pct = 5.0
+    mock_svc.get_compare.return_value = mock_ctx
+
+    resp = client.get("/company/AAPL/compare?mode=yearly&year_a=2025&year_b=2024")
+    assert resp.status_code == 200
+    assert "FY2025" in resp.text and "FY2024" in resp.text
+    assert 'name="year_a"' in resp.text
+    mock_svc.get_compare.assert_called_once_with(
+        "AAPL", period_a=None, period_b=None, preset=None,
+        mode="yearly", year_a=2025, year_b=2024,
+    )

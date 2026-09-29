@@ -156,19 +156,24 @@ def company_compare(
     period_a: str | None = None,
     period_b: str | None = None,
     preset: Literal["yoy", "qoq"] | None = None,
+    mode: Literal["quarterly", "yearly"] = "quarterly",
+    year_a: int | None = None,
+    year_b: int | None = None,
 ) -> HTMLResponse:
-    """Side-by-side compare of two quarters (PRD §4.2, compare-mode slice 1)."""
+    """Side-by-side compare of two quarters or two fiscal years (PRD §4.2)."""
     ticker = ticker.upper()
     try:
         ctx = _svc.get_compare(
-            ticker, period_a=period_a, period_b=period_b, preset=preset
+            ticker, period_a=period_a, period_b=period_b, preset=preset,
+            mode=mode, year_a=year_a, year_b=year_b,
         )
     except CompanyNotFoundError:
         try:
             _svc.fetch_and_persist(ticker, periods=8)
             _svc.enrich_company(ticker)
             ctx = _svc.get_compare(
-                ticker, period_a=period_a, period_b=period_b, preset=preset
+                ticker, period_a=period_a, period_b=period_b, preset=preset,
+                mode=mode, year_a=year_a, year_b=year_b,
             )
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

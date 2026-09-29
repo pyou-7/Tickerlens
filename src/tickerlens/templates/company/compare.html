@@ -65,6 +65,14 @@
 <!-- Compare controls -->
 <div class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4">
   <div class="flex items-center gap-2 mb-4 flex-wrap">
+    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Mode</span>
+    <a href="/company/{{ ctx.ticker }}/compare?mode=quarterly"
+       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.mode == 'quarterly' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">Quarterly</a>
+    <a href="/company/{{ ctx.ticker }}/compare?mode=yearly"
+       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.mode == 'yearly' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">Yearly</a>
+  </div>
+  {% if ctx.mode == "quarterly" %}
+  <div class="flex items-center gap-2 mb-4 flex-wrap">
     <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Presets</span>
     <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=yoy"
        class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'yoy' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">YoY</a>
@@ -72,6 +80,7 @@
        class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'qoq' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">QoQ</a>
   </div>
   <form method="get" action="/company/{{ ctx.ticker }}/compare" class="flex items-end gap-3 flex-wrap">
+    <input type="hidden" name="mode" value="quarterly">
     <div>
       <label for="period_a" class="block text-xs text-gray-500 mb-1">Period A (focus)</label>
       <select id="period_a" name="period_a" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
@@ -90,6 +99,28 @@
     </div>
     <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
   </form>
+  {% else %}
+  <form method="get" action="/company/{{ ctx.ticker }}/compare" class="flex items-end gap-3 flex-wrap">
+    <input type="hidden" name="mode" value="yearly">
+    <div>
+      <label for="year_a" class="block text-xs text-gray-500 mb-1">Year A (focus)</label>
+      <select id="year_a" name="year_a" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+        {% for opt in ctx.year_options %}
+          <option value="{{ opt }}" {% if "FY" ~ opt == ctx.period_a_label %}selected{% endif %}>FY{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="year_b" class="block text-xs text-gray-500 mb-1">Year B (baseline)</label>
+      <select id="year_b" name="year_b" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+        {% for opt in ctx.year_options %}
+          <option value="{{ opt }}" {% if "FY" ~ opt == ctx.period_b_label %}selected{% endif %}>FY{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
+  </form>
+  {% endif %}
 </div>
 
 <!-- Comparison table -->

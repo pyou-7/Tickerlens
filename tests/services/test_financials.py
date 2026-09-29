@@ -1190,3 +1190,74 @@ def test_get_compare_includes_balance_sheet_deltas(session: Session) -> None:
     ctx = _svc_with_mock(session).get_compare("AAPL")
     assert ctx.deltas.total_assets.absolute == pytest.approx(30_000)
     assert ctx.deltas.total_equity.pct == pytest.approx(10.0)
+
+
+# ── get_compare, yearly mode (PRD §4.2, compare-mode slice 2) ─────────────────
+
+def _seed_two_years(session: Session, cik: str = "0000320193") -> None:
+    session.add(_company(cik=cik))
+    for i, (end, fy, fp, rev, ni) in enumerate([
+        (dt.date(2024, 3, 31), 2024, "Q1", 90_000, 20_000),
+        (dt.date(2024, 6, 30), 2024, "Q2", 85_000, 19_000),
+        (dt.date(2024, 9, 30), 2024, "Q3", 95_000, 21_000),
+        (dt.date(2024, 12, 31), 2024, "Q4", 110_000, 25_000),
+        (dt.date(2025, 3, 31), 2025, "Q1", 95_000, 22_000),
+        (dt.date(2025, 6, 30), 2025, "Q2", 90_000, 21_000),
+        (dt.date(2025, 9, 30), 2025, "Q3", 100_000, 23_000),
+        (dt.date(2025, 12, 31), 2025, "Q4", 119_575, 27_000),
+    ]):
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, net_income=ni, eps_diluted=1.0,
+                         total_assets=300_000 + i * 10_000))
+    session.commit()
+
+
+def test_get_compare_yearly_defaults_to_latest_vs_prior_year(session: Session) -> None:
+    _seed_two_years(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", mode="yearly")
+    assert ctx.mode == "yearly"
+    assert ctx.period_a_label == "FY2025"
+    assert ctx.period_b_label == "FY2024"
+    assert ctx.year_options == [2025, 2024]
+    # Flow metrics are 4-quarter sums; balance sheet is year-end point-in-time.
+    assert ctx.a.kpi.revenue == pytest.approx(95_000 + 90_000 + 100_000 + 119_575)
+    assert ctx.b.kpi.revenue == pytest.approx(90_000 + 85_000 + 95_000 + 110_000)
+    assert ctx.deltas.revenue.absolute == pytest.approx(404_575 - 380_000)
+    assert ctx.deltas.revenue.pct == pytest.approx((404_575 - 380_000) / 380_000 * 100)
+    assert ctx.a.balance_sheet.total_assets == pytest.approx(370_000)
+    assert ctx.b.balance_sheet.total_assets == pytest.approx(330_000)
+
+
+def test_get_compare_yearly_explicit_years(session: Session) -> None:
+    _seed_two_years(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", mode="yearly", year_a=2024, year_b=2025)
+    assert ctx.period_a_label == "FY2024"
+    assert ctx.period_b_label == "FY2025"
+    assert ctx.deltas.revenue.absolute == pytest.approx(380_000 - 404_575)
+
+
+def test_get_compare_yearly_unknown_years_fall_back(session: Session) -> None:
+    _seed_two_years(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", mode="yearly", year_a=2099, year_b=1999)
+    assert ctx.period_a_label == "FY2025"
+    assert ctx.period_b_label == "FY2024"
+
+
+def test_get_compare_yearly_single_year_compares_to_itself(session: Session) -> None:
+    session.add(_company())
+    session.add(_row(cik="0000320193", period_end=dt.date(2025, 12, 31),
+                     fiscal_year=2025, fiscal_period="Q4", revenue=100_000))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL", mode="yearly")
+    assert ctx.period_a_label == "FY2025"
+    assert ctx.period_b_label == "FY2025"
+    assert ctx.deltas.revenue.absolute == pytest.approx(0)
+    assert ctx.deltas.revenue.pct == pytest.approx(0)
+
+
+def test_get_compare_quarterly_mode_unchanged(session: Session) -> None:
+    _seed_two_years(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", mode="quarterly")
+    assert ctx.mode == "quarterly"
+    assert ctx.period_a_label == "Q4 FY2025"
+    assert ctx.period_b_label == "Q4 FY2024"

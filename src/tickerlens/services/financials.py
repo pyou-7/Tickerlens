@@ -192,18 +192,24 @@ class CompareDeltas(BaseModel):
 
 
 class CompareContext(BaseModel):
-    """Side-by-side comparison of two quarters (PRD §4.2, compare-mode slice 1)."""
+    """Side-by-side comparison of two periods (PRD §4.2).
+
+    mode="quarterly" compares two quarters (slice 1); mode="yearly"
+    compares two fiscal-year aggregates (slice 2, added 2026-09-29).
+    """
     cik: str
     name: str
     ticker: str | None
     sector: str | None
     last_price: float | None
     market_cap: float | None
+    mode: str = "quarterly"     # "quarterly" | "yearly"
     # Selector state
     quarter_options: list[str]  # most recent first, e.g. ["Q4 FY2025", ...]
+    year_options: list[int] = []  # most recent first, e.g. [2025, 2024]
     period_a_label: str
     period_b_label: str
-    preset: str | None          # "yoy" | "qoq" | None (free-form)
+    preset: str | None          # "yoy" | "qoq" | None (free-form); quarterly only
     # The two periods + cross deltas (A minus B)
     a: PeriodData
     b: PeriodData
@@ -861,15 +867,24 @@ class FinancialsService:
         period_a: str | None = None,
         period_b: str | None = None,
         preset: str | None = None,
+        mode: str = "quarterly",
+        year_a: int | None = None,
+        year_b: int | None = None,
         session: Session | None = None,
     ) -> CompareContext:
-        """Side-by-side comparison of two quarters (PRD §4.2, compare-mode slice 1).
+        """Side-by-side comparison of two periods (PRD §4.2).
 
-        A defaults to the latest quarter. B follows an explicit ``period_b``
-        label, the ``preset`` ("yoy" = same quarter prior year, "qoq" =
-        immediately preceding quarter), or defaults to YoY. Unknown labels
-        fall back to the YoY-ago quarter; when no earlier quarter exists at
-        all, B = A and deltas are zero.
+        mode="quarterly" (slice 1): two quarters. A defaults to the latest
+        quarter. B follows an explicit ``period_b`` label, the ``preset``
+        ("yoy" = same quarter prior year, "qoq" = immediately preceding
+        quarter), or defaults to YoY. Unknown labels fall back to the
+        YoY-ago quarter; when no earlier quarter exists at all, B = A and
+        deltas are zero.
+
+        mode="yearly" (slice 2): two fiscal-year aggregates (4-quarter sums
+        for flow metrics, year-end values for balance sheet). A defaults to
+        the latest fiscal year, B to the prior year; unknown years fall back
+        the same way; a single year of history compares A to itself.
         """
         ticker = ticker.upper()
         cik = _resolve_cik(self.edgar_client, ticker)
@@ -894,6 +909,37 @@ class FinancialsService:
             quarter_options = [
                 f"{r.fiscal_period} FY{r.fiscal_year}" for r in reversed(all_rows)
             ]
+            year_options = sorted({r.fiscal_year for r in all_rows}, reverse=True)
+
+            common = dict(
+                cik=cik,
+                name=company.name,
+                ticker=company.ticker,
+                sector=sector_for_sic(company.sic),
+                last_price=company.last_price,
+                market_cap=company.market_cap,
+                quarter_options=quarter_options,
+                year_options=year_options,
+            )
+
+            if mode == "yearly":
+                a_year = year_a if year_a in year_options else year_options[0]
+                b_year = year_b if year_b in year_options else a_year - 1
+                if b_year not in year_options:
+                    earlier = [y for y in year_options if y < a_year]
+                    b_year = earlier[0] if earlier else a_year
+                a_data = _build_yearly_period(all_rows, a_year, year_options[0])
+                b_data = _build_yearly_period(all_rows, b_year, year_options[0])
+                return CompareContext(
+                    **common,
+                    mode="yearly",
+                    period_a_label=a_data.label,
+                    period_b_label=b_data.label,
+                    preset=None,
+                    a=a_data,
+                    b=b_data,
+                    deltas=_compare_periods(a_data, b_data),
+                )
 
             a_data, a_label = _build_quarterly_period(
                 all_rows, period_a or quarter_options[0], latest
@@ -940,13 +986,7 @@ class FinancialsService:
             )
 
             return CompareContext(
-                cik=cik,
-                name=company.name,
-                ticker=company.ticker,
-                sector=sector_for_sic(company.sic),
-                last_price=company.last_price,
-                market_cap=company.market_cap,
-                quarter_options=quarter_options,
+                **common,
                 period_a_label=a_label,
                 period_b_label=b_label,
                 preset=preset if preset in ("yoy", "qoq") else None,
