@@ -172,6 +172,44 @@ class DetailContext(BaseModel):
     press_release_source: str | None = None
 
 
+class MetricDelta(BaseModel):
+    """Absolute and percentage change from period B to period A (None = not computable)."""
+    absolute: float | None = None
+    pct: float | None = None
+
+
+class CompareDeltas(BaseModel):
+    """Cross-period deltas for every KPI and balance-sheet metric."""
+    revenue: MetricDelta = MetricDelta()
+    net_income: MetricDelta = MetricDelta()
+    eps_basic: MetricDelta = MetricDelta()
+    eps_diluted: MetricDelta = MetricDelta()
+    free_cash_flow: MetricDelta = MetricDelta()
+    total_assets: MetricDelta = MetricDelta()
+    total_liabilities: MetricDelta = MetricDelta()
+    total_equity: MetricDelta = MetricDelta()
+    cash_and_equivalents: MetricDelta = MetricDelta()
+
+
+class CompareContext(BaseModel):
+    """Side-by-side comparison of two quarters (PRD §4.2, compare-mode slice 1)."""
+    cik: str
+    name: str
+    ticker: str | None
+    sector: str | None
+    last_price: float | None
+    market_cap: float | None
+    # Selector state
+    quarter_options: list[str]  # most recent first, e.g. ["Q4 FY2025", ...]
+    period_a_label: str
+    period_b_label: str
+    preset: str | None          # "yoy" | "qoq" | None (free-form)
+    # The two periods + cross deltas (A minus B)
+    a: PeriodData
+    b: PeriodData
+    deltas: CompareDeltas
+
+
 # ── service ───────────────────────────────────────────────────────────────────
 
 class FinancialsService:
@@ -815,6 +853,109 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_compare(
+        self,
+        ticker: str,
+        period_a: str | None = None,
+        period_b: str | None = None,
+        preset: str | None = None,
+        session: Session | None = None,
+    ) -> CompareContext:
+        """Side-by-side comparison of two quarters (PRD §4.2, compare-mode slice 1).
+
+        A defaults to the latest quarter. B follows an explicit ``period_b``
+        label, the ``preset`` ("yoy" = same quarter prior year, "qoq" =
+        immediately preceding quarter), or defaults to YoY. Unknown labels
+        fall back to the YoY-ago quarter; when no earlier quarter exists at
+        all, B = A and deltas are zero.
+        """
+        ticker = ticker.upper()
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+            if not all_rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+            latest = all_rows[-1]
+
+            quarter_options = [
+                f"{r.fiscal_period} FY{r.fiscal_year}" for r in reversed(all_rows)
+            ]
+
+            a_data, a_label = _build_quarterly_period(
+                all_rows, period_a or quarter_options[0], latest
+            )
+            a_idx = next(
+                (
+                    i
+                    for i, r in enumerate(all_rows)
+                    if r.fiscal_period == a_data.fiscal_period
+                    and r.fiscal_year == a_data.fiscal_year
+                ),
+                len(all_rows) - 1,
+            )
+
+            # Resolve B's target (fp, fy).
+            target: tuple[str, int] | None = None
+            if period_b:
+                parsed = _parse_quarter_label(period_b)
+                if parsed and any(
+                    r.fiscal_period == parsed[0] and r.fiscal_year == parsed[1]
+                    for r in all_rows
+                ):
+                    target = parsed
+            if target is None and preset == "qoq" and a_idx > 0:
+                prev = all_rows[a_idx - 1]
+                target = (prev.fiscal_period, prev.fiscal_year)
+            if target is None:
+                # YoY default (also the preset="yoy" path and every fallback).
+                target = (a_data.fiscal_period, a_data.fiscal_year - 1)
+                if not any(
+                    r.fiscal_period == target[0] and r.fiscal_year == target[1]
+                    for r in all_rows
+                ):
+                    # No YoY-ago quarter: nearest earlier quarter, else A itself.
+                    earlier = [r for r in all_rows[:a_idx]]
+                    target = (
+                        (earlier[-1].fiscal_period, earlier[-1].fiscal_year)
+                        if earlier
+                        else (a_data.fiscal_period, a_data.fiscal_year)
+                    )
+
+            b_data, b_label = _build_quarterly_period(
+                all_rows, f"{target[0]} FY{target[1]}", latest
+            )
+
+            return CompareContext(
+                cik=cik,
+                name=company.name,
+                ticker=company.ticker,
+                sector=sector_for_sic(company.sic),
+                last_price=company.last_price,
+                market_cap=company.market_cap,
+                quarter_options=quarter_options,
+                period_a_label=a_label,
+                period_b_label=b_label,
+                preset=preset if preset in ("yoy", "qoq") else None,
+                a=a_data,
+                b=b_data,
+                deltas=_compare_periods(a_data, b_data),
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def get_history_zip_entries(
         self, ticker: str, session: Session | None = None
     ) -> tuple[str, list[tuple[str, str]]]:
@@ -878,6 +1019,31 @@ def _bs_change(current: BalanceSheet, prior: BalanceSheet) -> BalanceSheetChange
         total_liabilities=_pct_change(current.total_liabilities, prior.total_liabilities),
         total_equity=_pct_change(current.total_equity, prior.total_equity),
         cash_and_equivalents=_pct_change(current.cash_and_equivalents, prior.cash_and_equivalents),
+    )
+
+
+def _metric_delta(a: float | None, b: float | None) -> MetricDelta:
+    if a is None or b is None:
+        return MetricDelta()
+    return MetricDelta(absolute=a - b, pct=_pct_change(a, b))
+
+
+def _compare_periods(a: PeriodData, b: PeriodData) -> CompareDeltas:
+    """Cross-period deltas (A minus B) for every KPI and balance-sheet metric."""
+    return CompareDeltas(
+        revenue=_metric_delta(a.kpi.revenue, b.kpi.revenue),
+        net_income=_metric_delta(a.kpi.net_income, b.kpi.net_income),
+        eps_basic=_metric_delta(a.kpi.eps_basic, b.kpi.eps_basic),
+        eps_diluted=_metric_delta(a.kpi.eps_diluted, b.kpi.eps_diluted),
+        free_cash_flow=_metric_delta(a.kpi.free_cash_flow, b.kpi.free_cash_flow),
+        total_assets=_metric_delta(a.balance_sheet.total_assets, b.balance_sheet.total_assets),
+        total_liabilities=_metric_delta(
+            a.balance_sheet.total_liabilities, b.balance_sheet.total_liabilities
+        ),
+        total_equity=_metric_delta(a.balance_sheet.total_equity, b.balance_sheet.total_equity),
+        cash_and_equivalents=_metric_delta(
+            a.balance_sheet.cash_and_equivalents, b.balance_sheet.cash_and_equivalents
+        ),
     )
 
 

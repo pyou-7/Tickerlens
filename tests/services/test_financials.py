@@ -1098,3 +1098,95 @@ def test_get_detail_chart_range_unknown_label_falls_back(session: Session) -> No
     ctx = _svc_with_mock(session).get_detail("AAPL", chart_from="Q9 FY2099")
     assert ctx.chart_labels[0] == "Q3 FY2024"
     assert len(ctx.chart_labels) == 5
+
+
+# ── get_compare ───────────────────────────────────────────────────────────────
+
+def test_get_compare_defaults_to_latest_vs_yoy(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q3 FY2024"
+    assert ctx.preset is None
+    assert ctx.a.kpi.revenue == pytest.approx(94_930)
+    assert ctx.b.kpi.revenue == pytest.approx(91_000)
+    assert ctx.deltas.revenue.absolute == pytest.approx(94_930 - 91_000)
+    assert ctx.deltas.revenue.pct == pytest.approx((94_930 - 91_000) / 91_000 * 100)
+
+
+def test_get_compare_qoq_preset(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", preset="qoq")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q2 FY2025"
+    assert ctx.preset == "qoq"
+    assert ctx.deltas.revenue.absolute == pytest.approx(94_930 - 85_777)
+
+
+def test_get_compare_freeform_labels(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare(
+        "AAPL", period_a="Q1 FY2025", period_b="Q4 FY2024"
+    )
+    assert ctx.period_a_label == "Q1 FY2025"
+    assert ctx.period_b_label == "Q4 FY2024"
+    assert ctx.deltas.revenue.absolute == pytest.approx(95_359 - 119_575)
+    assert ctx.deltas.revenue.pct < 0
+
+
+def test_get_compare_unknown_b_falls_back_to_yoy(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", period_b="Q9 FY2099")
+    assert ctx.period_b_label == "Q3 FY2024"
+
+
+def test_get_compare_unknown_a_falls_back_to_latest(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_compare("AAPL", period_a="bogus")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q3 FY2024"
+
+
+def test_get_compare_none_values_yield_none_deltas(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2024, 9, 30), fiscal_year=2024,
+                     fiscal_period="Q3", revenue=91_000, free_cash_flow=None))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=94_930, free_cash_flow=26_800))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL")
+    assert ctx.deltas.revenue.pct == pytest.approx((94_930 - 91_000) / 91_000 * 100)
+    assert ctx.deltas.free_cash_flow.absolute is None
+    assert ctx.deltas.free_cash_flow.pct is None
+
+
+def test_get_compare_single_quarter_compares_to_itself(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=94_930))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL")
+    assert ctx.period_a_label == "Q3 FY2025"
+    assert ctx.period_b_label == "Q3 FY2025"
+    assert ctx.deltas.revenue.absolute == pytest.approx(0)
+    assert ctx.deltas.revenue.pct == pytest.approx(0)
+
+
+def test_get_compare_raises_when_no_data(session: Session) -> None:
+    with pytest.raises(CompanyNotFoundError):
+        _svc_with_mock(session).get_compare("AAPL")
+
+
+def test_get_compare_includes_balance_sheet_deltas(session: Session) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2024, 9, 30), fiscal_year=2024,
+                     fiscal_period="Q3", total_assets=300_000, total_equity=100_000))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                     fiscal_period="Q3", total_assets=330_000, total_equity=110_000))
+    session.commit()
+    ctx = _svc_with_mock(session).get_compare("AAPL")
+    assert ctx.deltas.total_assets.absolute == pytest.approx(30_000)
+    assert ctx.deltas.total_equity.pct == pytest.approx(10.0)

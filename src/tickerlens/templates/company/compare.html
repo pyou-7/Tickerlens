@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ ctx.ticker or ctx.name }} — Compare — Tickerlens{% endblock %}
+
+{% macro fmt_large(val) -%}
+  {%- if val is none -%}—
+  {%- else -%}
+    {%- set abs = val | abs -%}
+    {%- set sign = "-" if val < 0 else "" -%}
+    {%- if abs >= 1_000_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+    {%- elif abs >= 1_000_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000_000) }}B
+    {%- elif abs >= 1_000_000 -%}{{ sign }}${{ "%.2f"|format(abs / 1_000_000) }}M
+    {%- else -%}{{ sign }}${{ "%.0f"|format(abs) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fmt_eps(val) -%}
+  {%- if val is none -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro delta_pct(pct) %}
+  {%- if pct is not none -%}
+    {%- if pct >= 0 -%}
+      <span class="inline-flex items-center gap-0.5 text-green-400 text-xs font-medium">▲ +{{ "%.1f"|format(pct) }}%</span>
+    {%- else -%}
+      <span class="inline-flex items-center gap-0.5 text-red-400 text-xs font-medium">▼ {{ "%.1f"|format(pct) }}%</span>
+    {%- endif -%}
+  {%- else -%}
+    <span class="text-gray-600 text-xs">—</span>
+  {%- endif -%}
+{% endmacro %}
+
+{% macro cmp_row(label, a_val, b_val, delta, money=true) %}
+<tr class="border-t border-gray-800 hover:bg-gray-900/50">
+  <td class="px-4 py-3 text-sm text-gray-400">{{ label }}</td>
+  <td class="px-4 py-3 text-sm text-white text-right font-medium">{% if money %}{{ fmt_large(a_val) }}{% else %}{{ fmt_eps(a_val) }}{% endif %}</td>
+  <td class="px-4 py-3 text-sm text-white text-right font-medium">{% if money %}{{ fmt_large(b_val) }}{% else %}{{ fmt_eps(b_val) }}{% endif %}</td>
+  <td class="px-4 py-3 text-sm text-gray-300 text-right">{% if money %}{{ fmt_large(delta.absolute) }}{% else %}{{ fmt_eps(delta.absolute) }}{% endif %}</td>
+  <td class="px-4 py-3 text-right">{{ delta_pct(delta.pct) }}</td>
+</tr>
+{% endmacro %}
+
+{% block content %}
+
+<!-- Breadcrumb -->
+<div class="mb-6 text-sm text-gray-500 flex items-center gap-4">
+  <a href="/company/{{ ctx.ticker }}/detail" class="text-indigo-400 hover:text-indigo-300 transition">← Back to Detail</a>
+  <a href="/company/{{ ctx.ticker }}" class="text-gray-500 hover:text-gray-300 transition">Overview</a>
+</div>
+
+<!-- Company header -->
+<div class="mb-8">
+  <div class="flex items-center gap-3 mb-1 flex-wrap">
+    <h1 class="text-3xl font-bold text-white">{{ ctx.name }}</h1>
+    {% if ctx.ticker %}
+      <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ ctx.ticker }}</span>
+    {% endif %}
+    {% if ctx.sector %}
+      <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ ctx.sector }}</span>
+    {% endif %}
+  </div>
+  <p class="text-gray-500 text-sm">Side-by-side period comparison — deltas are {{ ctx.period_a_label }} minus {{ ctx.period_b_label }}.</p>
+</div>
+
+<!-- Compare controls -->
+<div class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4">
+  <div class="flex items-center gap-2 mb-4 flex-wrap">
+    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Presets</span>
+    <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=yoy"
+       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'yoy' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">YoY</a>
+    <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=qoq"
+       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'qoq' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">QoQ</a>
+  </div>
+  <form method="get" action="/company/{{ ctx.ticker }}/compare" class="flex items-end gap-3 flex-wrap">
+    <div>
+      <label for="period_a" class="block text-xs text-gray-500 mb-1">Period A (focus)</label>
+      <select id="period_a" name="period_a" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+        {% for opt in ctx.quarter_options %}
+          <option value="{{ opt }}" {% if opt == ctx.period_a_label %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="period_b" class="block text-xs text-gray-500 mb-1">Period B (baseline)</label>
+      <select id="period_b" name="period_b" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+        {% for opt in ctx.quarter_options %}
+          <option value="{{ opt }}" {% if opt == ctx.period_b_label %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
+  </form>
+</div>
+
+<!-- Comparison table -->
+<div class="rounded-xl bg-gray-950 border border-gray-800 overflow-hidden mb-8">
+  <table class="w-full">
+    <thead>
+      <tr class="text-left">
+        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500">Metric</th>
+        <th class="px-4 py-3 text-xs uppercase tracking-wider text-indigo-300 text-right">{{ ctx.period_a_label }}</th>
+        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">{{ ctx.period_b_label }}</th>
+        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">Δ (A − B)</th>
+        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">Δ %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{ cmp_row("Revenue", ctx.a.kpi.revenue, ctx.b.kpi.revenue, ctx.deltas.revenue) }}
+      {{ cmp_row("Net Income", ctx.a.kpi.net_income, ctx.b.kpi.net_income, ctx.deltas.net_income) }}
+      {{ cmp_row("EPS (Basic)", ctx.a.kpi.eps_basic, ctx.b.kpi.eps_basic, ctx.deltas.eps_basic, money=false) }}
+      {{ cmp_row("EPS (Diluted)", ctx.a.kpi.eps_diluted, ctx.b.kpi.eps_diluted, ctx.deltas.eps_diluted, money=false) }}
+      {{ cmp_row("Free Cash Flow", ctx.a.kpi.free_cash_flow, ctx.b.kpi.free_cash_flow, ctx.deltas.free_cash_flow) }}
+      {{ cmp_row("Total Assets", ctx.a.balance_sheet.total_assets, ctx.b.balance_sheet.total_assets, ctx.deltas.total_assets) }}
+      {{ cmp_row("Total Liabilities", ctx.a.balance_sheet.total_liabilities, ctx.b.balance_sheet.total_liabilities, ctx.deltas.total_liabilities) }}
+      {{ cmp_row("Total Equity", ctx.a.balance_sheet.total_equity, ctx.b.balance_sheet.total_equity, ctx.deltas.total_equity) }}
+      {{ cmp_row("Cash & Equivalents", ctx.a.balance_sheet.cash_and_equivalents, ctx.b.balance_sheet.cash_and_equivalents, ctx.deltas.cash_and_equivalents) }}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

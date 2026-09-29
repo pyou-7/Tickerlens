@@ -135,6 +135,36 @@ def company_detail(
     )
 
 
+@router.get("/company/{ticker}/compare", response_class=HTMLResponse)
+def company_compare(
+    request: Request,
+    ticker: str,
+    period_a: str | None = None,
+    period_b: str | None = None,
+    preset: Literal["yoy", "qoq"] | None = None,
+) -> HTMLResponse:
+    """Side-by-side compare of two quarters (PRD §4.2, compare-mode slice 1)."""
+    ticker = ticker.upper()
+    try:
+        ctx = _svc.get_compare(
+            ticker, period_a=period_a, period_b=period_b, preset=preset
+        )
+    except CompanyNotFoundError:
+        try:
+            _svc.fetch_and_persist(ticker, periods=8)
+            _svc.enrich_company(ticker)
+            ctx = _svc.get_compare(
+                ticker, period_a=period_a, period_b=period_b, preset=preset
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="company/compare.html",
+        context={"ctx": ctx},
+    )
+
+
 @router.get("/company/{ticker}/detail/data", response_class=HTMLResponse)
 def company_detail_data(
     request: Request,
