@@ -747,8 +747,43 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_history_zip_entries(
+        self, ticker: str, session: Session | None = None
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Per-period CSVs for every stored quarter: (ticker, [(arcname, csv)]).
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+        Arcnames are namespaced under ``{TICKER}/`` so the archive unpacks
+        into one folder. Raises CompanyNotFoundError for unknown tickers.
+        """
+        ticker = ticker.upper()
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+            if not all_rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+            latest = all_rows[-1]
+            entries: list[tuple[str, str]] = []
+            for row in all_rows:
+                label = f"{row.fiscal_period} FY{row.fiscal_year}"
+                period, _ = _build_quarterly_period(all_rows, label, latest)
+                arcname = f"{ticker}/{_period_csv_filename(ticker, period.label)}"
+                entries.append((arcname, render_period_csv(company.name, company.ticker, period)))
+            return ticker, entries
+        finally:
+            if session is None and self._session is None:
+                db.close()
 
 def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
     return KPISnapshot(
@@ -1064,32 +1099,32 @@ _CSV_METRICS: list[tuple[str, str, str, str]] = [
 ]
 
 
-def build_period_csv(ctx: DetailContext) -> str:
-    """Render the selected period's financials as CSV (raw numbers, no formatting).
+def render_period_csv(name: str, ticker: str | None, period: PeriodData) -> str:
+    """Render one period's financials as CSV (raw numbers, no formatting).
 
-    Pure function — the download route is a thin wrapper around this.
+    Pure function of (company name, ticker, PeriodData) — used by both the
+    per-period download route and the full-history ZIP builder.
     """
     import csv
     import io
 
-    cur = ctx.current
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["# Company", f"{ctx.name} ({ctx.ticker})" if ctx.ticker else ctx.name])
-    w.writerow(["# Period", cur.label])
-    if cur.period_end:
-        w.writerow(["# Period end", cur.period_end.isoformat()])
+    w.writerow(["# Company", f"{name} ({ticker})" if ticker else name])
+    w.writerow(["# Period", period.label])
+    if period.period_end:
+        w.writerow(["# Period end", period.period_end.isoformat()])
     w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
     w.writerow(["metric", "value", "yoy_pct", "qoq_pct"])
     for label, kpi_attr, chg_attr, bs_attr in _CSV_METRICS:
         if bs_attr:
-            value = getattr(cur.balance_sheet, bs_attr)
-            yoy = getattr(cur.balance_sheet_yoy, bs_attr)
-            qoq = getattr(cur.balance_sheet_qoq, bs_attr) if cur.balance_sheet_qoq else None
+            value = getattr(period.balance_sheet, bs_attr)
+            yoy = getattr(period.balance_sheet_yoy, bs_attr)
+            qoq = getattr(period.balance_sheet_qoq, bs_attr) if period.balance_sheet_qoq else None
         else:
-            value = getattr(cur.kpi, kpi_attr)
-            yoy = getattr(cur.yoy, chg_attr)
-            qoq = getattr(cur.qoq, chg_attr) if cur.qoq else None
+            value = getattr(period.kpi, kpi_attr)
+            yoy = getattr(period.yoy, chg_attr)
+            qoq = getattr(period.qoq, chg_attr) if period.qoq else None
         w.writerow([
             label,
             "" if value is None else repr(value),
@@ -1099,8 +1134,38 @@ def build_period_csv(ctx: DetailContext) -> str:
     return buf.getvalue()
 
 
+def _period_csv_filename(ticker: str | None, label: str) -> str:
+    """Safe `{TICKER}_{PERIOD}.csv` filename shared by both download routes."""
+    ticker = (ticker or "company").upper()
+    safe_label = "".join(c if c.isalnum() else "-" for c in label)
+    return f"{ticker}_{safe_label}.csv"
+
+
+def build_period_csv(ctx: DetailContext) -> str:
+    """Render the selected period's financials as CSV.
+
+    Thin wrapper kept for the per-period download route and existing tests.
+    """
+    return render_period_csv(ctx.name, ctx.ticker, ctx.current)
+
+
 def download_filename(ctx: DetailContext) -> str:
     """Safe attachment filename for the per-period CSV export."""
-    ticker = (ctx.ticker or "company").upper()
-    label = "".join(c if c.isalnum() else "-" for c in ctx.current.label)
-    return f"{ticker}_{label}.csv"
+    return _period_csv_filename(ctx.ticker, ctx.current.label)
+
+
+def build_history_zip(ticker: str, entries: list[tuple[str, str]]) -> bytes:
+    """Pack per-period CSVs into a ZIP archive (PRD §4.8 first slice).
+
+    ``entries`` are ``(arcname, csv_text)`` pairs; arcnames are namespaced
+    under ``{TICKER}/`` so the archive unpacks into one folder. Synchronous,
+    in-memory — fine at personal-use scale (8 quarters ≈ tens of KB).
+    """
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for arcname, csv_text in entries:
+            zf.writestr(arcname, csv_text.encode("utf-8"))
+    return buf.getvalue()

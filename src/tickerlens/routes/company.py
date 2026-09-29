@@ -12,6 +12,7 @@ from tickerlens.services.financials import (
     CompanyNotFoundError,
     DetailContext,
     FinancialsService,
+    build_history_zip,
     build_period_csv,
     download_filename,
 )
@@ -161,6 +162,24 @@ def download_period_csv(
     )
 
 
+@router.get("/company/{ticker}/download/history.zip")
+def download_history_zip(ticker: str) -> StreamingResponse:
+    """Full-history ZIP of per-period CSVs (PRD §4.8, first slice).
+
+    One ``{TICKER}/{TICKER}_{PERIOD}.csv`` per stored quarter. Synchronous,
+    in-memory — fine at personal-use scale. CSV-only for now (no PDFs yet).
+    """
+    ticker = ticker.upper()
+    try:
+        zip_ticker, entries = _svc.get_history_zip_entries(ticker)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = build_history_zip(zip_ticker, entries)
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_ticker}_history.zip"'},
+    )
 @router.get("/api/search")
 def api_search(q: str = "") -> dict:
     """Autocomplete suggestions for the search combobox (PRD §4.10).

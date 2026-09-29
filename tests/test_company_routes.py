@@ -163,3 +163,39 @@ def test_api_search_no_match_returns_empty_list(search_client: TestClient) -> No
     resp = search_client.get("/api/search", params={"q": "zzz-no-such"})
     assert resp.status_code == 200
     assert resp.json()["results"] == []
+
+
+# ── full-history ZIP download (PRD §4.8, first slice) ──────────────────────────
+
+def test_history_zip_route_returns_attachment(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_history_zip_entries.return_value = (
+        "AAPL",
+        [("AAPL/AAPL_Q3-FY2025.csv", "metric,value,yoy_pct,qoq_pct\nRevenue,100.0,,\n")],
+    )
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/download/history.zip")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == 'attachment; filename="AAPL_history.zip"'
+
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert zf.namelist() == ["AAPL/AAPL_Q3-FY2025.csv"]
+        assert "Revenue,100.0" in zf.read("AAPL/AAPL_Q3-FY2025.csv").decode()
+
+
+def test_history_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyNotFoundError
+
+    mock_svc = MagicMock()
+    mock_svc.get_history_zip_entries.side_effect = CompanyNotFoundError("Unknown ticker: ZZZZ")
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/ZZZZ/download/history.zip")
+    assert resp.status_code == 404

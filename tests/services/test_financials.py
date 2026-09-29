@@ -954,3 +954,44 @@ def test_get_signal_change_none_when_unchanged(session: Session) -> None:
 def test_get_signal_change_none_without_history(session: Session) -> None:
     _seed_growing_company(session)
     assert _svc_with_mock(session).get_signal_change("AAPL") is None
+
+
+# ── full-history ZIP (PRD §4.8, first slice) ────────────────────────────────────
+
+def test_get_history_zip_entries_one_csv_per_quarter(session: Session) -> None:
+    from tickerlens.services.financials import build_history_zip
+
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=100.0, net_income=10.0))
+    session.add(_row(period_end=dt.date(2025, 9, 30), fiscal_year=2025,
+                     fiscal_period="Q4", revenue=120.0, net_income=12.0))
+    session.commit()
+
+    ticker, entries = _svc_with_mock(session).get_history_zip_entries("AAPL")
+
+    assert ticker == "AAPL"
+    assert [arc for arc, _ in entries] == [
+        "AAPL/AAPL_Q3-FY2025.csv",
+        "AAPL/AAPL_Q4-FY2025.csv",
+    ]
+    assert "# Period,Q3 FY2025" in entries[0][1]
+    assert "Revenue,100.0" in entries[0][1]
+    assert "# Period,Q4 FY2025" in entries[1][1]
+    # The Q4 file carries YoY against Q4 of the prior year — none here, so empty.
+    assert "None" not in entries[1][1]
+
+    payload = build_history_zip(ticker, entries)
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        assert sorted(zf.namelist()) == [
+            "AAPL/AAPL_Q3-FY2025.csv",
+            "AAPL/AAPL_Q4-FY2025.csv",
+        ]
+        assert zf.read("AAPL/AAPL_Q4-FY2025.csv").decode().startswith("# Company,Apple Inc. (AAPL)")
+
+
+def test_get_history_zip_entries_unknown_ticker_raises(session: Session) -> None:
+    with pytest.raises(CompanyNotFoundError):
+        _svc_with_mock(session).get_history_zip_entries("ZZZZ")
