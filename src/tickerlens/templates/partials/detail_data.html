@@ -48,6 +48,35 @@
 </div>
 {% endmacro %}
 
+{# range_grid renders the PRD §4.2 range-mode tables: one row per metric, one
+   column per quarter in the narrowed chart window (values are raw — the
+   window itself is the comparison, so there are no YoY/QoQ columns).
+   Horizontally scrollable so a wide window doesn't crush the layout. #}
+{% macro range_grid(rows, labels) %}
+<div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
+        <th class="text-left py-2 pr-4 font-medium">Metric</th>
+        {% for label in labels %}
+        <th class="text-right py-2 pr-4 font-medium whitespace-nowrap">{{ label }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800/50">
+      {% for row in rows %}
+      <tr class="hover:bg-gray-800/30">
+        <td class="py-3 pr-4 text-gray-400 whitespace-nowrap">{{ row.label }}</td>
+        {% for v in row.values %}
+        <td class="py-3 pr-4 text-right text-white font-medium whitespace-nowrap">{{ fmt_eps(v) if row.kind == "eps" else fmt_large(v) }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
 <!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card.
      changeMode resets to 'yoy' on each HTMX period swap (this partial is re-rendered),
      which is the intended default when the selected period changes. -->
@@ -135,6 +164,10 @@
 
   <!-- Income Statement tab -->
   <div x-show="tab === 'income'" class="p-4">
+    {% if ctx.range_table %}
+    {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "income") | list, ctx.range_table.labels) }}
+    <p class="text-xs text-gray-600 mt-4">Range view: {{ ctx.range_table.labels[0] }} → {{ ctx.range_table.labels[-1] }}. Widen the From/To selectors above to return to the single-period view.</p>
+    {% else %}
     <table class="w-full text-sm">
       <thead>
         <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
@@ -173,10 +206,14 @@
         </tr>
       </tbody>
     </table>
+    {% endif %}
   </div>
 
   <!-- Cash Flow tab -->
   <div x-show="tab === 'cashflow'" class="p-4">
+    {% if ctx.range_table %}
+    {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "cashflow") | list, ctx.range_table.labels) }}
+    {% else %}
     <table class="w-full text-sm">
       <thead>
         <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-800">
@@ -197,11 +234,23 @@
         </tr>
       </tbody>
     </table>
+    {% endif %}
     <p class="text-xs text-gray-600 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
   </div>
 
   <!-- Balance Sheet tab -->
   <div x-show="tab === 'balance'" class="p-4">
+    {% if ctx.range_table %}
+      {% set bal_rows = ctx.range_table.rows | selectattr("section", "equalto", "balance") | list %}
+      {% set ns = namespace(has_data=false) %}
+      {% for r in bal_rows %}{% for v in r.values %}{% if v is not none %}{% set ns.has_data = true %}{% endif %}{% endfor %}{% endfor %}
+      {% if ns.has_data %}
+        {{ range_grid(bal_rows, ctx.range_table.labels) }}
+        <p class="text-xs text-gray-600 mt-4">Balance-sheet values are point-in-time, as of each quarter's end date.</p>
+      {% else %}
+        <p class="text-gray-500 text-sm py-4 text-center">Not available for this period.</p>
+      {% endif %}
+    {% else %}
     {% set bs = ctx.current.balance_sheet %}
     {% if bs.total_assets is none and bs.total_liabilities is none
           and bs.total_equity is none and bs.cash_and_equivalents is none %}
@@ -248,6 +297,7 @@
       </tbody>
     </table>
     <p class="text-xs text-gray-600 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
+    {% endif %}
     {% endif %}
   </div>
 </div>

@@ -140,6 +140,25 @@ class PeriodData(BaseModel):
     balance_sheet_qoq: BalanceSheetChange | None  # None for yearly
 
 
+class RangeTableRow(BaseModel):
+    """One metric's values across the range window's quarters (chronological)."""
+    label: str                  # "Revenue"
+    section: str                # "income" | "cashflow" | "balance"
+    kind: str                   # "money" | "eps" — picks the template formatter
+    values: list[float | None]
+
+
+class RangeTableData(BaseModel):
+    """Metric × quarters grid for a narrowed chart range window.
+
+    Populated only when the detail view's From/To selectors narrow the window
+    to 2+ quarters (PRD §4.2, range-mode slice 2); None means the tabbed
+    tables keep their single-selected-period view.
+    """
+    labels: list[str]           # quarter labels, chronological
+    rows: list[RangeTableRow]
+
+
 class DetailContext(BaseModel):
     """Everything the detail page needs to render."""
     cik: str
@@ -166,6 +185,9 @@ class DetailContext(BaseModel):
     chart_range_options: list[str] = []
     selected_chart_from: str | None = None
     selected_chart_to: str | None = None
+    # Range tables (PRD §4.2, range-mode slice 2): metric × quarters grid for
+    # a narrowed window (2+ quarters); None keeps the single-period tables.
+    range_table: RangeTableData | None = None
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
@@ -802,10 +824,11 @@ class FinancialsService:
         """Return everything the detail / time-slicer page needs.
 
         ``chart_from``/``chart_to`` are quarter labels (e.g. "Q1 FY2025") that
-        bound the trend chart's range window (PRD §4.2, range-mode slice 1);
-        KPI cards, tables, and downloads still follow the selected period.
-        Unknown labels fall back to the full history; an inverted range is
-        swapped rather than rejected.
+        bound the trend chart's range window (PRD §4.2, range-mode slice 1)
+        and — when narrowed to 2+ quarters — switch the tabbed tables to a
+        metric × quarters grid (slice 2); KPI cards, tables, and downloads
+        still follow the selected period. Unknown labels fall back to the
+        full history; an inverted range is swapped rather than rejected.
         """
         cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
@@ -862,6 +885,17 @@ class FinancialsService:
             chart_revenue = [r.revenue for r in window_rows]
             chart_eps = [r.eps_diluted for r in window_rows]
 
+            # Range tables (PRD §4.2, slice 2): when the selectors narrow the
+            # window to 2+ quarters, the tabbed tables switch from the
+            # single-selected-period view to a metric × quarters grid. A
+            # one-quarter window keeps the period view (with its YoY/QoQ
+            # columns); yearly mode has no range selectors.
+            range_table = (
+                _build_range_table(window_rows)
+                if granularity == "quarterly" and 2 <= len(window_rows) < len(all_rows)
+                else None
+            )
+
             # Press-release highlights belong to the selected period. In yearly
             # mode the year's earnings release is the Q4 (annual) one; fall back
             # to the year's latest quarter when no Q4 row exists.
@@ -901,6 +935,7 @@ class FinancialsService:
                 chart_range_options=chrono_labels,
                 selected_chart_from=chart_labels[0],
                 selected_chart_to=chart_labels[-1],
+                range_table=range_table,
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
                 press_release_highlights=pr_row.press_release_highlights if pr_row else None,
@@ -1288,6 +1323,41 @@ def _chart_window(
     if from_idx > to_idx:
         from_idx, to_idx = to_idx, from_idx
     return all_rows[from_idx : to_idx + 1], chrono_labels[from_idx : to_idx + 1]
+
+
+def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
+    """Build the metric × quarters grid for a narrowed range window.
+
+    One row per metric (grouped by tab section), one value column per quarter
+    in the window, chronological. Values come straight off the stored
+    quarterly rows — the same numbers the single-period tables show.
+    """
+    labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in window_rows]
+
+    def _row(
+        label: str, section: str, kind: str, attr: str
+    ) -> RangeTableRow:
+        return RangeTableRow(
+            label=label,
+            section=section,
+            kind=kind,
+            values=[getattr(r, attr) for r in window_rows],
+        )
+
+    return RangeTableData(
+        labels=labels,
+        rows=[
+            _row("Revenue", "income", "money", "revenue"),
+            _row("Net Income", "income", "money", "net_income"),
+            _row("EPS Basic", "income", "eps", "eps_basic"),
+            _row("EPS Diluted", "income", "eps", "eps_diluted"),
+            _row("Free Cash Flow", "cashflow", "money", "free_cash_flow"),
+            _row("Total Assets", "balance", "money", "total_assets"),
+            _row("Total Liabilities", "balance", "money", "total_liabilities"),
+            _row("Total Equity", "balance", "money", "total_equity"),
+            _row("Cash & Equivalents", "balance", "money", "cash_and_equivalents"),
+        ],
+    )
 
 
 def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:

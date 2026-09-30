@@ -1436,3 +1436,49 @@ def test_get_year_zip_entries_unknown_year_falls_back_to_latest(session: Session
 def test_get_year_zip_entries_unknown_ticker_raises(session: Session) -> None:
     with pytest.raises(CompanyNotFoundError):
         _svc_with_mock(session).get_year_zip_entries("ZZZZ")
+
+
+# ── range tables (PRD §4.2, range-mode slice 2) ────────────────────────────────
+
+def test_get_detail_range_table_for_narrowed_window(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    rt = ctx.range_table
+    assert rt is not None
+    assert rt.labels == ["Q4 FY2024", "Q1 FY2025", "Q2 FY2025"]
+    income = [r for r in rt.rows if r.section == "income"]
+    assert [r.label for r in income] == [
+        "Revenue", "Net Income", "EPS Basic", "EPS Diluted",
+    ]
+    assert income[0].values == [119_575, 95_359, 85_777]
+    assert income[0].kind == "money"
+    assert income[2].kind == "eps"
+    assert len([r for r in rt.rows if r.section == "cashflow"]) == 1
+    assert len([r for r in rt.rows if r.section == "balance"]) == 4
+    # KPI cards and the selected period still follow the period selector.
+    assert ctx.current.label == "Q3 FY2025"
+
+
+def test_get_detail_no_range_table_for_full_history(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail("AAPL")
+    assert ctx.range_table is None
+
+
+def test_get_detail_no_range_table_for_single_quarter_window(session: Session) -> None:
+    # A one-quarter window keeps the single-period view (with YoY/QoQ).
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q1 FY2025", chart_to="Q1 FY2025",
+    )
+    assert ctx.chart_labels == ["Q1 FY2025"]
+    assert ctx.range_table is None
+
+
+def test_get_detail_no_range_table_in_yearly_mode(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail("AAPL", granularity="yearly")
+    assert ctx.range_table is None
