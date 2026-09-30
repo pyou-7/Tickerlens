@@ -151,6 +151,13 @@ Since you're the only user, AI analysis ships with v1.0 — no need to defer it 
 - Home page: pinned companies section above the search box — each row shows ticker, name, last price, market cap, and the current valuation signal badge. Rows link to the company page.
 - Watching a company does not fetch data by itself; rows render from whatever is stored (price may be "—" until enriched).
 
+#### 4.6.2 Notes (shipped 2026-09-29)
+
+- `watchlist.note`: nullable text, max 280 chars (a reminder, not an essay).
+- `POST /company/{ticker}/watch/note` saves/clears the note; HTMX swaps the `partials/watch_note.html` partial in place, plain-POST redirects back; 404 when not watching.
+- Note form lives on the Overview page (visible only while watching); home-page pins show the note truncated under the company name.
+- Form body parsed directly (no `python-multipart` dependency).
+
 ### 4.7 Daily News Feed (Watchlist-Scoped)
 
 Best-effort using free APIs:
@@ -166,7 +173,7 @@ Organized by year, with quarterly subfolders. Synchronous generation with progre
 
 Single Quarter, Single Year, Range, and Compare ZIP structures are unchanged from prior PRD — see Section 5.7 of v0.4 if you want the exact folder trees.
 
-*Shipped 2026-09-29 (CSV-only first slices): full-history ZIP (`{TICKER}_history.zip` with one `{TICKER}/{TICKER}_{PERIOD}.csv` per stored quarter) and compare-view ZIP (`{TICKER}_compare.zip` with both periods' CSVs + a `compare_summary.csv` of metric × A | B | Δ | Δ%). PDF exports, renamed original SEC PDFs, and Range/Single-Year ZIPs stay future.*
+*Shipped 2026-09-29 (CSV-only first slices): full-history ZIP (`{TICKER}_history.zip` with one `{TICKER}/{TICKER}_{PERIOD}.csv` per stored quarter), compare-view ZIP (`{TICKER}_compare.zip` with both periods' CSVs + a `compare_summary.csv` of metric × A | B | Δ | Δ%), and range-view ZIP (`{TICKER}_range.zip` with one `{TICKER}/{TICKER}_{PERIOD}.csv` per quarter in the chart window + a `range_summary.csv` of metric × quarters; mirrors the detail view's `chart_from`/`chart_to` selectors including unknown-label fallback and inverted-range swap; "⇓ Range (ZIP)" plain-link button beside the range selectors). PDF exports, renamed original SEC PDFs, and Single-Year ZIPs stay future.*
 
 ### 4.9 Edge Case Handling
 

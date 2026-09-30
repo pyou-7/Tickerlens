@@ -21,20 +21,20 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 ### Models layer (`src/tickerlens/models/`)
 
 - **`company.py`** — `Company` model; CIK (String(10)) as PK; ticker is a display label, not a join key.
-- **`watchlist.py`** — `WatchlistEntry` model; CIK PK + `added_at`; home-screen pins (PRD §4.6).
+- **`watchlist.py`** — `WatchlistEntry` model; CIK PK + `added_at` + nullable 280-char `note` (PRD §4.6, notes slice); home-screen pins.
 - **`quarterly_financial.py`** — `QuarterlyFinancial` model; unique constraint on `(cik, period_end)`. Holds per-period `press_release_highlights` (Text) + `press_release_source` (String(64)), populated by `enrich_company` from the period's 8-K ex-99 exhibit (None = not available).
 - **`database.py`** — `get_engine`, `get_session`, `create_tables` helpers.
 - **`base.py`** — `DeclarativeBase`.
 
 ### Services layer (`src/tickerlens/services/`)
 
-- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page), `get_detail` (returns `DetailContext` for the time slicer), `get_compare` (returns `CompareContext`: two `PeriodData`s + `CompareDeltas` for the compare page, PRD §4.2), `get_valuation` (valuation inputs from stored rows + quote, no network), `watch_ticker` / `unwatch_ticker` / `is_watching` / `get_watchlist` (watchlist CRUD + home-screen rows with live signals). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
+- **`financials.py`** — `FinancialsService`: `fetch_and_persist` (EDGAR→XBRL→SQLite), `enrich_company` (Wikipedia + Yahoo enrichment, plus Item 1A risk factors and per-period press-release highlights — both best-effort, never wipe good values on failure), `get_overview` (returns `CompanyOverview` Pydantic model for the Overview page), `get_detail` (returns `DetailContext` for the time slicer), `get_compare` (returns `CompareContext`: two `PeriodData`s + `CompareDeltas` for the compare page, PRD §4.2), `get_valuation` (valuation inputs from stored rows + quote, no network), `watch_ticker` / `unwatch_ticker` / `is_watching` / `get_watchlist` (watchlist CRUD + home-screen rows with live signals) + `set_watchlist_note` / `get_watchlist_note`; `get_range_zip_entries` (range-view ZIP: per-quarter CSVs + metric × quarters summary, PRD §4.8 slice 3) using the shared `_chart_window()` resolver; `extract_recent_quarterly_financials` fills per-quarter basic-EPS gaps from diluted EPS (GS Q2 2026 case); `_newest_in_window` with a `None` window counts instant facts so the tag-abandonment rule engages for balance-sheet metrics (UNH equity / PG cash case). Upserts via `INSERT … ON CONFLICT DO UPDATE`.
 - **`valuation.py`** — Pure rules-based valuation (PRD §4.11): `compute_valuation()` → `ValuationSignal` (signal, target price, upside %, confidence, method, reasoning). PEG-implied P/E primary, sales-based fallback, Watch on insufficient data.
 - **`ir_download.py`** — Filing discovery, FY labeling, 8-K matching for earnings PDF download. Companion to `scripts/download_earnings.py`. `_pick_release_doc()` (pure, tested) picks the earnings-release exhibit from an 8-K index: ex99-style first, then `*pressrelease*` / `*earningsrelease*` / `-pr`+`_pr` / digit-bearing `…pr` quarter stems (NVDA's `q2fy27pr.htm`), skipping `index.htm`/`R*.htm`.
 
 ### Routes layer (`src/tickerlens/routes/`)
 
-- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer, chart range window via `chart_from`/`chart_to`), `GET /company/{ticker}/compare` (side-by-side two-quarter/two-year compare, PRD §4.2; `period_a`/`period_b` labels or `preset=yoy|qoq|5y`, YoY-ago default), `GET /company/{ticker}/compare/download` (compare-view ZIP: both periods' CSVs + summary CSV, PRD §4.8 slice 2), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /watchlist/refresh` (refresh-all quotes, PRD §4.6), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1).
+- **`company.py`** — `GET /` (home, with watchlist pins), `GET /company/{ticker}` (overview page), `POST /company/{ticker}/refresh` (re-fetch + re-enrich), `GET /company/{ticker}/detail` (time slicer, chart range window via `chart_from`/`chart_to`), `GET /company/{ticker}/compare` (side-by-side two-quarter/two-year compare, PRD §4.2; `period_a`/`period_b` labels or `preset=yoy|qoq|5y`, YoY-ago default), `GET /company/{ticker}/compare/download` (compare-view ZIP: both periods' CSVs + summary CSV, PRD §4.8 slice 2), `GET /api/search` (autocomplete suggestions, PRD §4.10), `POST /watchlist/refresh` (refresh-all quotes, PRD §4.6), `POST /company/{ticker}/watch` + `POST /company/{ticker}/watch/remove` (watchlist toggle, PRD §4.6), `GET /company/{ticker}/detail/download` (per-period CSV, PRD §4.3 #7), `GET /company/{ticker}/download/history.zip` (full-history ZIP of per-period CSVs, PRD §4.8 slice 1), `GET /company/{ticker}/download/range.zip` (range-view ZIP mirroring `chart_from`/`chart_to`, PRD §4.8 slice 3), `POST /company/{ticker}/watch/note` (watchlist note save/clear, PRD §4.6).
 
 ### App entry
 
@@ -60,6 +60,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 - `017aee7df1c1_*` — Add balance-sheet columns to `quarterly_financials`.
 - `d1f5704c5e60_*` — Add `risk_factors`, `risk_factors_source` columns to `companies`.
 - `7a3e9c1f4b22_*` — Create `watchlist` table (CIK PK + `added_at`).
+- `5f1c9a2b7d34_*` — Add nullable `note` (TEXT) to `watchlist`.
 - `3049fff86581_*` — Add `press_release_highlights`, `press_release_source` columns to `quarterly_financials`.
 
 ## Phase 1 Findings To Preserve
