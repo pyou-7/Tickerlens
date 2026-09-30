@@ -13,7 +13,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 ### Data layer (`src/tickerlens/data/`)
 
 - **`edgar.py`** — SEC JSON client. Requires `EDGAR_USER_AGENT` env var. Caches raw JSON by URL hash under `.edgar_cache/`. Throttles uncached requests to ≤10/sec. Provides CIK normalization, ticker lookup, submissions, and companyfacts.
-- **`xbrl.py`** — Central concept-mapping layer. Extracts recent quarterly Revenue, Net Income, EPS Basic, EPS Diluted, and FCF. Handles revenue tag fallback chain (post- and pre-ASC 606). Un-cumulates cash-flow YTD facts into standalone quarters; the 9M YTD window floor is 240 days (covers 52/53-week filers like Costco, whose 36-week 9M fact is 251 days). CAPEX fallback chain: `PaymentsToAcquirePropertyPlantAndEquipment` → `PaymentsToAcquireProductiveAssets` (NVDA) → `PaymentsToAcquireOtherPropertyPlantAndEquipment` (LLY files "Capital expenditures" under this tag; never filed the classic tag). Derives Q4 from FY − 9M. Joins metrics by period `end` date (not `fy/fp` label). Tag-abandonment rule: a tag whose newest fact lags the chain's freshest by >180 days is skipped (catches recent switches like O's `NetIncomeLoss`→common-stockholders tags). Missing total-liabilities *or* total-equity instants are derived from the accounting identity (Assets = Liabilities + Equity) when the filer reports no such tag (LLY liabilities, V equity); assets is never derived.
+- **`xbrl.py`** — Central concept-mapping layer. Extracts recent quarterly Revenue, Net Income, EPS Basic, EPS Diluted, and FCF. Handles revenue tag fallback chain (post- and pre-ASC 606). Un-cumulates cash-flow YTD facts into standalone quarters; the 9M YTD window floor is 240 days (covers 52/53-week filers like Costco, whose 36-week 9M fact is 251 days). CAPEX fallback chain: `PaymentsToAcquirePropertyPlantAndEquipment` → `PaymentsToAcquireProductiveAssets` (NVDA) → `PaymentsToAcquireOtherPropertyPlantAndEquipment` (LLY files "Capital expenditures" under this tag; never filed the classic tag). Derives Q4 from FY − 9M for dollar metrics; Q4 *EPS* is derived as Q4 net income over the implied Q4 share count ((12·FY_avg − 9·9M_avg)/3 from the filed NI/EPS pairs) — never by subtracting per-share values (DUOL FY2025 Q4 rendered diluted $0.94 above basic $0.88; now $0.90 > $0.89) — with precision-rounded subtraction as fallback. FCF is stored NULL for finance SICs (6000–6999): OpCF is dominated by balance-sheet flows for lenders, so the metric misleads (SoFi showed −$3.99B; peers render "—"). Joins metrics by period `end` date (not `fy/fp` label). Tag-abandonment rule: a tag whose newest fact lags the chain's freshest by >180 days is skipped (catches recent switches like O's `NetIncomeLoss`→common-stockholders tags). Missing total-liabilities *or* total-equity instants are derived from the accounting identity (Assets = Liabilities + Equity) when the filer reports no such tag (LLY liabilities, V equity); assets is never derived.
 - **`sic.py`** — Maps SIC codes to simplified sector buckets for the UI.
 - **`wikipedia.py`** — Fetches company description via Wikipedia API; graceful fallback if result is under 50 words.
 - **`yahoo.py`** — Last price and market cap via yfinance.
@@ -38,7 +38,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### App entry
 
-- **`src/tickerlens/main.py`** — FastAPI app; mounts `/static` and `templates/`.
+- **`src/tickerlens/main.py`** — FastAPI app; mounts `/static` and `templates/`. The 404 handler renders a friendly page and, for `/company/{ticker}` misses, suggests up to 5 close matches via the §4.10 search ranker (best-effort, PRD §4.9).
 
 ### Templates (`src/tickerlens/templates/`)
 
@@ -50,7 +50,7 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Tests (`tests/`)
 
-- **`tests/data/test_xbrl.py`** — 40 XBRL tests: fiscal-year inference, tag fallback chains (NVDA/LLY CapEx, MET revenue, O net income), YTD un-cumulation (incl. 52/53-week 9M window), period-end join (JNJ regression), instant-fact staleness (UNH/PG), accounting-identity derivation (LLY liabilities, V equity), diluted→basic EPS fallback (GS).
+- **`tests/data/test_xbrl.py`** — 44 XBRL tests: fiscal-year inference, tag fallback chains (NVDA/LLY CapEx, MET revenue, O net income), YTD un-cumulation (incl. 52/53-week 9M window), period-end join (JNJ regression), instant-fact staleness (UNH/PG), accounting-identity derivation (LLY liabilities, V equity), diluted→basic EPS fallback (GS), share-implied Q4 EPS derivation (DUOL: basic must exceed diluted; fallbacks for missing/zero NI), FCF suppression for finance SICs (SoFi).
 - **`tests/services/test_financials.py`** — 12 tests for `_pct_change`, `_compute_ttm`, `_compute_yoy`, `get_overview`, and `fetch_and_persist` using in-memory SQLite.
 
 ### Migrations (`alembic/versions/`)

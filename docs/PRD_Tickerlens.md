@@ -181,6 +181,7 @@ Single Quarter, Single Year, Range, and Compare ZIP structures are unchanged fro
 |---|---|
 | IPO with limited history | Show whatever exists, banner "Listed since [date]" |
 | Ticker change (FB → META) | CIK-based canonical key, ticker is a display label |
+| Unknown ticker (typo or retired) | Friendly 404 page suggests up to 5 close matches via the §4.10 search ranker — never a dead end (shipped 2026-09-30) |
 | Multiple share classes (GOOGL/GOOG) | Separate entries; "Also trades as" link in header (shipped 2026-09-30 — `sibling_tickers()` scans cached SEC tickers for the same CIK) |
 | Filing amendment (10-K/A) | Show latest; clickable "Amended on [date]" → diff view |
 | Acquisition | Banner + locked read-only historical data |
