@@ -11,3 +11,6 @@ __pycache__/
 notebooks/*.csv
 *_phase0_output.csv
 .claude-staged.diff
+tickerlens.db-journal
+tickerlens.db-wal
+tickerlens.db-shm
