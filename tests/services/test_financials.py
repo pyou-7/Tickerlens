@@ -1382,3 +1382,57 @@ def test_get_range_zip_entries_inverted_range_swaps(session: Session) -> None:
 def test_get_range_zip_entries_unknown_ticker_raises(session: Session) -> None:
     with pytest.raises(CompanyNotFoundError):
         _svc_with_mock(session).get_range_zip_entries("ZZZZ")
+
+
+# ── single-year ZIP (PRD §4.8, fourth slice) ────────────────────────────────────
+
+def test_get_year_zip_entries_quarterly_csvs_plus_summary(session: Session) -> None:
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 3, 31), fiscal_year=2025,
+                     fiscal_period="Q1", revenue=100.0))
+    session.add(_row(period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=120.0))
+    session.add(_row(period_end=dt.date(2026, 3, 31), fiscal_year=2026,
+                     fiscal_period="Q1", revenue=140.0))
+    session.commit()
+
+    ticker, resolved_year, entries = _svc_with_mock(session).get_year_zip_entries(
+        "AAPL", year=2025
+    )
+
+    assert ticker == "AAPL"
+    assert resolved_year == 2025
+    assert [arc for arc, _ in entries] == [
+        "AAPL/AAPL_Q1-FY2025.csv",
+        "AAPL/AAPL_Q2-FY2025.csv",
+        "AAPL/AAPL_year_summary.csv",
+    ]
+    assert "# Period,Q1 FY2025" in entries[0][1]
+    assert "Revenue,100.0" in entries[0][1]
+    summary = entries[2][1]
+    assert "metric,Q1 FY2025,Q2 FY2025" in summary
+    assert "Revenue,100.0,120.0" in summary
+
+
+def test_get_year_zip_entries_unknown_year_falls_back_to_latest(session: Session) -> None:
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 3, 31), fiscal_year=2025,
+                     fiscal_period="Q1", revenue=100.0))
+    session.add(_row(period_end=dt.date(2026, 3, 31), fiscal_year=2026,
+                     fiscal_period="Q1", revenue=140.0))
+    session.commit()
+
+    _, resolved_year, entries = _svc_with_mock(session).get_year_zip_entries(
+        "AAPL", year=2099
+    )
+
+    assert resolved_year == 2026
+    assert [arc for arc, _ in entries] == [
+        "AAPL/AAPL_Q1-FY2026.csv",
+        "AAPL/AAPL_year_summary.csv",
+    ]
+
+
+def test_get_year_zip_entries_unknown_ticker_raises(session: Session) -> None:
+    with pytest.raises(CompanyNotFoundError):
+        _svc_with_mock(session).get_year_zip_entries("ZZZZ")

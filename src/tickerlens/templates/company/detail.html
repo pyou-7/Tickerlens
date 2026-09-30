@@ -55,7 +55,7 @@
 
 <!-- Time slicer controls -->
 <div
-  x-data="{ gran: '{{ ctx.granularity }}' }"
+  x-data="{ gran: '{{ ctx.granularity }}', yr: '{{ ctx.selected_year }}' }"
   class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4"
 >
   <form
@@ -101,9 +101,10 @@
     </div>
 
     <!-- Year selector -->
-    <div x-show="gran === 'yearly'" x-cloak>
+    <div x-show="gran === 'yearly'" x-cloak class="flex items-center gap-2">
       <select
         name="year"
+        x-model="yr"
         :disabled="gran !== 'yearly'"
         class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
       >
@@ -111,6 +112,13 @@
           <option value="{{ yr }}" {% if yr == ctx.selected_year %}selected{% endif %}>FY{{ yr }}</option>
         {% endfor %}
       </select>
+      <!-- Single-year ZIP (PRD §4.8, fourth slice). Alpine-bound href tracks
+           the live select value so the archive always matches the chosen
+           year; plain link so it also works without HTMX. -->
+      <a :href="`/company/{{ ctx.ticker }}/download/year.zip?year=${yr}`"
+         download
+         class="text-xs text-gray-400 hover:text-white underline underline-offset-2 whitespace-nowrap"
+      >⇓ Year (ZIP)</a>
     </div>
 
     <!-- Chart range window (PRD §4.2, range-mode slice 1). Quarterly only;

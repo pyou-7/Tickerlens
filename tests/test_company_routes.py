@@ -445,3 +445,35 @@ def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -
         "AAPL", period_a=None, period_b=None, preset=None,
         mode="yearly", year_a=2025, year_b=2024,
     )
+
+
+# ── single-year ZIP download (PRD §4.8, fourth slice) ──────────────────────────
+
+def test_year_zip_route_returns_attachment(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_year_zip_entries.return_value = (
+        "AAPL",
+        2025,
+        [("AAPL/AAPL_Q1-FY2025.csv", "metric,value,yoy_pct,qoq_pct\nRevenue,100.0,,\n")],
+    )
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/download/year.zip?year=2025")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert resp.headers["content-disposition"] == 'attachment; filename="AAPL_year_FY2025.zip"'
+    mock_svc.get_year_zip_entries.assert_called_once_with("AAPL", year=2025)
+
+
+def test_year_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyNotFoundError
+
+    mock_svc = MagicMock()
+    mock_svc.get_year_zip_entries.side_effect = CompanyNotFoundError("Unknown ticker: ZZZZ")
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/ZZZZ/download/year.zip")
+    assert resp.status_code == 404

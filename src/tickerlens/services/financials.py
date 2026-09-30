@@ -1188,6 +1188,66 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_year_zip_entries(
+        self,
+        ticker: str,
+        year: int | None = None,
+        session: Session | None = None,
+    ) -> tuple[str, int, list[tuple[str, str]]]:
+        """ZIP entries for a single fiscal year (PRD §4.8, fourth slice).
+
+        One ``{TICKER}/{TICKER}_{PERIOD}.csv`` per quarter of the fiscal year
+        (reusing the per-period renderer) +
+        ``{TICKER}/{TICKER}_year_summary.csv`` (metric × quarters, raw
+        values — the same shape as the range summary). An unknown ``year``
+        falls back to the latest stored fiscal year, mirroring the
+        unknown-label fallback convention elsewhere. Returns
+        ``(ticker, resolved_year, entries)``.
+        """
+        ticker = ticker.upper()
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+            if not all_rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+            latest = all_rows[-1]
+            year_rows = [r for r in all_rows if r.fiscal_year == year]
+            resolved_year = year if year_rows else latest.fiscal_year
+            if not year_rows:
+                year_rows = [r for r in all_rows if r.fiscal_year == resolved_year]
+            entries: list[tuple[str, str]] = []
+            periods: list[PeriodData] = []
+            for row in year_rows:
+                label = f"{row.fiscal_period} FY{row.fiscal_year}"
+                period, _ = _build_quarterly_period(all_rows, label, latest)
+                periods.append(period)
+                arcname = f"{ticker}/{_period_csv_filename(ticker, period.label)}"
+                entries.append(
+                    (arcname, render_period_csv(company.name, company.ticker, period))
+                )
+            entries.append(
+                (
+                    f"{ticker}/{ticker}_year_summary.csv",
+                    render_range_csv(company.name, company.ticker, periods),
+                )
+            )
+            return ticker, resolved_year, entries
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
 
 def _chart_window(
     all_rows: list[QuarterlyFinancial],

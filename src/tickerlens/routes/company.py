@@ -341,6 +341,33 @@ def download_range_zip(
     )
 
 
+@router.get("/company/{ticker}/download/year.zip")
+def download_year_zip(
+    ticker: str,
+    year: int | None = None,
+) -> StreamingResponse:
+    """Single-year ZIP: per-quarter CSVs for one fiscal year + summary CSV.
+
+    ``year`` is a fiscal year (e.g. 2025); an unknown year falls back to the
+    latest stored fiscal year (PRD §4.8, fourth slice).
+    """
+    ticker = ticker.upper()
+    try:
+        zip_ticker, resolved_year, entries = _svc.get_year_zip_entries(
+            ticker, year=year
+        )
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = build_history_zip(zip_ticker, entries)
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_ticker}_year_FY{resolved_year}.zip"'
+        },
+    )
+
+
 @router.get("/api/search")
 def api_search(q: str = "") -> dict:
     """Autocomplete suggestions for the search combobox (PRD §4.10).
