@@ -49,6 +49,9 @@
       {% if overview.ticker %}
         <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ overview.ticker }}</span>
       {% endif %}
+      {% if also_trades_as %}
+        <span class="text-xs text-gray-500">Also trades as {% for sib in also_trades_as %}<a href="/company/{{ sib }}" class="font-mono text-indigo-400 hover:text-indigo-300">{{ sib }}</a>{{ ", " if not loop.last }}{% endfor %}</span>
+      {% endif %}
       {% if overview.sector %}
         <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ overview.sector }}</span>
       {% endif %}

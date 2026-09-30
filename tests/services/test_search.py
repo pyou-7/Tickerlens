@@ -1,8 +1,8 @@
-"""Unit tests for the search ranking (PRD §4.10)."""
+"""Unit tests for the search ranking (PRD §4.10) and sibling tickers (PRD §4.9)."""
 
 from __future__ import annotations
 
-from tickerlens.services.search import MAX_SUGGESTIONS, search_companies
+from tickerlens.services.search import MAX_SUGGESTIONS, search_companies, sibling_tickers
 
 ENTRIES = [
     {"ticker": "T", "name": "AT&T Inc.", "cik": "0000732717"},
@@ -83,3 +83,29 @@ def test_entries_from_tickers_uses_title_field() -> None:
     assert entries == [
         {"ticker": "AAPL", "name": "Apple Inc.", "cik": "0000320193"}
     ]
+
+
+SIBLING_ENTRIES = [
+    {"ticker": "GOOGL", "name": "Alphabet Inc.", "cik": "0001652044"},
+    {"ticker": "GOOG", "name": "Alphabet Inc.", "cik": "0001652044"},
+    {"ticker": "BRK.B", "name": "Berkshire Hathaway Inc.", "cik": "0001067983"},
+    {"ticker": "BRK.A", "name": "Berkshire Hathaway Inc.", "cik": "0001067983"},
+    {"ticker": "AAPL", "name": "Apple Inc.", "cik": "0000320193"},
+]
+
+
+def test_sibling_tickers_returns_same_cik_excluding_self() -> None:
+    assert sibling_tickers("0001652044", "GOOG", SIBLING_ENTRIES) == ["GOOGL"]
+    assert sibling_tickers("0001652044", "GOOGL", SIBLING_ENTRIES) == ["GOOG"]
+
+
+def test_sibling_tickers_sorted_and_excludes_self_case_insensitive() -> None:
+    assert sibling_tickers("0001067983", "brk.b", SIBLING_ENTRIES) == ["BRK.A"]
+
+
+def test_sibling_tickers_empty_for_single_class() -> None:
+    assert sibling_tickers("0000320193", "AAPL", SIBLING_ENTRIES) == []
+
+
+def test_sibling_tickers_empty_for_unknown_cik() -> None:
+    assert sibling_tickers("0000000000", "ZZZ", SIBLING_ENTRIES) == []

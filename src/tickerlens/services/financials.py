@@ -29,6 +29,7 @@ from tickerlens.services.ir_download import (
     discover_earnings_filings,
     er_doc_url,
 )
+from tickerlens.services.search import get_search_entries, sibling_tickers
 from tickerlens.services.valuation import ValuationSignal, compute_valuation
 
 logger = logging.getLogger(__name__)
@@ -727,6 +728,22 @@ class FinancialsService:
         finally:
             if session is None and self._session is None:
                 db.close()
+
+    def get_sibling_tickers(self, ticker: str) -> list[str]:
+        """Other SEC-listed tickers for the same CIK ("Also trades as", PRD §4.9).
+
+        e.g. GOOG ⇄ GOOGL. Best-effort — never raises; an empty list means
+        no sibling share classes in SEC company_tickers.json (or the lookup
+        failed, in which case the header simply hides the hint).
+        """
+        try:
+            cik = _resolve_cik(self.edgar_client, ticker)
+        except CompanyNotFoundError:
+            return []
+        try:
+            return sibling_tickers(cik, ticker, get_search_entries(self.edgar_client))
+        except Exception:
+            return []
 
     def refresh_watchlist_quotes(
         self, session: Session | None = None

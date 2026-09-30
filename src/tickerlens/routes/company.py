@@ -52,6 +52,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
             "note": _svc.get_watchlist_note(ticker),
+            "also_trades_as": _svc.get_sibling_tickers(ticker),
         },
     )
 
@@ -173,7 +174,7 @@ def company_detail(
     return templates.TemplateResponse(
         request=request,
         name="company/detail.html",
-        context={"ctx": ctx},
+        context={"ctx": ctx, "also_trades_as": _svc.get_sibling_tickers(ticker)},
     )
 
 
@@ -208,7 +209,7 @@ def company_compare(
     return templates.TemplateResponse(
         request=request,
         name="company/compare.html",
-        context={"ctx": ctx},
+        context={"ctx": ctx, "also_trades_as": _svc.get_sibling_tickers(ticker)},
     )
 
 
@@ -398,5 +399,6 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
             "note": _svc.get_watchlist_note(ticker),
+            "also_trades_as": _svc.get_sibling_tickers(ticker),
         },
     )

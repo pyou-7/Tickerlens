@@ -19,6 +19,24 @@ from tickerlens.data.edgar import normalize_cik
 MAX_SUGGESTIONS = 8
 
 
+def sibling_tickers(
+    cik: str, exclude_ticker: str | None, entries: list[dict[str, str]]
+) -> list[str]:
+    """Other SEC-listed tickers sharing ``cik`` (PRD §4.9 — "Also trades as").
+
+    e.g. viewing GOOG shows GOOGL, since both map to Alphabet's CIK.
+    Sorted alphabetically; ``exclude_ticker`` is omitted (case-insensitive).
+    Pure function so it's unit-testable; callers pass the cached entries
+    from :func:`get_search_entries`.
+    """
+    excl = (exclude_ticker or "").upper()
+    return sorted(
+        e["ticker"]
+        for e in entries
+        if e.get("cik") == cik and e["ticker"].upper() != excl
+    )
+
+
 class SearchResult(BaseModel):
     ticker: str
     name: str
