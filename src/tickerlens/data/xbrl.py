@@ -178,6 +178,11 @@ def extract_recent_quarterly_financials(
     net_income  = _safe(quarterly_income_metric,    Metric.NET_INCOME)
     eps_basic   = _safe(quarterly_income_metric,    Metric.EPS_BASIC)
     eps_diluted = _safe(quarterly_income_metric,    Metric.EPS_DILUTED)
+    # A filing may omit EarningsPerShareBasic for a quarter while filing
+    # EarningsPerShareDiluted (Goldman Sachs's Q2 2026 10-Q files diluted
+    # only). Basic wins wherever it exists; diluted fills only missing ends,
+    # so the displayed "EPS (Basic)" never blanks for a filed quarter.
+    eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
     balance_sheet = {metric: _safe_bs(metric) for metric in BALANCE_SHEET_METRICS}
@@ -221,6 +226,32 @@ def extract_recent_quarterly_financials(
             )
         )
     return _dedupe_period_labels(rows)
+
+
+def _fill_missing_eps_basic(
+    basic: list[PeriodMetric], diluted: list[PeriodMetric]
+) -> list[PeriodMetric]:
+    """Fill per-quarter gaps in basic EPS from diluted EPS.
+
+    Whole-chain tag selection is correct for Goldman Sachs — it still files
+    ``EarningsPerShareBasic`` most quarters — but its Q2 2026 10-Q filed
+    ``EarningsPerShareDiluted`` only. Basic is preferred wherever present;
+    diluted facts fill only ends with no basic fact (basic and diluted EPS
+    differ by fractions of a percent, so the merged value stays under the
+    EPS_BASIC metric with the diluted fact's source tag).
+    """
+    by_end = {m.end: m for m in basic}
+    for m in diluted:
+        if m.end not in by_end:
+            by_end[m.end] = PeriodMetric(
+                metric=Metric.EPS_BASIC,
+                fy=m.fy,
+                fp=m.fp,
+                end=m.end,
+                value=m.value,
+                source_tag=m.source_tag,
+            )
+    return sorted(by_end.values(), key=lambda item: item.end)
 
 
 def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:

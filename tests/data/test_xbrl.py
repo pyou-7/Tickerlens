@@ -872,3 +872,45 @@ def test_balance_sheet_metric_uses_fresh_tag_values() -> None:
     assert values[dt.date(2026, 6, 30)] == 105_000
     assert values[dt.date(2026, 3, 31)] == 100_000
 
+
+def _eps_metric(
+    metric, end: str, val: float, fy: int, fp: str, source_tag: str
+) -> "PeriodMetric":
+    from tickerlens.data.xbrl import PeriodMetric
+
+    return PeriodMetric(
+        metric=metric, fy=fy, fp=fp, end=dt.date.fromisoformat(end), value=val,
+        source_tag=source_tag,
+    )
+
+
+def test_fill_missing_eps_basic_prefers_basic_and_fills_gap() -> None:
+    from tickerlens.data.xbrl import _fill_missing_eps_basic
+
+    basic = [
+        _eps_metric(Metric.EPS_BASIC, "2026-03-31", 17.74, 2026, "Q1", "EarningsPerShareBasic"),
+    ]
+    diluted = [
+        _eps_metric(Metric.EPS_DILUTED, "2026-03-31", 17.55, 2026, "Q1", "EarningsPerShareDiluted"),
+        _eps_metric(Metric.EPS_DILUTED, "2026-06-30", 20.98, 2026, "Q2", "EarningsPerShareDiluted"),
+    ]
+    merged = _fill_missing_eps_basic(basic, diluted)
+    by_end = {m.end: m for m in merged}
+    # Basic fact survives where it exists (17.74, not diluted's 17.55).
+    assert by_end[dt.date(2026, 3, 31)].value == 17.74
+    # Missing quarter filled from diluted, labeled EPS_BASIC, source noted.
+    filled = by_end[dt.date(2026, 6, 30)]
+    assert filled.value == 20.98
+    assert filled.metric == Metric.EPS_BASIC
+    assert filled.source_tag == "EarningsPerShareDiluted"
+
+
+def test_fill_missing_eps_basic_empty_inputs() -> None:
+    from tickerlens.data.xbrl import _fill_missing_eps_basic
+
+    assert _fill_missing_eps_basic([], []) == []
+    only_diluted = [
+        _eps_metric(Metric.EPS_DILUTED, "2026-06-30", 20.98, 2026, "Q2", "EarningsPerShareDiluted"),
+    ]
+    merged = _fill_missing_eps_basic([], only_diluted)
+    assert len(merged) == 1 and merged[0].value == 20.98
