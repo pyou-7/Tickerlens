@@ -82,7 +82,7 @@ When you open a company page, you land on the Overview by default. Contents:
 
 **Three modes:**
 1. **Single period** — view one quarter OR one year
-2. **Range** — view multiple consecutive periods (e.g., Q1 FY2023 → Q4 FY2025)
+2. **Range** — view multiple consecutive periods (e.g., Q1 FY2023 → Q4 FY2025) *(shipped 2026-09-29/30 in two slices: From/To quarter selectors bound the Revenue & EPS trend chart — unknown labels fall back to full history, inverted ranges swap; narrowing the window to 2+ quarters additionally switches the tabbed Income/Cash Flow/Balance tables to a metric × quarters grid. KPI cards, press-release highlights, and downloads still follow the selected period. Full-history and one-quarter windows keep the single-period table view; yearly mode has no range selectors)*
 3. **Side-by-side compare** — view two specific periods in parallel; supports presets (YoY, QoQ, 5-year-ago) and free-form *(all three presets shipped 2026-09-29 — 5-year-ago falls back to the oldest available quarter given the 3-year history depth)*
 
 **Fiscal year handling:** Years use the company's actual fiscal year (e.g., "FY2025 (ended Sept 2025)").
