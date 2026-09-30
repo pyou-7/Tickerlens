@@ -804,14 +804,10 @@ class FinancialsService:
 
             # Chart data — chronological order across all quarters, windowed
             # by the range selectors (PRD §4.2, slice 1).
+            window_rows, chart_labels = _chart_window(all_rows, chart_from, chart_to)
             chrono_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
-            from_idx = chrono_labels.index(chart_from) if chart_from in chrono_labels else 0
-            to_idx = chrono_labels.index(chart_to) if chart_to in chrono_labels else len(chrono_labels) - 1
-            if from_idx > to_idx:
-                from_idx, to_idx = to_idx, from_idx
-            chart_labels = chrono_labels[from_idx : to_idx + 1]
-            chart_revenue = [r.revenue for r in all_rows[from_idx : to_idx + 1]]
-            chart_eps = [r.eps_diluted for r in all_rows[from_idx : to_idx + 1]]
+            chart_revenue = [r.revenue for r in window_rows]
+            chart_eps = [r.eps_diluted for r in window_rows]
 
             # Press-release highlights belong to the selected period. In yearly
             # mode the year's earnings release is the Q4 (annual) one; fall back
@@ -1096,6 +1092,90 @@ class FinancialsService:
             ),
         ]
         return zip_ticker, entries
+
+    def get_range_zip_entries(
+        self,
+        ticker: str,
+        *,
+        chart_from: str | None = None,
+        chart_to: str | None = None,
+        session: Session | None = None,
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """ZIP entries for the detail view's chart range window (PRD §4.8).
+
+        One ``{TICKER}/{TICKER}_{PERIOD}.csv`` per quarter in the resolved
+        window (reusing the per-period renderer) +
+        ``{TICKER}/{TICKER}_range_summary.csv`` (metric × quarters, raw
+        values). Mirrors the chart's ``chart_from``/``chart_to`` parameters,
+        including unknown-label fallback and inverted-range swap, so the
+        archive matches what's on screen.
+        """
+        ticker = ticker.upper()
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(
+                    f"No data for {ticker} — run fetch_and_persist first"
+                )
+            all_rows: list[QuarterlyFinancial] = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                )
+                .scalars()
+                .all()
+            )
+            if not all_rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+            latest = all_rows[-1]
+            window_rows, window_labels = _chart_window(all_rows, chart_from, chart_to)
+            entries: list[tuple[str, str]] = []
+            periods: list[PeriodData] = []
+            for label in window_labels:
+                period, _ = _build_quarterly_period(all_rows, label, latest)
+                periods.append(period)
+                arcname = f"{ticker}/{_period_csv_filename(ticker, period.label)}"
+                entries.append(
+                    (arcname, render_period_csv(company.name, company.ticker, period))
+                )
+            entries.append(
+                (
+                    f"{ticker}/{ticker}_range_summary.csv",
+                    render_range_csv(company.name, company.ticker, periods),
+                )
+            )
+            return ticker, entries
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+
+def _chart_window(
+    all_rows: list[QuarterlyFinancial],
+    chart_from: str | None,
+    chart_to: str | None,
+) -> tuple[list[QuarterlyFinancial], list[str]]:
+    """Resolve the range-mode chart window (PRD §4.2).
+
+    Returns ``(window_rows, window_labels)`` in chronological order. Unknown
+    labels fall back to the full history; an inverted range is swapped rather
+    than rejected. Shared by the detail view and the range-view ZIP download
+    so the archive always matches the chart on screen.
+    """
+    chrono_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in all_rows]
+    from_idx = chrono_labels.index(chart_from) if chart_from in chrono_labels else 0
+    to_idx = (
+        chrono_labels.index(chart_to)
+        if chart_to in chrono_labels
+        else len(chrono_labels) - 1
+    )
+    if from_idx > to_idx:
+        from_idx, to_idx = to_idx, from_idx
+    return all_rows[from_idx : to_idx + 1], chrono_labels[from_idx : to_idx + 1]
+
 
 def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
     return KPISnapshot(
@@ -1503,6 +1583,35 @@ def render_compare_csv(name: str, ticker: str | None, ctx: CompareContext) -> st
             "" if delta.absolute is None else repr(delta.absolute),
             "" if delta.pct is None else repr(round(delta.pct, 2)),
         ])
+    return buf.getvalue()
+
+
+def render_range_csv(
+    name: str, ticker: str | None, periods: list[PeriodData]
+) -> str:
+    """Render a range window's metrics as one CSV: metric × quarters.
+
+    Pure function of (company name, ticker, PeriodData list) — the summary
+    file for the range-view ZIP. Raw numbers, no formatting, one column per
+    quarter in chronological order.
+    """
+    import csv
+    import io
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["# Company", f"{name} ({ticker})" if ticker else name])
+    w.writerow(["# Periods", " → ".join(p.label for p in periods)])
+    w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
+    w.writerow(["metric", *[p.label for p in periods]])
+    for label, kpi_attr, _, bs_attr in _CSV_METRICS:
+        values = []
+        for p in periods:
+            if bs_attr:
+                values.append(getattr(p.balance_sheet, bs_attr))
+            else:
+                values.append(getattr(p.kpi, kpi_attr))
+        w.writerow([label, *["" if v is None else repr(v) for v in values]])
     return buf.getvalue()
 
 

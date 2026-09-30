@@ -139,6 +139,12 @@
           <option value="{{ opt }}" {% if opt == ctx.selected_chart_to %}selected{% endif %}>{{ opt }}</option>
         {% endfor %}
       </select>
+      <!-- Range-view ZIP (PRD §4.8, third slice). Plain link so it works
+           without JS; mirrors the chart window's current selection. -->
+      <a href="/company/{{ ctx.ticker }}/download/range.zip?chart_from={{ ctx.selected_chart_from | urlencode }}&chart_to={{ ctx.selected_chart_to | urlencode }}"
+         download
+         class="text-xs text-gray-400 hover:text-white underline underline-offset-2 whitespace-nowrap"
+      >⇓ Range (ZIP)</a>
     </div>
 
     <!-- Loading indicator -->

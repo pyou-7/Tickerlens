@@ -287,6 +287,32 @@ def download_compare_zip(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{zip_ticker}_compare.zip"'},
     )
+@router.get("/company/{ticker}/download/range.zip")
+def download_range_zip(
+    ticker: str,
+    chart_from: str | None = None,
+    chart_to: str | None = None,
+) -> StreamingResponse:
+    """Range-view ZIP: per-quarter CSVs for the chart window + summary CSV.
+
+    Mirrors the detail view's ``chart_from``/``chart_to`` range selectors
+    (PRD §4.8, third slice) so the archive matches the chart on screen.
+    """
+    ticker = ticker.upper()
+    try:
+        zip_ticker, entries = _svc.get_range_zip_entries(
+            ticker, chart_from=chart_from, chart_to=chart_to
+        )
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = build_history_zip(zip_ticker, entries)
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_ticker}_range.zip"'},
+    )
+
+
 @router.get("/api/search")
 def api_search(q: str = "") -> dict:
     """Autocomplete suggestions for the search combobox (PRD §4.10).

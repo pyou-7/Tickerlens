@@ -1300,3 +1300,85 @@ def test_get_compare_quarterly_mode_unchanged(session: Session) -> None:
     assert ctx.mode == "quarterly"
     assert ctx.period_a_label == "Q4 FY2025"
     assert ctx.period_b_label == "Q4 FY2024"
+
+
+# ── range-view ZIP (PRD §4.8, third slice) ──────────────────────────────────────
+
+def test_get_range_zip_entries_windowed_csvs_plus_summary(session: Session) -> None:
+    from tickerlens.services.financials import build_history_zip
+
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 3, 31), fiscal_year=2025,
+                     fiscal_period="Q1", revenue=100.0))
+    session.add(_row(period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=120.0))
+    session.add(_row(period_end=dt.date(2025, 9, 30), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=140.0))
+    session.commit()
+
+    ticker, entries = _svc_with_mock(session).get_range_zip_entries(
+        "AAPL", chart_from="Q2 FY2025", chart_to="Q3 FY2025"
+    )
+
+    assert ticker == "AAPL"
+    assert [arc for arc, _ in entries] == [
+        "AAPL/AAPL_Q2-FY2025.csv",
+        "AAPL/AAPL_Q3-FY2025.csv",
+        "AAPL/AAPL_range_summary.csv",
+    ]
+    assert "# Period,Q2 FY2025" in entries[0][1]
+    assert "Revenue,120.0" in entries[0][1]
+    summary = entries[2][1]
+    assert "# Periods,Q2 FY2025 → Q3 FY2025" in summary
+    assert "metric,Q2 FY2025,Q3 FY2025" in summary
+    assert "Revenue,120.0,140.0" in summary
+
+    payload = build_history_zip(ticker, entries)
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        assert sorted(zf.namelist()) == [
+            "AAPL/AAPL_Q2-FY2025.csv",
+            "AAPL/AAPL_Q3-FY2025.csv",
+            "AAPL/AAPL_range_summary.csv",
+        ]
+
+
+def test_get_range_zip_entries_unknown_labels_fall_back_to_full_history(
+    session: Session,
+) -> None:
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 3, 31), fiscal_year=2025,
+                     fiscal_period="Q1", revenue=100.0))
+    session.add(_row(period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=120.0))
+    session.commit()
+
+    _, entries = _svc_with_mock(session).get_range_zip_entries(
+        "AAPL", chart_from="bogus", chart_to="also-bogus"
+    )
+    assert [arc for arc, _ in entries] == [
+        "AAPL/AAPL_Q1-FY2025.csv",
+        "AAPL/AAPL_Q2-FY2025.csv",
+        "AAPL/AAPL_range_summary.csv",
+    ]
+
+
+def test_get_range_zip_entries_inverted_range_swaps(session: Session) -> None:
+    session.add(_company())
+    session.add(_row(period_end=dt.date(2025, 3, 31), fiscal_year=2025,
+                     fiscal_period="Q1", revenue=100.0))
+    session.add(_row(period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+                     fiscal_period="Q2", revenue=120.0))
+    session.commit()
+
+    _, entries = _svc_with_mock(session).get_range_zip_entries(
+        "AAPL", chart_from="Q2 FY2025", chart_to="Q1 FY2025"
+    )
+    assert entries[0][0] == "AAPL/AAPL_Q1-FY2025.csv"
+    assert entries[1][0] == "AAPL/AAPL_Q2-FY2025.csv"
+
+
+def test_get_range_zip_entries_unknown_ticker_raises(session: Session) -> None:
+    with pytest.raises(CompanyNotFoundError):
+        _svc_with_mock(session).get_range_zip_entries("ZZZZ")
