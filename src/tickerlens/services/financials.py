@@ -106,6 +106,42 @@ class WatchlistRow(BaseModel):
     market_cap: float | None
     signal: str | None  # current valuation signal; None when not computable
     note: str | None = None  # personal reminder; None when unset
+    tags: list[str] = []  # free-form tags; [] when untagged
+
+
+# Watchlist tags (PRD §4.6): at most this many tags per company, each this
+# long — enough to group ("dividend", "ai", "watch-earnings") without
+# turning the tag editor into a second notes field.
+_MAX_WATCHLIST_TAGS = 5
+_MAX_WATCHLIST_TAG_LEN = 20
+
+
+def _normalize_tags(raw: str | None) -> str | None:
+    """Normalize a comma-separated tag string for storage.
+
+    Splits on commas, strips whitespace, drops empties, dedupes
+    case-insensitively (first casing wins), truncates each tag to
+    ``_MAX_WATCHLIST_TAG_LEN`` chars and keeps the first
+    ``_MAX_WATCHLIST_TAGS``. Returns None when nothing remains (cleared).
+    """
+    if not raw:
+        return None
+    seen: set[str] = set()
+    tags: list[str] = []
+    for part in raw.split(","):
+        tag = part.strip()[:_MAX_WATCHLIST_TAG_LEN].strip()
+        if not tag or tag.lower() in seen:
+            continue
+        seen.add(tag.lower())
+        tags.append(tag)
+        if len(tags) >= _MAX_WATCHLIST_TAGS:
+            break
+    return ", ".join(tags) if tags else None
+
+
+def _split_tags(stored: str | None) -> list[str]:
+    """Stored comma-separated tags → list (already normalized at write)."""
+    return [t for t in (stored or "").split(", ") if t]
 
 
 class CompanyOverview(BaseModel):
@@ -738,6 +774,41 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_watchlist_tags(
+        self, ticker: str, session: Session | None = None
+    ) -> list[str]:
+        """The tags on a watched company; [] when not watching or untagged."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            entry = db.get(WatchlistEntry, cik)
+            return _split_tags(entry.tags) if entry is not None else []
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def set_watchlist_tags(
+        self, ticker: str, tags: str | None, session: Session | None = None
+    ) -> list[str]:
+        """Save (or clear, when blank) the tags on a watched company.
+
+        Raises CompanyNotFoundError when the ticker is not on the watchlist.
+        Tags are normalized (comma-separated, max 5 × 20 chars, deduped).
+        Returns the stored tag list.
+        """
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            entry = db.get(WatchlistEntry, cik)
+            if entry is None:
+                raise CompanyNotFoundError(f"{ticker} is not on the watchlist")
+            entry.tags = _normalize_tags(tags)
+            db.commit()
+            return _split_tags(entry.tags)
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def get_watchlist(self, session: Session | None = None) -> list[WatchlistRow]:
         """Pinned companies, most recently added first, with live signals."""
         db = session or self._session or get_session()
@@ -765,6 +836,7 @@ class FinancialsService:
                         market_cap=company.market_cap,
                         signal=signal,
                         note=entry.note,
+                        tags=_split_tags(entry.tags),
                     )
                 )
             return result

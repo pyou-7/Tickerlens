@@ -52,6 +52,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
             "note": _svc.get_watchlist_note(ticker),
+            "tags": _svc.get_watchlist_tags(ticker),
             "also_trades_as": _svc.get_sibling_tickers(ticker),
         },
     )
@@ -125,6 +126,32 @@ async def save_watch_note(request: Request, ticker: str):
             request=request,
             name="partials/watch_note.html",
             context={"ticker": ticker, "note": saved},
+        )
+    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
+
+
+@router.post("/company/{ticker}/watch/tags", response_class=HTMLResponse)
+async def save_watch_tags(request: Request, ticker: str):
+    """Save (or clear) the tags on a watched company (PRD §4.6).
+
+    Same contract as the note route: HTMX swaps the tags partial in place,
+    plain form POSTs redirect back to the company page, 404 when the ticker
+    is not on the watchlist. Tags arrive as one comma-separated field.
+    """
+    from urllib.parse import parse_qs
+
+    ticker = ticker.upper()
+    body = (await request.body()).decode("utf-8", "replace")
+    tags = parse_qs(body, keep_blank_values=True).get("tags", [""])[0]
+    try:
+        saved = _svc.set_watchlist_tags(ticker, tags)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/watch_tags.html",
+            context={"ticker": ticker, "tags": saved},
         )
     return RedirectResponse(url=f"/company/{ticker}", status_code=303)
 
@@ -399,6 +426,7 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
             "note": _svc.get_watchlist_note(ticker),
+            "tags": _svc.get_watchlist_tags(ticker),
             "also_trades_as": _svc.get_sibling_tickers(ticker),
         },
     )

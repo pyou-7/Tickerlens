@@ -15,3 +15,6 @@ class WatchlistEntry(Base):
     added_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     # Personal reminder of why the company is being watched (PRD §4.6).
     note: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Free-form tags, comma-separated (e.g. "dividend, ai"). Normalized at
+    # write time: max 5 tags, 20 chars each (PRD §4.6, tags slice).
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)

@@ -1,0 +1,24 @@
+{# Watchlist tags (PRD §4.6). Inline editor on the Overview page —
+   HTMX swaps this partial in place; plain POST redirects back. Tags are
+   entered comma-separated, normalized server-side (max 5 × 20 chars). #}
+<div id="watch-tags" class="mt-2 max-w-md">
+  {% if tags %}
+  <div class="flex flex-wrap gap-1.5 mb-1.5">
+    {% for tag in tags %}
+    <span class="rounded-full bg-indigo-900/60 border border-indigo-500/40 px-2.5 py-0.5 text-indigo-300 text-xs">{{ tag }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/company/{{ ticker }}/watch/tags"
+        hx-post="/company/{{ ticker }}/watch/tags" hx-target="#watch-tags" hx-swap="outerHTML"
+        class="flex gap-2">
+    <input type="text" name="tags" value="{{ tags|join(', ') }}" maxlength="120"
+           placeholder="Add tags… (comma-separated, e.g. dividend, ai)"
+           aria-label="Watchlist tags"
+           class="flex-1 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+    <button type="submit"
+            class="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
+      Save
+    </button>
+  </form>
+</div>

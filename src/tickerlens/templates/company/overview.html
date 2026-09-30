@@ -72,6 +72,7 @@
       {% include "partials/watch_button.html" %}
       {% if watching %}
         {% include "partials/watch_note.html" %}
+        {% include "partials/watch_tags.html" %}
       {% endif %}
     </div>
     <form method="post" action="/company/{{ overview.ticker }}/refresh">

@@ -113,3 +113,51 @@ def test_get_watchlist_includes_note(session: Session) -> None:
     rows = svc.get_watchlist()
     assert len(rows) == 1
     assert rows[0].note == "why: moat"
+
+
+# ── watchlist tags (PRD §4.6, tags slice) ─────────────────────────────────────
+
+def test_watchlist_tags_round_trip(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    assert svc.get_watchlist_tags("AAPL") == []
+    svc.watch_ticker("AAPL")
+    assert svc.set_watchlist_tags("AAPL", "dividend, ai") == ["dividend", "ai"]
+    assert svc.get_watchlist_tags("AAPL") == ["dividend", "ai"]
+    # Blank clears.
+    assert svc.set_watchlist_tags("AAPL", "  , ") == []
+    assert svc.get_watchlist_tags("AAPL") == []
+
+
+def test_watchlist_tags_normalized(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    svc.watch_ticker("AAPL")
+    # Deduped case-insensitively, stripped, capped at 5, each ≤20 chars.
+    saved = svc.set_watchlist_tags(
+        "AAPL", " AI, ai, Dividend ,x" * 1 + ", extra1, extra2, extra3, extra4,"
+        " averylongtagnamethatexceedstwentycharacters"
+    )
+    assert saved == ["AI", "Dividend", "x", "extra1", "extra2"]
+    assert all(len(t) <= 20 for t in saved)
+
+
+def test_watchlist_tags_require_watching(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    with pytest.raises(CompanyNotFoundError):
+        svc.set_watchlist_tags("AAPL", "ai")
+
+
+def test_get_watchlist_includes_tags(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    svc.watch_ticker("AAPL")
+    svc.set_watchlist_tags("AAPL", "dividend, ai")
+    rows = svc.get_watchlist()
+    assert len(rows) == 1
+    assert rows[0].tags == ["dividend", "ai"]

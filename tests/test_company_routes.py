@@ -565,3 +565,63 @@ def test_year_zip_route_unknown_ticker_404(client: TestClient, monkeypatch) -> N
 
     resp = client.get("/company/ZZZZ/download/year.zip")
     assert resp.status_code == 404
+
+
+# ── watchlist tags (PRD §4.6, tags slice) ─────────────────────────────────────
+
+def test_save_watch_tags_htmx_returns_partial(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.set_watchlist_tags.return_value = ["dividend", "ai"]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/tags", data={"tags": "dividend, ai"},
+                       headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert 'id="watch-tags"' in resp.text
+    assert "dividend" in resp.text and "ai" in resp.text
+    mock_svc.set_watchlist_tags.assert_called_once_with("AAPL", "dividend, ai")
+
+
+def test_save_watch_tags_plain_post_redirects(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.set_watchlist_tags.return_value = ["ai"]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/tags", data={"tags": "ai"},
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/company/AAPL"
+
+
+def test_save_watch_tags_404_when_not_watching(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyNotFoundError
+
+    mock_svc = MagicMock()
+    mock_svc.set_watchlist_tags.side_effect = CompanyNotFoundError("AAPL is not on the watchlist")
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/AAPL/watch/tags", data={"tags": "ai"},
+                       headers={"HX-Request": "true"})
+    assert resp.status_code == 404
+
+
+def test_watch_tags_partial_renders_chips() -> None:
+    """The tags partial shows existing tags as chips and prefills the input."""
+    from starlette.requests import Request
+    from tickerlens.routes.company import templates
+
+    req = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    resp = templates.TemplateResponse(
+        request=req,
+        name="partials/watch_tags.html",
+        context={"ticker": "AAPL", "tags": ["dividend", "ai"]},
+    )
+    body = resp.body.decode()
+    assert "dividend" in body and "ai" in body
+    assert 'value="dividend, ai"' in body
+    assert "/company/AAPL/watch/tags" in body

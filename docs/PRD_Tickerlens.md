@@ -146,7 +146,7 @@ Since you're the only user, AI analysis ships with v1.0 — no need to defer it 
 
 #### 4.6.1 First slice (shipped 2026-09-28)
 
-- `watchlist` table: CIK primary key + `added_at`. No notes/tags yet — keep v1 to pinning.
+- `watchlist` table: CIK primary key + `added_at`, plus nullable `note` (280-char reminder) and `tags` (comma-separated, max 5 × 20 chars, normalized at write time).
 - Toggle button on the company Overview header: "+ Watch" ↔ "✓ Watching". HTMX swap in place; plain form POST fallback when JS is off.
 - Home page: pinned companies section above the search box — each row shows ticker, name, last price, market cap, and the current valuation signal badge. Rows link to the company page.
 - Watching a company does not fetch data by itself; rows render from whatever is stored (price may be "—" until enriched).

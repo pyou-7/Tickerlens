@@ -19,6 +19,13 @@
           {% if row.note %}
           <span class="text-gray-500 text-xs italic truncate block" title="{{ row.note }}">{{ row.note }}</span>
           {% endif %}
+          {% if row.tags %}
+          <span class="flex flex-wrap gap-1 mt-1">
+            {% for tag in row.tags %}
+            <span class="rounded-full bg-indigo-900/60 border border-indigo-500/40 px-1.5 py-px text-indigo-300 text-[10px]">{{ tag }}</span>
+            {% endfor %}
+          </span>
+          {% endif %}
         </span>
       </a>
       <div class="flex items-center gap-3 shrink-0">
