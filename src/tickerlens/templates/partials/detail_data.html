@@ -34,13 +34,14 @@
 {# kpi_card shows a single change badge that follows the `changeMode` toggle
    ("yoy" | "qoq") from the enclosing x-data scope. When a period has no QoQ
    (yearly view, or a quarter with no adjacent prior), only the YoY badge is
-   rendered and the toggle is hidden by the caller. #}
-{% macro kpi_card(label, value, yoy_pct, qoq_pct=none) %}
+   rendered and the toggle is hidden by the caller. `caption` overrides the
+   "YoY" label next to the badge (range mode passes "vs prior NQ"). #}
+{% macro kpi_card(label, value, yoy_pct, qoq_pct=none, caption="YoY") %}
 <div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
   <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
   <div class="text-2xl font-bold text-white mb-1">{{ value }}</div>
   <div class="h-4">
-    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">YoY</span>{% endif %}</span>
+    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-gray-600 text-xs">{{ caption }}</span>{% endif %}</span>
     {% if qoq_pct is not none %}
     <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-gray-600 text-xs">QoQ</span></span>
     {% endif %}
@@ -79,10 +80,22 @@
 
 <!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card.
      changeMode resets to 'yoy' on each HTMX period swap (this partial is re-rendered),
-     which is the intended default when the selected period changes. -->
+     which is the intended default when the selected period changes.
+     In range mode (narrowed chart window) the cards aggregate over the window
+     and the badges compare against the preceding equal-length window, so the
+     YoY/QoQ toggle is replaced by a "vs prior" caption. -->
 <div x-data="{ changeMode: 'yoy' }">
   <!-- Period label + change-mode toggle -->
   <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
+    {% if ctx.range_kpi %}
+    <h2 class="text-xs uppercase tracking-widest text-gray-500">
+      {{ ctx.range_kpi.label }}
+      <span class="normal-case text-gray-600 ml-1">({{ ctx.range_kpi.quarters }} quarters, summed)</span>
+    </h2>
+    {% if ctx.range_kpi.prior_label %}
+    <span class="text-xs text-gray-600">vs {{ ctx.range_kpi.prior_label }}</span>
+    {% endif %}
+    {% else %}
     <h2 class="text-xs uppercase tracking-widest text-gray-500">
       {{ ctx.current.label }}
       {% if ctx.current.period_end %}
@@ -99,10 +112,19 @@
               :class="changeMode === 'qoq' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">QoQ</button>
     </div>
     {% endif %}
+    {% endif %}
   </div>
 
   <!-- Hero KPI row -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+    {% if ctx.range_kpi %}
+    {% set rk = ctx.range_kpi %}
+    {% set rcap = "vs prior " ~ rk.prior_quarters ~ "Q" %}
+    {{ kpi_card("Revenue", fmt_large(rk.kpi.revenue), rk.change.revenue, caption=rcap) }}
+    {{ kpi_card("Net Income", fmt_large(rk.kpi.net_income), rk.change.net_income, caption=rcap) }}
+    {{ kpi_card("EPS (diluted)", fmt_eps(rk.kpi.eps_diluted), rk.change.eps_diluted, caption=rcap) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(rk.kpi.free_cash_flow), rk.change.free_cash_flow, caption=rcap) }}
+    {% else %}
     {{ kpi_card(
         "Revenue",
         fmt_large(ctx.current.kpi.revenue),
@@ -127,6 +149,7 @@
         ctx.current.yoy.free_cash_flow,
         ctx.current.qoq.free_cash_flow if ctx.current.qoq else none
     ) }}
+    {% endif %}
   </div>
 </div>
 

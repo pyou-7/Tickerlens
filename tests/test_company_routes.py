@@ -386,6 +386,60 @@ def test_detail_data_passes_chart_range_params(client: TestClient, monkeypatch) 
     assert kwargs["chart_to"] == "Q3 FY2025"
 
 
+# ── range-mode hero KPIs (PRD §4.2, slice 3) ───────────────────────────────────
+
+def test_detail_data_renders_range_kpi_branch(client: TestClient, monkeypatch) -> None:
+    """When ctx.range_kpi is set, the hero cards show window aggregates with
+    a 'vs prior NQ' caption instead of the YoY/QoQ toggle."""
+    from tickerlens import routes
+    from tickerlens.services.financials import KPIChange, KPISnapshot, RangeKPIData
+
+    ctx = _detail_ctx()
+    ctx.range_kpi = RangeKPIData(
+        label="Q1 FY2025 → Q2 FY2025",
+        quarters=2,
+        kpi=KPISnapshot(revenue=181_136.0, net_income=46_228.0,
+                        eps_basic=3.08, eps_diluted=3.04,
+                        free_cash_flow=53_000.0),
+        change=KPIChange(revenue=-13.98, net_income=None, eps_basic=None,
+                         eps_diluted=None, free_cash_flow=None),
+        prior_label="Q3 FY2024 → Q4 FY2024",
+        prior_quarters=2,
+    )
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = ctx
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data?chart_from=Q1%20FY2025&chart_to=Q2%20FY2025")
+    assert resp.status_code == 200
+    assert "Q1 FY2025 → Q2 FY2025" in resp.text
+    assert "(2 quarters, summed)" in resp.text
+    assert "vs Q3 FY2024 → Q4 FY2024" in resp.text
+    assert "vs prior 2Q" in resp.text
+    # Aggregated revenue renders in the hero cards ($181136). The tabbed
+    # tables still follow ctx.range_table (None in this fixture), so the
+    # single-period $94930 legitimately appears there too.
+    assert "$181136" in resp.text
+    # No YoY/QoQ toggle in range mode.
+    assert "Change comparison mode" not in resp.text
+
+
+def test_detail_data_renders_period_kpi_branch_by_default(
+    client: TestClient, monkeypatch
+) -> None:
+    """Without range_kpi the hero cards stay on the selected period."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _detail_ctx()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data")
+    assert resp.status_code == 200
+    assert "Q3 FY2025" in resp.text
+    assert "(2 quarters, summed)" not in resp.text
+
+
 # ── unwatch from home (PRD §4.6, slice 3) ─────────────────────────────────────
 
 def test_unwatch_from_home_plain_post_redirects_home(client: TestClient, monkeypatch) -> None:

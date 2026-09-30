@@ -159,6 +159,24 @@ class RangeTableData(BaseModel):
     rows: list[RangeTableRow]
 
 
+class RangeKPIData(BaseModel):
+    """Window-aggregated hero KPIs for a narrowed chart range (PRD §4.2).
+
+    Populated only when the detail view's From/To selectors narrow the chart
+    window to 2+ quarters (same condition as ``range_table``); None keeps the
+    hero cards on the selected single period. Flow metrics are summed over
+    the window (same nullable-sum convention as TTM — summed EPS is the
+    standard approximation); ``change`` compares each sum against the
+    immediately preceding equal-length window.
+    """
+    label: str                   # "Q4 FY2024 → Q2 FY2025"
+    quarters: int                # quarters summed in the window
+    kpi: KPISnapshot
+    change: KPIChange            # vs prior window; all None when no prior quarters
+    prior_label: str | None = None   # "Q1 FY2023 → Q3 FY2024"
+    prior_quarters: int = 0
+
+
 class DetailContext(BaseModel):
     """Everything the detail page needs to render."""
     cik: str
@@ -188,6 +206,9 @@ class DetailContext(BaseModel):
     # Range tables (PRD §4.2, range-mode slice 2): metric × quarters grid for
     # a narrowed window (2+ quarters); None keeps the single-period tables.
     range_table: RangeTableData | None = None
+    # Range KPIs (PRD §4.2, range-mode slice 3): window-aggregated hero cards
+    # for a narrowed window; None keeps the cards on the selected period.
+    range_kpi: RangeKPIData | None = None
     # Narrative (company-level, from latest 10-K; None = not available)
     risk_factors: str | None = None
     risk_factors_source: str | None = None
@@ -895,6 +916,14 @@ class FinancialsService:
                 if granularity == "quarterly" and 2 <= len(window_rows) < len(all_rows)
                 else None
             )
+            # Range KPIs (PRD §4.2, slice 3): same window condition — the hero
+            # cards aggregate over the narrowed window instead of showing the
+            # selected single period.
+            range_kpi = (
+                _build_range_kpi(all_rows, window_rows)
+                if granularity == "quarterly" and 2 <= len(window_rows) < len(all_rows)
+                else None
+            )
 
             # Press-release highlights belong to the selected period. In yearly
             # mode the year's earnings release is the Q4 (annual) one; fall back
@@ -936,6 +965,7 @@ class FinancialsService:
                 selected_chart_from=chart_labels[0],
                 selected_chart_to=chart_labels[-1],
                 range_table=range_table,
+                range_kpi=range_kpi,
                 risk_factors=company.risk_factors,
                 risk_factors_source=company.risk_factors_source,
                 press_release_highlights=pr_row.press_release_highlights if pr_row else None,
@@ -1357,6 +1387,43 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
             _row("Total Equity", "balance", "money", "total_equity"),
             _row("Cash & Equivalents", "balance", "money", "cash_and_equivalents"),
         ],
+    )
+
+
+def _build_range_kpi(
+    all_rows: list[QuarterlyFinancial], window_rows: list[QuarterlyFinancial]
+) -> RangeKPIData:
+    """Aggregate hero KPIs over a narrowed range window (PRD §4.2, slice 3).
+
+    Sums follow the TTM nullable-sum convention (a metric sums whatever
+    quarters have it; None only when every quarter lacks it). The change
+    badges compare against the immediately preceding equal-length window;
+    when fewer prior quarters exist the prior window is whatever is
+    available, and with none the badges stay blank.
+    """
+    n = len(window_rows)
+    window = _compute_ttm(window_rows)
+    prior_rows = [r for r in all_rows if r.period_end < window_rows[0].period_end][
+        -n:
+    ]
+    prior = _compute_ttm(prior_rows)
+    labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in window_rows]
+    prior_labels = [f"{r.fiscal_period} FY{r.fiscal_year}" for r in prior_rows]
+    return RangeKPIData(
+        label=f"{labels[0]} → {labels[-1]}",
+        quarters=n,
+        kpi=window,
+        change=KPIChange(
+            revenue=_pct_change(window.revenue, prior.revenue),
+            net_income=_pct_change(window.net_income, prior.net_income),
+            eps_basic=_pct_change(window.eps_basic, prior.eps_basic),
+            eps_diluted=_pct_change(window.eps_diluted, prior.eps_diluted),
+            free_cash_flow=_pct_change(window.free_cash_flow, prior.free_cash_flow),
+        ),
+        prior_label=(
+            f"{prior_labels[0]} → {prior_labels[-1]}" if prior_labels else None
+        ),
+        prior_quarters=len(prior_rows),
     )
 
 

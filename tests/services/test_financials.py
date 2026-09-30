@@ -1100,6 +1100,98 @@ def test_get_detail_chart_range_unknown_label_falls_back(session: Session) -> No
     assert len(ctx.chart_labels) == 5
 
 
+# ── range-mode hero KPIs (PRD §4.2, slice 3) ──────────────────────────────────
+
+def _seed_six_quarters_full(session: Session, cik: str = "0000320193") -> None:
+    session.add(_company(cik=cik))
+    for end, fy, fp, rev, ni, epsd, fcf in [
+        (dt.date(2024, 9, 30), 2024, "Q3", 91_000, 21_000, 1.38, 20_000),
+        (dt.date(2024, 12, 31), 2024, "Q4", 119_575, 33_917, 2.18, 26_600),
+        (dt.date(2025, 3, 31), 2025, "Q1", 95_359, 24_780, 1.64, 30_300),
+        (dt.date(2025, 6, 30), 2025, "Q2", 85_777, 21_448, 1.40, 22_700),
+        (dt.date(2025, 9, 28), 2025, "Q3", 94_930, 23_630, 1.55, 26_800),
+        (dt.date(2025, 12, 31), 2025, "Q4", 120_000, 34_000, 2.20, 27_000),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, net_income=ni, eps_diluted=epsd,
+                         free_cash_flow=fcf))
+    session.commit()
+
+
+def test_get_detail_range_kpi_aggregates_window(session: Session) -> None:
+    _seed_six_quarters_full(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q1 FY2025", chart_to="Q2 FY2025"
+    )
+    rk = ctx.range_kpi
+    assert rk is not None
+    assert rk.label == "Q1 FY2025 → Q2 FY2025"
+    assert rk.quarters == 2
+    assert rk.kpi.revenue == pytest.approx(95_359 + 85_777)
+    assert rk.kpi.net_income == pytest.approx(24_780 + 21_448)
+    assert rk.kpi.eps_diluted == pytest.approx(1.64 + 1.40)
+    assert rk.kpi.free_cash_flow == pytest.approx(30_300 + 22_700)
+    # Change vs the preceding equal-length window (Q3+Q4 FY2024).
+    assert rk.prior_label == "Q3 FY2024 → Q4 FY2024"
+    assert rk.prior_quarters == 2
+    assert rk.change.revenue == pytest.approx(
+        (181_136 - 210_575) / 210_575 * 100
+    )
+    assert rk.change.free_cash_flow == pytest.approx(
+        (53_000 - 46_600) / 46_600 * 100
+    )
+
+
+def test_get_detail_range_kpi_none_for_full_history(session: Session) -> None:
+    _seed_six_quarters_full(session)
+    ctx = _svc_with_mock(session).get_detail("AAPL")
+    assert ctx.range_kpi is None
+    assert ctx.current.label == "Q4 FY2025"
+
+
+def test_get_detail_range_kpi_none_for_single_quarter_window(
+    session: Session,
+) -> None:
+    _seed_six_quarters_full(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q2 FY2025", chart_to="Q2 FY2025"
+    )
+    assert ctx.range_kpi is None
+
+
+def test_get_detail_range_kpi_no_prior_window_blanks_change(
+    session: Session,
+) -> None:
+    _seed_six_quarters_full(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q3 FY2024", chart_to="Q4 FY2024"
+    )
+    rk = ctx.range_kpi
+    assert rk is not None
+    assert rk.kpi.revenue == pytest.approx(91_000 + 119_575)
+    assert rk.prior_label is None
+    assert rk.prior_quarters == 0
+    assert rk.change.revenue is None
+    assert rk.change.free_cash_flow is None
+
+
+def test_get_detail_range_kpi_partial_prior_window(session: Session) -> None:
+    # Window of 4 quarters with only 2 prior quarters available: the prior
+    # window is whatever exists.
+    _seed_six_quarters_full(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", chart_from="Q1 FY2025", chart_to="Q4 FY2025"
+    )
+    rk = ctx.range_kpi
+    assert rk is not None
+    assert rk.quarters == 4
+    assert rk.prior_quarters == 2
+    assert rk.prior_label == "Q3 FY2024 → Q4 FY2024"
+    assert rk.change.revenue == pytest.approx(
+        (95_359 + 85_777 + 94_930 + 120_000 - 210_575) / 210_575 * 100
+    )
+
+
 # ── get_compare ───────────────────────────────────────────────────────────────
 
 def test_get_compare_defaults_to_latest_vs_yoy(session: Session) -> None:
