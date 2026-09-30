@@ -104,7 +104,14 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     Metric.EPS_BASIC: ConceptSpec(tags=("EarningsPerShareBasic",), unit="USD/shares"),
     Metric.EPS_DILUTED: ConceptSpec(tags=("EarningsPerShareDiluted",), unit="USD/shares"),
     Metric.OPERATING_CASH_FLOW: ConceptSpec(
-        tags=("NetCashProvidedByUsedInOperatingActivities",),
+        tags=(
+            "NetCashProvidedByUsedInOperatingActivities",
+            # AT&T switched its 2026 10-Qs to continuing-operations cash flow
+            # (plain tag stops at 2025-12-31) while discontinued-ops cash flow
+            # rounds to ~$0; the freshness rule picks whichever is current and
+            # the gap-fill below backfills quarters the winner lacks.
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        ),
         unit="USD",
     ),
     Metric.CAPEX: ConceptSpec(
@@ -318,10 +325,6 @@ def quarterly_income_metric(
         logger.warning(
             "finance revenue preference unavailable — falling back to generic chain"
         )
-    source_tag, facts = concept_facts(
-        companyfacts, metric, staleness_window=(70, 100)
-    )
-    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
     # Q4 EPS can't be derived by subtracting per-share values (the annual and
     # 9M figures divide by different share counts), so pass the net-income
     # facts for the share-implied derivation. Dollar metrics need nothing.
@@ -333,8 +336,48 @@ def quarterly_income_metric(
             )
         except KeyError:
             ni_facts = None
+    spec = CONCEPTS[metric]
+    candidates = _chain_candidates(
+        companyfacts,
+        spec.tags,
+        spec.unit,
+        staleness_window=(70, 100),
+        metric_name=metric.value,
+    )
+    return _merge_gap_fill(
+        [
+            _income_series_for_tag(metric, tag, facts, fiscal_year_end, ni_facts)
+            for tag, facts in candidates
+        ]
+    )
+
+
+def _income_series_for_tag(
+    metric: Metric,
+    source_tag: str,
+    facts: list[XbrlFact],
+    fiscal_year_end: str | None,
+    ni_facts: list[XbrlFact] | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly series from one tag: standalone quarters + derived Q4s."""
+    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end, ni_facts=ni_facts)
     return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
+
+
+def _merge_gap_fill(series_list: list[list[PeriodMetric]]) -> list[PeriodMetric]:
+    """Merge per-tag quarterly series, gap-filling ends earlier tags lack.
+
+    Earlier series win every end they cover; later series contribute only
+    ends absent from all earlier ones. This backfills quarters a filer's
+    mid-history tag switch left blank (AT&T OpCF, Intel cash) without
+    changing any value the winning tag already supplied.
+    """
+    by_end: dict[dt.date, PeriodMetric] = {}
+    for series in series_list:
+        for item in series:
+            by_end.setdefault(item.end, item)
+    return sorted(by_end.values(), key=lambda item: item.end)
 
 
 def _merge_standalone_with_q4(
@@ -372,7 +415,25 @@ def quarterly_cash_flow_metric(
     metric: Metric,
     fiscal_year_end: str | None = None,
 ) -> list[PeriodMetric]:
-    source_tag, facts = concept_facts(companyfacts, metric)
+    spec = CONCEPTS[metric]
+    candidates = _chain_candidates(
+        companyfacts, spec.tags, spec.unit, metric_name=metric.value
+    )
+    return _merge_gap_fill(
+        [
+            _cash_flow_series_for_tag(metric, tag, facts, fiscal_year_end)
+            for tag, facts in candidates
+        ]
+    )
+
+
+def _cash_flow_series_for_tag(
+    metric: Metric,
+    source_tag: str,
+    facts: list[XbrlFact],
+    fiscal_year_end: str | None,
+) -> list[PeriodMetric]:
+    """Uncumulative quarterly cash-flow series from one tag's YTD facts."""
     q1s = _dedup_by_end(facts, 75, 105, fiscal_year_end)
     h1s = _dedup_by_end(facts, 165, 200, fiscal_year_end)
     # 52/53-week filers (e.g. Costco's 36-week 9M = 251 days) run shorter than
@@ -472,6 +533,54 @@ def _select_tag_facts(
     instead of a :class:`Metric` — used for the bank revenue composite, whose
     components (e.g. ``NoninterestIncome``) are not full ``Metric`` entries.
     """
+    return _chain_candidates(
+        companyfacts,
+        tags,
+        unit,
+        instant=instant,
+        staleness_window=staleness_window,
+        metric_name=metric_name,
+    )[0]
+
+
+# A gap-fill tag whose newest fact is more than this far behind the freshest
+# tag in the chain is too abandoned to backfill from — its old facts would
+# pollute the recent window rather than repair a recent tag switch. Four
+# quarters is the bar: a tag that filed within the last year is plausibly
+# part of current history (AT&T's plain OpCF tag, 181 days behind the
+# continuing-operations tag, still backfills 2024-2025 quarters), while a tag
+# dead for over a year (an insurer's absolutely-stale ``Revenues``, 640 days
+# behind) stays out. Gap-fill never overrides the winner, so this is
+# deliberately laxer than the 180-day winner-take-all abandonment rule.
+_GAP_FILL_MAX_STALENESS_DAYS = 365
+
+
+def _chain_candidates(
+    companyfacts: dict[str, Any],
+    tags: tuple[str, ...],
+    unit: str,
+    *,
+    instant: bool = False,
+    staleness_window: tuple[int, int] | None = None,
+    metric_name: str = "",
+) -> list[tuple[str, list[XbrlFact]]]:
+    """All non-empty ``(tag, facts)`` pairs for a chain, winner first.
+
+    The first pair is exactly what :func:`_select_tag_facts` returns (chain
+    order + freshness rule); the rest follow in chain order. Callers use the
+    tail to gap-fill quarter-ends the winner lacks — a filer can switch tags
+    mid-history (AT&T's 2026 10-Qs file continuing-operations OpCF while the
+    plain tag stops at 2025-12-31; Intel's plain cash tag skips isolated
+    quarters the composite cash tag has), and the winner-take-all selection
+    would otherwise blank those quarters. Gap-fill only *adds* ends the
+    winner lacks; it never changes a value the winner supplied.
+
+    The tail excludes abandoned tags (newest fact more than
+    ``_GAP_FILL_MAX_STALENESS_DAYS`` behind the overall newest), so ancient
+    facts can't pollute the recent window — e.g. an insurer's absolutely
+    stale ``Revenues`` (640 days behind) stays out while AT&T's recently
+    superseded plain OpCF tag (181 days behind) still backfills.
+    """
     us_gaap = companyfacts["facts"]["us-gaap"]
     candidates: list[tuple[str, list[XbrlFact], dt.date | None]] = []
     for tag in tags:
@@ -490,12 +599,26 @@ def _select_tag_facts(
     if not candidates:
         raise KeyError(f"No XBRL facts found for metric {metric_name or 'composite'}")
     dated = [(t, f, n) for t, f, n in candidates if n is not None]
+    winner: tuple[str, list[XbrlFact]] | None = None
+    tail: list[tuple[str, list[XbrlFact]]]
     if dated:
         newest_overall = max(n for _, _, n in dated)
         for tag, facts, newest in dated:
             if (newest_overall - newest).days <= _MAX_TAG_STALENESS_DAYS:
-                return tag, facts
-    return candidates[0][0], candidates[0][1]
+                winner = (tag, facts)
+                break
+        assert winner is not None  # the overall-newest tag is 0 days behind
+        tail = [
+            (t, f)
+            for t, f, n in candidates
+            if t != winner[0]
+            and n is not None
+            and (newest_overall - n).days <= _GAP_FILL_MAX_STALENESS_DAYS
+        ]
+    else:
+        winner = (candidates[0][0], candidates[0][1])
+        tail = [(t, f) for t, f, _ in candidates if t != winner[0]]
+    return [winner] + tail
 
 
 # Banks and broker-dealers (SIC Division H, 6000-6299) report revenue as two
@@ -659,16 +782,26 @@ def balance_sheet_metric(
     Balance-sheet facts are point-in-time, so they join to a quarter by ``end``
     alone. The same ``end`` can appear across filings (a 10-Q value later restated
     in a 10-K); keep the latest-filed one, preferring the fact whose fiscal-year
-    label matches the fiscal year inferred for that end date.
+    label matches the fiscal year inferred for that end date. Quarter-ends the
+    winning tag lacks are gap-filled from later chain tags (Intel's plain cash
+    tag skips quarters the composite cash tag has) without changing any value
+    the winner supplied.
     """
-    source_tag, facts = concept_facts(companyfacts, metric, instant=True)
-    grouped: dict[dt.date, list[XbrlFact]] = {}
-    for fact in facts:
-        grouped.setdefault(fact.end, []).append(fact)
-    return {
-        end: _choose_fact_for_end(end, candidates, fiscal_year_end).val
-        for end, candidates in grouped.items()
-    }
+    spec = CONCEPTS[metric]
+    candidates = _chain_candidates(
+        companyfacts, spec.tags, spec.unit, instant=True, metric_name=metric.value
+    )
+    merged: dict[dt.date, float] = {}
+    for tag, facts in candidates:
+        grouped: dict[dt.date, list[XbrlFact]] = {}
+        for fact in facts:
+            grouped.setdefault(fact.end, []).append(fact)
+        for end, end_candidates in grouped.items():
+            if end not in merged:
+                merged[end] = _choose_fact_for_end(
+                    end, end_candidates, fiscal_year_end
+                ).val
+    return merged
 
 
 def _derive_missing_balance_sheet(

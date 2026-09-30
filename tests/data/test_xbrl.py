@@ -1228,3 +1228,152 @@ def test_mislabeled_q4_stub_fixed_on_finance_revenue_path() -> None:
     assert q4.value == 2_740_000_000  # filer's stub, not FY−9M = 2_740_000_000
     assert all(m.fp != "FY" for m in metrics.values())
     assert len(metrics) == 4
+
+
+def _opcf_tag_switch_facts() -> dict:
+    """Mirror the AT&T case: the plain OpCF tag stops at FY2025 while the
+    continuing-operations tag carries 2026. The winner (continuing-ops) lacks
+    the 2025 quarters; the plain tag must backfill them."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "NetCashProvidedByUsedInOperatingActivities": {
+                    "units": {
+                        "USD": [
+                            fact("2025-01-01", "2025-03-31", 100.0, 2025, "Q1"),
+                            fact("2025-01-01", "2025-06-30", 250.0, 2025, "Q2"),
+                            fact("2025-01-01", "2025-09-30", 450.0, 2025, "Q3"),
+                            fact("2025-01-01", "2025-12-31", 700.0, 2025, "FY"),
+                        ]
+                    }
+                },
+                "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 110.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 260.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_opcf_gap_fill_backfills_tag_switch_quarters() -> None:
+    """AT&T case: mid-history tag switch must not blank the older quarters —
+    the continuing-ops winner supplies 2026, the plain tag backfills 2025."""
+    rows = quarterly_cash_flow_metric(
+        _opcf_tag_switch_facts(), Metric.OPERATING_CASH_FLOW, fiscal_year_end="1231"
+    )
+
+    assert [(r.period, r.value, r.source_tag) for r in rows] == [
+        ("FY2025 Q1", 100.0, "NetCashProvidedByUsedInOperatingActivities"),
+        ("FY2025 Q2", 150.0, "NetCashProvidedByUsedInOperatingActivities"),
+        ("FY2025 Q3", 200.0, "NetCashProvidedByUsedInOperatingActivities"),
+        ("FY2025 Q4", 250.0, "NetCashProvidedByUsedInOperatingActivities"),
+        (
+            "FY2026 Q1",
+            110.0,
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        ),
+        (
+            "FY2026 Q2",
+            150.0,
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        ),
+    ]
+
+
+def test_opcf_gap_fill_never_overrides_winner() -> None:
+    """Where both tags file the same quarter-end, the winning (freshest)
+    tag's value stands — gap-fill only adds ends the winner lacks."""
+    facts = _opcf_tag_switch_facts()
+    # Continuing-ops (the winner) also files a 2025-Q1 fact overlapping the
+    # plain tag's — its value must stand for that end.
+    facts["facts"]["us-gaap"][
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"
+    ]["units"]["USD"].append(fact("2025-01-01", "2025-03-31", 105.0, 2025, "Q1"))
+
+    rows = quarterly_cash_flow_metric(
+        facts, Metric.OPERATING_CASH_FLOW, fiscal_year_end="1231"
+    )
+    q1_2025 = next(r for r in rows if r.end == dt.date(2025, 3, 31))
+
+    assert q1_2025.value == 105.0  # continuing-ops (winner), not the plain tag's 100
+    assert (
+        q1_2025.source_tag
+        == "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"
+    )
+    # Non-overlapping ends still backfilled from the plain tag.
+    assert {r.end for r in rows} == {
+        dt.date(2025, 3, 31),
+        dt.date(2025, 6, 30),
+        dt.date(2025, 9, 30),
+        dt.date(2025, 12, 31),
+        dt.date(2026, 3, 31),
+        dt.date(2026, 6, 30),
+    }
+
+
+def test_cash_gap_fill_fills_quarters_winner_skips() -> None:
+    """Intel case: the plain cash tag skips isolated quarters that the
+    composite cash tag has — those ends must come from the composite."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "CashAndCashEquivalentsAtCarryingValue": {
+                    "units": {
+                        "USD": [
+                            instant_fact("2025-12-31", 14_270_000_000.0, 2025, "FY"),
+                            instant_fact("2026-03-31", 17_250_000_000.0, 2026, "Q1"),
+                        ]
+                    }
+                },
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents": {
+                    "units": {
+                        "USD": [
+                            instant_fact("2025-09-30", 8_790_000_000.0, 2025, "Q3"),
+                            instant_fact("2025-12-31", 14_710_000_000.0, 2025, "FY"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+    values = balance_sheet_metric(
+        companyfacts, Metric.CASH_AND_EQUIVALENTS, fiscal_year_end="1231"
+    )
+
+    assert values == {
+        dt.date(2025, 9, 30): 8_790_000_000.0,  # composite backfill
+        dt.date(2025, 12, 31): 14_270_000_000.0,  # winner (plain tag) stands
+        dt.date(2026, 3, 31): 17_250_000_000.0,
+    }
+
+
+def test_gap_fill_excludes_long_abandoned_tag() -> None:
+    """A tag dead for over a year is too abandoned to backfill from — its
+    ancient facts must not pollute the recent window (insurer's stale
+    ``Revenues`` case)."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_recent_fact(149, 60, 724_000_000.0)]}
+                },
+                "Revenues": {
+                    "units": {"USD": [_recent_fact(789, 700, 15_000_000_000.0)]}
+                },
+            }
+        }
+    }
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231"
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 724_000_000.0
+    assert metrics[0].source_tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
