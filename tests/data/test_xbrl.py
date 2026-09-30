@@ -809,3 +809,66 @@ def test_is_finance_sic_boundaries() -> None:
     assert not _is_finance_sic(7000)
     assert not _is_finance_sic(None)
     assert not _is_finance_sic("n/a")
+
+
+def test_balance_sheet_tag_abandonment_picks_fresh_tag() -> None:
+    # Regression: UNH abandoned StockholdersEquity in 2015 (fresh tag:
+    # StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest);
+    # PG abandoned CashAndCashEquivalentsAtCarryingValue in 2019 (fresh tag:
+    # CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents). Instant
+    # (point-in-time) facts carry no ``start``, which made _newest_in_window
+    # return None for every tag — so the staleness check never engaged and the
+    # first (abandoned) tag always won, blanking the metric for all quarters.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "StockholdersEquity": instant_units([("2015-06-30", 40_000, 2015, "Q2")]),
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": instant_units(
+                    [("2026-06-30", 105_000, 2026, "Q2")]
+                ),
+            }
+        }
+    }
+    source_tag, _ = concept_facts(companyfacts, Metric.TOTAL_EQUITY, instant=True)
+    assert source_tag == (
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+    )
+
+
+def test_balance_sheet_prefers_first_tag_when_both_fresh() -> None:
+    # Regression guard: chain order still expresses semantic preference when
+    # both tags are current.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "StockholdersEquity": instant_units([("2026-06-30", 40_000, 2026, "Q2")]),
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": instant_units(
+                    [("2026-06-30", 105_000, 2026, "Q2")]
+                ),
+            }
+        }
+    }
+    source_tag, _ = concept_facts(companyfacts, Metric.TOTAL_EQUITY, instant=True)
+    assert source_tag == "StockholdersEquity"
+
+
+def test_balance_sheet_metric_uses_fresh_tag_values() -> None:
+    # End to end: the fresh tag's values, not the abandoned tag's (which has
+    # no overlap with recent quarters), must land on the recent period ends.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "StockholdersEquity": instant_units([("2015-06-30", 40_000, 2015, "Q2")]),
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": instant_units(
+                    [
+                        ("2026-03-31", 100_000, 2026, "Q1"),
+                        ("2026-06-30", 105_000, 2026, "Q2"),
+                    ]
+                ),
+            }
+        }
+    }
+    values = balance_sheet_metric(companyfacts, Metric.TOTAL_EQUITY)
+    assert values[dt.date(2026, 6, 30)] == 105_000
+    assert values[dt.date(2026, 3, 31)] == 100_000
+

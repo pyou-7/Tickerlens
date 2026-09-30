@@ -542,15 +542,26 @@ def _newest_in_window(
 ) -> dt.date | None:
     """Newest end date among facts whose duration falls in ``window``.
 
-    ``None`` window means all duration facts (instant facts have no start and
-    are skipped by callers that pass a window).
+    A ``None`` window means facts of any duration — including instant
+    (point-in-time) facts, which carry no ``start``. Balance-sheet tag
+    selection passes ``None``, so instant facts must still count: without
+    them the staleness check never engages for balance-sheet metrics and the
+    first tag always wins even when abandoned (UNH's ``StockholdersEquity``
+    ended in 2015 while ``StockholdersEquityIncludingPortionAttributableTo-
+    NoncontrollingInterest`` is current; PG's
+    ``CashAndCashEquivalentsAtCarryingValue`` ended in 2019 while
+    ``CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents`` is
+    current — both metrics rendered "—" for every quarter).
     """
-    ends = [
-        f.end
-        for f in facts
-        if f.start is not None
-        and (window is None or window[0] <= (f.end - f.start).days <= window[1])
-    ]
+    if window is None:
+        ends = [f.end for f in facts]
+    else:
+        ends = [
+            f.end
+            for f in facts
+            if f.start is not None
+            and window[0] <= (f.end - f.start).days <= window[1]
+        ]
     return max(ends) if ends else None
 
 
