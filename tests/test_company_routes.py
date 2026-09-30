@@ -56,6 +56,40 @@ def test_unknown_ticker_detail_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_unknown_ticker_404_suggests_close_matches(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tickerlens import main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "get_search_entries",
+        lambda edgar_client: [
+            {"ticker": "AAPL", "name": "Apple Inc.", "cik": "0000320193"},
+            {"ticker": "APLE", "name": "Apple Hospitality REIT", "cik": "0001418126"},
+        ],
+    )
+    resp = client.get("/company/APPL")
+    assert resp.status_code == 404
+    assert "Did you mean" in resp.text
+    assert "/company/AAPL" in resp.text
+
+
+def test_unknown_ticker_404_without_suggestions_when_lookup_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tickerlens import main as main_module
+
+    def _boom(edgar_client):  # noqa: ANN001, ANN202
+        raise RuntimeError("entries unavailable")
+
+    monkeypatch.setattr(main_module, "get_search_entries", _boom)
+    resp = client.get("/company/ZZZZ")
+    assert resp.status_code == 404
+    assert "Did you mean" not in resp.text
+    assert "Couldn't find that company" in resp.text
+
+
 # ── per-period CSV download (PRD §4.3 #7) ─────────────────────────────────────
 
 def _detail_ctx():
