@@ -82,8 +82,9 @@ When you open a company page, you land on the Overview by default. Contents:
 
 **Three modes:**
 1. **Single period** — view one quarter OR one year
-2. **Range** — view multiple consecutive periods (e.g., Q1 FY2023 → Q4 FY2025) *(shipped 2026-09-29/30 in two slices: From/To quarter selectors bound the Revenue & EPS trend chart — unknown labels fall back to full history, inverted ranges swap; narrowing the window to 2+ quarters additionally switches the tabbed Income/Cash Flow/Balance tables to a metric × quarters grid. KPI cards, press-release highlights, and downloads still follow the selected period. Full-history and one-quarter windows keep the single-period table view; yearly mode has no range selectors)*
+2. **Range** — view multiple consecutive periods (e.g., Q1 FY2023 → Q4 FY2025) *(shipped 2026-09-29/30 in three slices: From/To quarter selectors bound the Revenue & EPS trend chart — unknown labels fall back to full history, inverted ranges swap; narrowing the window to 2+ quarters switches the tabbed Income/Cash Flow/Balance tables to a metric × quarters grid, and the hero KPI cards aggregate over the window with "vs prior NQ" badges against the preceding equal-length window. Full-history and one-quarter windows keep the single-period view; yearly mode has no range selectors)*
 3. **Side-by-side compare** — view two specific periods in parallel; supports presets (YoY, QoQ, 5-year-ago) and free-form *(all three presets shipped 2026-09-29 — 5-year-ago falls back to the oldest available quarter given the 3-year history depth)*
+4. **Cross-company compare (added 2026-09-30)** — `GET /company/{ticker}/vs/{other}`: latest reported quarter side by side (revenue, net income, EPS diluted, FCF, each with YoY badge; share price, market cap, valuation signal, implied upside). Entries: "⇄ Compare" peer-ticker form on the Overview page and a swap form on the vs page. Either side is fetched on first visit when not stored; 404 when unloadable; a note shows when the two latest quarters don't align (different fiscal calendars).
 
 **Fiscal year handling:** Years use the company's actual fiscal year (e.g., "FY2025 (ended Sept 2025)").
 
@@ -157,6 +158,13 @@ Since you're the only user, AI analysis ships with v1.0 — no need to defer it 
 - `POST /company/{ticker}/watch/note` saves/clears the note; HTMX swaps the `partials/watch_note.html` partial in place, plain-POST redirects back; 404 when not watching.
 - Note form lives on the Overview page (visible only while watching); home-page pins show the note truncated under the company name.
 - Form body parsed directly (no `python-multipart` dependency).
+
+#### 4.6.3 Tags (shipped 2026-09-30)
+
+- `watchlist.tags`: nullable text, comma-separated, normalized at write time (max 5 tags × 20 chars, stripped, deduped case-insensitively; blank clears).
+- `POST /company/{ticker}/watch/tags` saves/clears the tags; HTMX swaps the `partials/watch_tags.html` partial in place, plain-POST redirects back; 404 when not watching.
+- Tag chips + inline editor on the Overview page (visible only while watching); tag chips under home-page pin names.
+- Completes the §4.6 "No notes/tags yet" deferral — §4.6 is fully built.
 
 ### 4.7 Daily News Feed (Watchlist-Scoped)
 

@@ -625,3 +625,59 @@ def test_watch_tags_partial_renders_chips() -> None:
     assert "dividend" in body and "ai" in body
     assert 'value="dividend, ai"' in body
     assert "/company/AAPL/watch/tags" in body
+
+
+# ── cross-company compare (PRD §4.2, compare slice) ────────────────────────────
+
+def _vs_ctx():
+    from tickerlens.services.financials import (
+        CompanyVs, KPIChange, KPISnapshot, VsCompany,
+    )
+
+    def side(ticker, name, rev, rev_yoy, eps, signal):
+        return VsCompany(
+            ticker=ticker, name=name, sector="Technology",
+            period_label="Q2 FY2025",
+            kpi=KPISnapshot(revenue=rev, net_income=rev * 0.25,
+                            eps_basic=eps, eps_diluted=eps,
+                            free_cash_flow=rev * 0.3),
+            yoy=KPIChange(revenue=rev_yoy, net_income=None, eps_basic=None,
+                          eps_diluted=None, free_cash_flow=None),
+            last_price=100.0, market_cap=1e12,
+            signal=signal, upside_pct=12.5,
+        )
+
+    return CompanyVs(
+        a=side("AAPL", "Apple Inc.", 85_777.0, 7.2, 1.40, "Buy"),
+        b=side("MSFT", "Microsoft Corp.", 64_000.0, 6.7, 3.60, "Hold"),
+    )
+
+
+def test_company_vs_renders_both_sides(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = _vs_ctx()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    assert "AAPL" in resp.text and "MSFT" in resp.text
+    assert "Apple Inc." in resp.text and "Microsoft Corp." in resp.text
+    assert "$85777" in resp.text  # AAPL revenue via fmt_large
+    assert "$64000" in resp.text  # MSFT revenue via fmt_large
+    assert "Buy" in resp.text and "Hold" in resp.text
+    mock_svc.get_company_vs.assert_called_once_with("AAPL", "MSFT")
+
+
+def test_company_vs_404_when_peer_unloadable(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyNotFoundError
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.side_effect = CompanyNotFoundError("No data for ZZZZ")
+    mock_svc.fetch_and_persist.side_effect = Exception("EDGAR unreachable")
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/ZZZZ")
+    assert resp.status_code == 404

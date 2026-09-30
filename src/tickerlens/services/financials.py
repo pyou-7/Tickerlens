@@ -144,6 +144,28 @@ def _split_tags(stored: str | None) -> list[str]:
     return [t for t in (stored or "").split(", ") if t]
 
 
+class VsCompany(BaseModel):
+    """One side of a cross-company comparison (PRD §4.2, compare slice)."""
+
+    ticker: str
+    name: str
+    sector: str | None
+    period_label: str  # latest quarter, e.g. "Q3 FY2025"
+    kpi: KPISnapshot  # latest-quarter KPIs
+    yoy: KPIChange  # YoY change on the latest quarter
+    last_price: float | None
+    market_cap: float | None
+    signal: str  # valuation signal: Strong Buy … Strong Sell | Watch
+    upside_pct: float | None  # implied upside to target, in percent
+
+
+class CompanyVs(BaseModel):
+    """Side-by-side comparison of two companies' latest quarters."""
+
+    a: VsCompany
+    b: VsCompany
+
+
 class CompanyOverview(BaseModel):
     cik: str
     name: str
@@ -840,6 +862,41 @@ class FinancialsService:
                     )
                 )
             return result
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def _vs_company(self, ticker: str, db: Session) -> VsCompany:
+        """Build one side of a cross-company comparison from stored data."""
+        detail = self.get_detail(ticker, session=db)
+        val = self.get_valuation(ticker, session=db)
+        return VsCompany(
+            ticker=detail.ticker or ticker.upper(),
+            name=detail.name,
+            sector=detail.sector,
+            period_label=detail.current.label,
+            kpi=detail.current.kpi,
+            yoy=detail.current.yoy,
+            last_price=detail.last_price,
+            market_cap=detail.market_cap,
+            signal=val.signal,
+            upside_pct=val.upside_pct,
+        )
+
+    def get_company_vs(
+        self, ticker_a: str, ticker_b: str, session: Session | None = None
+    ) -> CompanyVs:
+        """Side-by-side latest-quarter comparison of two companies.
+
+        Raises CompanyNotFoundError when either ticker has no stored data.
+        Comparing a company with itself returns two identical sides.
+        """
+        db = session or self._session or get_session()
+        try:
+            return CompanyVs(
+                a=self._vs_company(ticker_a, db),
+                b=self._vs_company(ticker_b, db),
+            )
         finally:
             if session is None and self._session is None:
                 db.close()

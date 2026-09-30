@@ -1574,3 +1574,78 @@ def test_get_detail_no_range_table_in_yearly_mode(session: Session) -> None:
     _seed_five_quarters(session)
     ctx = _svc_with_mock(session).get_detail("AAPL", granularity="yearly")
     assert ctx.range_table is None
+
+
+# ── cross-company compare (PRD §4.2, compare slice) ────────────────────────────
+
+def _svc_two_tickers(session: Session) -> "FinancialsService":
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.side_effect = lambda t: {
+        "AAPL": "0000320193", "MSFT": "0000789019",
+    }[t.upper()]
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def _seed_vs_pair(session: Session) -> None:
+    def rows(cik, revs, nis, epss, fcfs):
+        ends = [dt.date(2024, 6, 30), dt.date(2024, 9, 30), dt.date(2024, 12, 31),
+                dt.date(2025, 3, 31), dt.date(2025, 6, 30)]
+        fps = ["Q2", "Q3", "Q4", "Q1", "Q2"]
+        fys = [2024, 2024, 2024, 2025, 2025]
+        for end, fy, fp, rev, ni, eps, fcf in zip(ends, fys, fps, revs, nis, epss, fcfs):
+            session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                             revenue=rev, net_income=ni, eps_diluted=eps,
+                             free_cash_flow=fcf))
+
+    aapl = _company(cik="0000320193", name="Apple Inc.", ticker="AAPL")
+    aapl.last_price = 200.0
+    aapl.market_cap = 3e12
+    msft = _company(cik="0000789019", name="Microsoft Corp.", ticker="MSFT")
+    msft.last_price = 500.0
+    msft.market_cap = 3.7e12
+    session.add(aapl)
+    session.add(msft)
+    rows("0000320193",
+         [80_000, 91_000, 119_575, 95_359, 85_777],
+         [20_000, 21_000, 33_917, 24_780, 21_448],
+         [1.30, 1.38, 2.18, 1.64, 1.40],
+         [20_000, 20_000, 26_600, 30_300, 22_700])
+    rows("0000789019",
+         [60_000, 65_585, 69_632, 61_858, 64_000],
+         [21_000, 24_667, 24_108, 25_824, 27_000],
+         [2.80, 3.30, 3.23, 3.46, 3.60],
+         [23_000, 24_000, 22_000, 25_000, 26_000])
+    session.commit()
+
+
+def test_get_company_vs_returns_both_sides(session: Session) -> None:
+    _seed_vs_pair(session)
+    vs = _svc_two_tickers(session).get_company_vs("AAPL", "MSFT")
+    assert vs.a.ticker == "AAPL"
+    assert vs.b.ticker == "MSFT"
+    assert vs.a.name == "Apple Inc."
+    assert vs.b.name == "Microsoft Corp."
+    assert vs.a.period_label == "Q2 FY2025"
+    assert vs.b.period_label == "Q2 FY2025"
+    assert vs.a.kpi.revenue == pytest.approx(85_777)
+    assert vs.b.kpi.eps_diluted == pytest.approx(3.60)
+    # YoY badges come from each company's own latest quarter.
+    assert vs.a.yoy.revenue == pytest.approx((85_777 - 80_000) / 80_000 * 100)
+    assert vs.b.yoy.revenue == pytest.approx((64_000 - 60_000) / 60_000 * 100)
+    assert vs.a.last_price == pytest.approx(200.0)
+    assert vs.b.market_cap == pytest.approx(3.7e12)
+    assert isinstance(vs.a.signal, str) and vs.a.signal
+    assert isinstance(vs.b.signal, str) and vs.b.signal
+
+
+def test_get_company_vs_missing_ticker_raises(session: Session) -> None:
+    _seed_vs_pair(session)
+    with pytest.raises(CompanyNotFoundError):
+        _svc_two_tickers(session).get_company_vs("AAPL", "ZZZZ")
+
+
+def test_get_company_vs_same_ticker_twice(session: Session) -> None:
+    _seed_vs_pair(session)
+    vs = _svc_two_tickers(session).get_company_vs("AAPL", "AAPL")
+    assert vs.a.ticker == vs.b.ticker == "AAPL"
+    assert vs.a.kpi.revenue == vs.b.kpi.revenue

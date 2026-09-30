@@ -240,6 +240,36 @@ def company_compare(
     )
 
 
+@router.get("/company/{ticker}/vs/{other}", response_class=HTMLResponse)
+def company_vs(request: Request, ticker: str, other: str) -> HTMLResponse:
+    """Side-by-side latest-quarter comparison of two companies (PRD §4.2).
+
+    Either side is fetched on first visit when not stored yet; 404 when a
+    ticker cannot be loaded at all.
+    """
+    ticker, other = ticker.upper(), other.upper()
+    for t in (ticker, other):
+        try:
+            _svc.get_detail(t)
+        except CompanyNotFoundError:
+            try:
+                _svc.fetch_and_persist(t, periods=8)
+                _svc.enrich_company(t)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=404, detail=f"Could not fetch data for {t}: {exc}"
+                ) from exc
+    try:
+        vs = _svc.get_company_vs(ticker, other)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return templates.TemplateResponse(
+        request=request,
+        name="company/vs.html",
+        context={"vs": vs},
+    )
+
+
 @router.get("/company/{ticker}/detail/data", response_class=HTMLResponse)
 def company_detail_data(
     request: Request,
