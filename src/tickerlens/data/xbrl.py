@@ -209,10 +209,19 @@ def extract_recent_quarterly_financials(
     for item in canonical:
         operating_cash_flow = by_end[Metric.OPERATING_CASH_FLOW].get(item.end)
         capital_expenditure = by_end[Metric.CAPEX].get(item.end)
+        # FCF is not a meaningful metric for finance filers (SIC 6000-6999):
+        # operating cash flow is dominated by balance-sheet flows (loan
+        # originations, deposits), so OpCF − CapEx misleads more than it
+        # informs. Banks/insurers/REITs already render "—" because they file
+        # no CapEx tag; SoFi files one, so suppress explicitly for consistency.
         free_cash_flow = (
-            operating_cash_flow.value - capital_expenditure.value
-            if operating_cash_flow and capital_expenditure
-            else None
+            None
+            if _is_finance_sic(sic)
+            else (
+                operating_cash_flow.value - capital_expenditure.value
+                if operating_cash_flow and capital_expenditure
+                else None
+            )
         )
         rows.append(
             QuarterlyFinancials(
@@ -308,7 +317,18 @@ def quarterly_income_metric(
         companyfacts, metric, staleness_window=(70, 100)
     )
     standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
-    q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end)
+    # Q4 EPS can't be derived by subtracting per-share values (the annual and
+    # 9M figures divide by different share counts), so pass the net-income
+    # facts for the share-implied derivation. Dollar metrics need nothing.
+    ni_facts: list[XbrlFact] | None = None
+    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+        try:
+            _, ni_facts = concept_facts(
+                companyfacts, Metric.NET_INCOME, staleness_window=(70, 100)
+            )
+        except KeyError:
+            ni_facts = None
+    q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end, ni_facts=ni_facts)
     return sorted(
         [_period_metric(metric, source_tag, fact) for fact in standalone] + q4,
         key=lambda item: item.end,
@@ -680,6 +700,7 @@ def _derive_q4_income(
     source_tag: str,
     metric: Metric,
     fiscal_year_end: str | None,
+    ni_facts: list[XbrlFact] | None = None,
 ) -> list[PeriodMetric]:
     annual = _dedup_by_end(facts, 340, 380, fiscal_year_end)
     # Same 240-day floor as quarterly_cash_flow_metric's m9 window (52/53-week
@@ -687,6 +708,15 @@ def _derive_q4_income(
     ytd_9m = _dedup_by_end(facts, 240, 290, fiscal_year_end)
     annual_by_start = _by_start(annual)
     ytd_by_start = _by_start(ytd_9m)
+    ni_lookup: dict[dt.date, tuple[XbrlFact, XbrlFact]] = {}
+    if ni_facts:
+        ni_annual = _by_start(_dedup_by_end(ni_facts, 340, 380, fiscal_year_end))
+        ni_ytd = _by_start(_dedup_by_end(ni_facts, 240, 290, fiscal_year_end))
+        ni_lookup = {
+            start: (fact, ni_ytd[start])
+            for start, fact in ni_annual.items()
+            if start in ni_ytd
+        }
 
     results: list[PeriodMetric] = []
     for start, annual_fact in annual_by_start.items():
@@ -694,6 +724,18 @@ def _derive_q4_income(
             continue
         ytd = ytd_by_start[start]
         fy = _fact_fy(annual_fact)
+        value = annual_fact.val - ytd.val
+        if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+            # Per-share values must not be un-cumulated by subtraction: the
+            # annual and 9M figures divide by different share counts, so
+            # FY_EPS − 9M_EPS misstates Q4 — and can even invert the
+            # basic/diluted ranking, as it did for DUOL's FY2025 Q4
+            # ($0.94 diluted vs $0.88 basic, arithmetically impossible).
+            # Derive Q4 from net income and implied share counts instead.
+            implied = _implied_q4_eps(annual_fact, ytd, ni_lookup.get(start))
+            value = implied if implied is not None else _round_like_inputs(
+                annual_fact.val, ytd.val, value
+            )
         results.append(
             _metric_value(
                 metric,
@@ -701,10 +743,56 @@ def _derive_q4_income(
                 fy,
                 "Q4",
                 annual_fact.end,
-                annual_fact.val - ytd.val,
+                value,
             )
         )
     return results
+
+
+def _implied_q4_eps(
+    annual_eps: XbrlFact,
+    ytd_eps: XbrlFact,
+    ni_pair: tuple[XbrlFact, XbrlFact] | None,
+) -> float | None:
+    """Derive Q4 EPS as Q4 net income over the implied Q4 share count.
+
+    EPS = NI / weighted-average shares, so the share counts are implied from
+    the filed NI and EPS pairs; Q4's average share count is the share-month
+    residual (12·FY_avg − 9·9M_avg)/3. Returns None when the inputs can't
+    support the derivation (missing or zero EPS/NI facts, non-positive
+    implied shares) so the caller can fall back to plain subtraction.
+    """
+    if ni_pair is None:
+        return None
+    annual_ni, ytd_ni = ni_pair
+    if not annual_eps.val or not ytd_eps.val:
+        return None
+    fy_shares = annual_ni.val / annual_eps.val
+    ytd_shares = ytd_ni.val / ytd_eps.val
+    if fy_shares <= 0 or ytd_shares <= 0:
+        return None
+    q4_shares = (12 * fy_shares - 9 * ytd_shares) / 3
+    if q4_shares <= 0:
+        return None
+    return round((annual_ni.val - ytd_ni.val) / q4_shares, 4)
+
+
+def _decimals(value: float) -> int:
+    text = repr(value)
+    if "e" in text or "E" in text:
+        return 0
+    _, _, frac = text.partition(".")
+    return len(frac)
+
+
+def _round_like_inputs(a: float, b: float, value: float) -> float:
+    """Round a derived value to the precision of its inputs.
+
+    Float subtraction of filing decimals (e.g. 9.05 − 8.17) leaves binary
+    noise (0.8800000000000008) that leaks into CSV exports; the inputs are
+    only ever as precise as the filing's own decimals.
+    """
+    return round(value, max(_decimals(a), _decimals(b)))
 
 
 def _dedup_by_end(

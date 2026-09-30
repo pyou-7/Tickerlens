@@ -1029,3 +1029,128 @@ def test_assets_never_derived_from_identity() -> None:
     assert rows[0].total_assets is None
     assert rows[0].total_liabilities == 59_388
     assert rows[0].total_equity == 35_661
+
+
+def _duol_like_companyfacts(
+    *,
+    net_income_values: list,
+    basic_eps_values: list,
+    diluted_eps_values: list,
+) -> dict:
+    """DUOL FY2025-shaped facts: a huge Q3 one-off (tax benefit) makes the
+    naive FY_EPS − 9M_EPS subtraction visibly wrong."""
+    return make_companyfacts(
+        revenue_values=[
+            ("2025-01-01", "2025-03-31", 230_743_000, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 252_265_000, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 271_713_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 1_015_721_000, 2025, "FY"),
+        ],
+        net_income_values=net_income_values,
+        basic_eps_values=basic_eps_values,
+        diluted_eps_values=diluted_eps_values,
+        opcf_values=[],
+        capex_values=[],
+    )
+
+
+def test_q4_eps_derived_from_net_income_and_implied_shares() -> None:
+    # Regression: DUOL's FY2025 Q4 showed diluted EPS $0.94 ABOVE basic $0.88
+    # (arithmetically impossible) because Q4 was derived as FY_EPS − 9M_EPS
+    # while the two figures divide by different share counts. Q4 EPS is now
+    # Q4 net income over the implied Q4 share count.
+    ni = [
+        ("2025-01-01", "2025-03-31", 35_135_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 44_781_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 292_195_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 372_111_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 414_065_000, 2025, "FY"),
+    ]
+    basic_eps = [
+        ("2025-01-01", "2025-03-31", 0.78, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 0.98, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 6.36, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 8.17, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 9.05, 2025, "FY"),
+    ]
+    diluted_eps = [
+        ("2025-01-01", "2025-03-31", 0.72, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 0.91, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 5.95, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 7.63, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 8.57, 2025, "FY"),
+    ]
+    companyfacts = _duol_like_companyfacts(
+        net_income_values=ni, basic_eps_values=basic_eps, diluted_eps_values=diluted_eps
+    )
+    basic = {m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")}
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q4 = dt.date(2025, 12, 31)
+    # Q4 NI 41,954,000 over implied Q4 shares: basic ≈ 0.9047, diluted ≈ 0.8935
+    assert round(basic[q4].value, 4) == 0.9047
+    assert round(diluted[q4].value, 4) == 0.8935
+    assert basic[q4].value > diluted[q4].value  # ranking can never invert
+
+
+def test_q4_eps_falls_back_to_subtraction_without_ni_facts() -> None:
+    # No NetIncomeLoss facts: keep the old subtraction path, but rounded to
+    # the inputs' precision (9.05 − 8.17 = 0.88, not 0.8800000000000008).
+    companyfacts = _duol_like_companyfacts(
+        net_income_values=[],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 8.17, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 9.05, 2025, "FY"),
+        ],
+        diluted_eps_values=[],
+    )
+    metrics = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    assert metrics[dt.date(2025, 12, 31)].value == 0.88
+
+
+def test_q4_eps_falls_back_when_eps_zero() -> None:
+    # A zero annual EPS would divide by zero in the implied-shares path;
+    # fall back to subtraction instead of crashing.
+    companyfacts = _duol_like_companyfacts(
+        net_income_values=[
+            ("2025-01-01", "2025-09-30", 372_111_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 414_065_000, 2025, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 8.17, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 0.0, 2025, "FY"),
+        ],
+        diluted_eps_values=[],
+    )
+    metrics = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    assert metrics[dt.date(2025, 12, 31)].value == -8.17
+
+
+def test_fcf_suppressed_for_finance_sic() -> None:
+    # SoFi (SIC 6199) files both OpCF and CapEx tags, but FCF is not a
+    # meaningful metric for lenders — banks/insurers/REITs already render
+    # "—" because they file no CapEx tag. Finance filers suppress explicitly
+    # so the KPI card doesn't show a misleading -$4B.
+    companyfacts = make_companyfacts(
+        revenue_values=[("2025-01-01", "2025-03-31", 1_000_000_000, 2025, "Q1")],
+        net_income_values=[("2025-01-01", "2025-03-31", 100_000_000, 2025, "Q1")],
+        basic_eps_values=[("2025-01-01", "2025-03-31", 0.10, 2025, "Q1")],
+        diluted_eps_values=[("2025-01-01", "2025-03-31", 0.10, 2025, "Q1")],
+        opcf_values=[("2025-01-01", "2025-03-31", -2_000_000_000, 2025, "Q1")],
+        capex_values=[("2025-01-01", "2025-03-31", 50_000_000, 2025, "Q1")],
+    )
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", sic="6199"
+    )
+    assert len(rows) == 1
+    assert rows[0].free_cash_flow is None
+    # Operating companies are unaffected.
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", sic="3571"
+    )
+    assert rows[0].free_cash_flow == -2_050_000_000
