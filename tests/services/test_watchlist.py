@@ -72,3 +72,44 @@ def test_get_watchlist_order_and_signal_none_without_financials(session: Session
     assert rows[0].name == "Microsoft Corp."
     # no quarterly rows -> valuation not computable -> signal None
     assert rows[0].signal is None
+
+
+def test_watchlist_note_round_trip(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    assert svc.get_watchlist_note("AAPL") is None
+    svc.watch_ticker("AAPL")
+    assert svc.set_watchlist_note("AAPL", "Earnings play — check Q3 call") == "Earnings play — check Q3 call"
+    assert svc.get_watchlist_note("AAPL") == "Earnings play — check Q3 call"
+    # Blank note clears.
+    assert svc.set_watchlist_note("AAPL", "   ") is None
+    assert svc.get_watchlist_note("AAPL") is None
+
+
+def test_watchlist_note_capped_at_280_chars(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    svc.watch_ticker("AAPL")
+    saved = svc.set_watchlist_note("AAPL", "x" * 500)
+    assert saved is not None and len(saved) == 280
+
+
+def test_watchlist_note_requires_watching(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    with pytest.raises(CompanyNotFoundError):
+        svc.set_watchlist_note("AAPL", "hello")
+
+
+def test_get_watchlist_includes_note(session: Session) -> None:
+    session.add(_company())
+    session.commit()
+    svc = _svc(session)
+    svc.watch_ticker("AAPL")
+    svc.set_watchlist_note("AAPL", "why: moat")
+    rows = svc.get_watchlist()
+    assert len(rows) == 1
+    assert rows[0].note == "why: moat"

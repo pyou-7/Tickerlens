@@ -64,8 +64,13 @@
   </div>
 
   <div class="flex gap-2">
-    {% set ticker = overview.ticker %}
-    {% include "partials/watch_button.html" %}
+    <div>
+      {% set ticker = overview.ticker %}
+      {% include "partials/watch_button.html" %}
+      {% if watching %}
+        {% include "partials/watch_note.html" %}
+      {% endif %}
+    </div>
     <form method="post" action="/company/{{ overview.ticker }}/refresh">
       <button type="submit"
               class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">

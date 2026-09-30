@@ -104,6 +104,7 @@ class WatchlistRow(BaseModel):
     last_price: float | None
     market_cap: float | None
     signal: str | None  # current valuation signal; None when not computable
+    note: str | None = None  # personal reminder; None when unset
 
 
 class CompanyOverview(BaseModel):
@@ -659,6 +660,40 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_watchlist_note(
+        self, ticker: str, session: Session | None = None
+    ) -> str | None:
+        """The personal note on a watched company; None when not watching."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            entry = db.get(WatchlistEntry, cik)
+            return entry.note if entry is not None else None
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def set_watchlist_note(
+        self, ticker: str, note: str | None, session: Session | None = None
+    ) -> str | None:
+        """Save (or clear, when blank) the note on a watched company.
+
+        Raises CompanyNotFoundError when the ticker is not on the watchlist.
+        Notes are capped at 280 characters — a reminder, not an essay.
+        """
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            entry = db.get(WatchlistEntry, cik)
+            if entry is None:
+                raise CompanyNotFoundError(f"{ticker} is not on the watchlist")
+            entry.note = (note or "").strip()[:280] or None
+            db.commit()
+            return entry.note
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def get_watchlist(self, session: Session | None = None) -> list[WatchlistRow]:
         """Pinned companies, most recently added first, with live signals."""
         db = session or self._session or get_session()
@@ -685,6 +720,7 @@ class FinancialsService:
                         last_price=company.last_price,
                         market_cap=company.market_cap,
                         signal=signal,
+                        note=entry.note,
                     )
                 )
             return result

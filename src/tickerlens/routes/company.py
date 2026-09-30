@@ -51,6 +51,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "valuation": _svc.get_valuation(ticker),
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
+            "note": _svc.get_watchlist_note(ticker),
         },
     )
 
@@ -98,6 +99,33 @@ def unwatch_company(request: Request, ticker: str):
     return RedirectResponse(
         url="/" if from_home else f"/company/{ticker}", status_code=303
     )
+
+
+@router.post("/company/{ticker}/watch/note", response_class=HTMLResponse)
+async def save_watch_note(request: Request, ticker: str):
+    """Save (or clear) the personal note on a watched company (PRD §4.6).
+
+    HTMX swaps the note partial in place; plain form POSTs redirect back to
+    the company page. 404 when the ticker is not on the watchlist. The form
+    body is parsed directly (no python-multipart dependency — plain and
+    HTMX forms both send application/x-www-form-urlencoded by default).
+    """
+    from urllib.parse import parse_qs
+
+    ticker = ticker.upper()
+    body = (await request.body()).decode("utf-8", "replace")
+    note = parse_qs(body, keep_blank_values=True).get("note", [""])[0]
+    try:
+        saved = _svc.set_watchlist_note(ticker, note)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/watch_note.html",
+            context={"ticker": ticker, "note": saved},
+        )
+    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
 
 
 @router.post("/watchlist/refresh", response_class=HTMLResponse)
@@ -342,5 +370,6 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
             "valuation": _svc.get_valuation(ticker),
             "signal_change": _svc.get_signal_change(ticker),
             "watching": _svc.is_watching(ticker),
+            "note": _svc.get_watchlist_note(ticker),
         },
     )
