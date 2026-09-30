@@ -835,9 +835,12 @@ def test_balance_sheet_tag_abandonment_picks_fresh_tag() -> None:
     )
 
 
-def test_balance_sheet_prefers_first_tag_when_both_fresh() -> None:
-    # Regression guard: chain order still expresses semantic preference when
-    # both tags are current.
+def test_balance_sheet_prefers_total_equity_when_both_fresh() -> None:
+    # Chain order expresses semantic preference when both tags are current:
+    # total equity (including noncontrolling interests) is the tag that
+    # satisfies Assets = Liabilities + Equity (NEE's 2026-03-31: 154.79 +
+    # 66.63 = 221.42 exactly; parent-only StockholdersEquity leaves an
+    # $11.4B gap), so it wins over the parent-only tag.
     companyfacts = {
         "facts": {
             "us-gaap": {
@@ -849,7 +852,10 @@ def test_balance_sheet_prefers_first_tag_when_both_fresh() -> None:
         }
     }
     source_tag, _ = concept_facts(companyfacts, Metric.TOTAL_EQUITY, instant=True)
-    assert source_tag == "StockholdersEquity"
+    assert (
+        source_tag
+        == "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+    )
 
 
 def test_balance_sheet_metric_uses_fresh_tag_values() -> None:
@@ -1154,3 +1160,71 @@ def test_fcf_suppressed_for_finance_sic() -> None:
         companyfacts, fiscal_year_end="1231", sic="3571"
     )
     assert rows[0].free_cash_flow == -2_050_000_000
+
+
+def test_mislabeled_q4_stub_relabeled_from_fy() -> None:
+    # Regression (defect-hunt round 13, ABBV): the 10-K tags its 91-day Q4
+    # Revenues stub fp="FY" (verified against raw SEC JSON — the filer's own
+    # label, not our transform). The phantom FY row stole a slot in the
+    # 8-quarter slice (ABBV seeded 7 quarters) and collided on
+    # (cik, period_end) at upsert. The filer's own quarterly fact is
+    # authoritative: relabel it Q4 and drop the derived duplicate.
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-01-01", "2025-03-31", 13_340_000_000, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 15_420_000_000, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 15_780_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-09-30", 44_540_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 61_160_000_000, 2025, "FY"),
+            ("2025-10-01", "2025-12-31", 16_618_000_000, 2025, "FY"),  # mislabeled Q4 stub
+        ],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+    )
+    metrics = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    }
+    q4 = metrics[dt.date(2025, 12, 31)]
+    assert q4.fp == "Q4"
+    # The filer's own stub fact wins over the FY−9M derivation (16_620_000_000).
+    assert q4.value == 16_618_000_000
+    assert all(m.fp != "FY" for m in metrics.values())
+
+
+def test_mislabeled_q4_stub_fixed_on_finance_revenue_path() -> None:
+    # Same ABBV-shaped mislabeling, but through _finance_total_revenue (the
+    # path REITs like AMT take): without the fix the phantom FY row stole a
+    # quarter slot (AMT seeded 7 quarters).
+    from tickerlens.data.xbrl import _finance_total_revenue
+
+    # Note: _finance_total_revenue applies an *absolute* freshness check
+    # against today, so the fixture uses 2026 dates (the generic-path test
+    # above can use 2025 dates because its staleness rule is relative).
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 2_560_000_000, 2026, "Q1"),
+                            fact("2026-04-01", "2026-06-30", 2_630_000_000, 2026, "Q2"),
+                            fact("2026-07-01", "2026-09-30", 2_720_000_000, 2026, "Q3"),
+                            fact("2026-01-01", "2026-09-30", 7_910_000_000, 2026, "Q3"),
+                            fact("2026-01-01", "2026-12-31", 10_650_000_000, 2026, "FY"),
+                            # Mislabeled Q4 stub: 92-day fact tagged fp="FY".
+                            fact("2026-10-01", "2026-12-31", 2_740_000_000, 2026, "FY"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    metrics = {m.end: m for m in _finance_total_revenue(companyfacts, "1231")}
+    q4 = metrics[dt.date(2026, 12, 31)]
+    assert q4.fp == "Q4"
+    assert q4.value == 2_740_000_000  # filer's stub, not FY−9M = 2_740_000_000
+    assert all(m.fp != "FY" for m in metrics.values())
+    assert len(metrics) == 4

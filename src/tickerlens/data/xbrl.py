@@ -123,8 +123,13 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     Metric.TOTAL_LIABILITIES: ConceptSpec(tags=("Liabilities",), unit="USD"),
     Metric.TOTAL_EQUITY: ConceptSpec(
         tags=(
-            "StockholdersEquity",
+            # Total equity includes noncontrolling interests — this tag is the
+            # one that satisfies Assets = Liabilities + Equity (e.g. NEE's
+            # 2026-03-31: 154.79 + 66.63 = 221.42 exactly; parent-only
+            # StockholdersEquity leaves an $11.4B gap). Parent-only stays as
+            # the fallback for filers that don't report the total.
             "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+            "StockholdersEquity",
         ),
         unit="USD",
     ),
@@ -329,10 +334,37 @@ def quarterly_income_metric(
         except KeyError:
             ni_facts = None
     q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end, ni_facts=ni_facts)
-    return sorted(
-        [_period_metric(metric, source_tag, fact) for fact in standalone] + q4,
-        key=lambda item: item.end,
-    )
+    return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
+
+
+def _merge_standalone_with_q4(
+    metric: Metric,
+    source_tag: str,
+    standalone: list[XbrlFact],
+    q4: list[PeriodMetric],
+) -> list[PeriodMetric]:
+    """Merge quarterly facts with derived Q4 rows, fixing mislabeled Q4 stubs.
+
+    A 70–100-day fact is quarterly by duration, so an fp="FY" label on one is
+    a filer mislabeling of its 10-K Q4 stub (ABBV's 10-K tags the 91-day Q4
+    Revenues fact fp="FY"; verified against raw SEC JSON). The filer's own
+    quarterly fact is authoritative over the derived Q4 row, so relabel it
+    and let it supersede the duplicate — otherwise the phantom FY row steals
+    a slot in the recent-periods slice and collides on (cik, period_end) at
+    upsert (and in the bank composite it would be *summed* with the derived
+    Q4, roughly doubling the quarter).
+    """
+    derived_q4_ends = {item.end for item in q4}
+    metrics: list[PeriodMetric] = []
+    superseded_q4: set[dt.date] = set()
+    for fact in standalone:
+        pm = _period_metric(metric, source_tag, fact)
+        if pm.fp == "FY" and pm.end in derived_q4_ends:
+            pm = pm.model_copy(update={"fp": "Q4"})
+            superseded_q4.add(pm.end)
+        metrics.append(pm)
+    metrics.extend(item for item in q4 if item.end not in superseded_q4)
+    return sorted(metrics, key=lambda item: item.end)
 
 
 def quarterly_cash_flow_metric(
@@ -526,10 +558,7 @@ def _finance_total_revenue(
         return []
     standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
-    return sorted(
-        [_period_metric(Metric.REVENUE, source_tag, fact) for fact in standalone] + q4,
-        key=lambda item: item.end,
-    )
+    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
 def _is_bank_sic(sic: str | int | None) -> bool:
@@ -570,11 +599,7 @@ def _bank_quarterly_revenue(
         standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
         q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
         component_series.append(
-            sorted(
-                [_period_metric(Metric.REVENUE, source_tag, fact) for fact in standalone]
-                + q4,
-                key=lambda item: item.end,
-            )
+            _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
         )
     by_end: dict[dt.date, list[PeriodMetric]] = {}
     for series in component_series:
