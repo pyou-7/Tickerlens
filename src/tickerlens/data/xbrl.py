@@ -113,6 +113,9 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
             # NVDA abandoned the tag above after 2020 and now files CapEx as
             # "Purchases of property and equipment" under this tag.
             "PaymentsToAcquireProductiveAssets",
+            # Eli Lilly never filed the classic tag at all and files CapEx as
+            # "Capital expenditures" under this tag (current through 2026).
+            "PaymentsToAcquireOtherPropertyPlantAndEquipment",
         ),
         unit="USD",
     ),
@@ -187,9 +190,11 @@ def extract_recent_quarterly_financials(
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
     balance_sheet = {metric: _safe_bs(metric) for metric in BALANCE_SHEET_METRICS}
     # Filers that never report a standalone ``Liabilities`` tag (e.g. Eli
-    # Lilly files only LiabilitiesAndStockholdersEquity + StockholdersEquity)
-    # get total liabilities from the accounting identity instead of "—".
-    _derive_missing_liabilities(balance_sheet)
+    # Lilly files only LiabilitiesAndStockholdersEquity + StockholdersEquity),
+    # or never report an ``Equity`` tag (e.g. Visa files Assets + Liabilities
+    # only), get the missing instant from the accounting identity instead of
+    # "—".
+    _derive_missing_balance_sheet(balance_sheet)
 
     canonical = sorted(revenue, key=lambda item: item.end)[-periods:]
     by_end = {
@@ -318,7 +323,10 @@ def quarterly_cash_flow_metric(
     source_tag, facts = concept_facts(companyfacts, metric)
     q1s = _dedup_by_end(facts, 75, 105, fiscal_year_end)
     h1s = _dedup_by_end(facts, 165, 200, fiscal_year_end)
-    m9s = _dedup_by_end(facts, 255, 290, fiscal_year_end)
+    # 52/53-week filers (e.g. Costco's 36-week 9M = 251 days) run shorter than
+    # a nominal 273-day 9M; the 240-day floor covers them without touching the
+    # H1 (≤200d) or full-year (≥340d) windows. Keep in sync with _derive_q4_income.
+    m9s = _dedup_by_end(facts, 240, 290, fiscal_year_end)
     years = _dedup_by_end(facts, 340, 380, fiscal_year_end)
 
     q1_by_start = _by_start(q1s)
@@ -618,24 +626,27 @@ def balance_sheet_metric(
     }
 
 
-def _derive_missing_liabilities(
+def _derive_missing_balance_sheet(
     balance_sheet: dict[Metric, dict[dt.date, float]],
 ) -> None:
-    """Fill missing total-liability instants via the accounting identity.
+    """Fill missing balance-sheet instants via the accounting identity.
 
     Some filers (e.g. Eli Lilly) never report a standalone ``Liabilities``
     tag — only ``LiabilitiesAndStockholdersEquity`` alongside
-    ``StockholdersEquity`` — so the balance-sheet tab and compare table
-    showed "—". Assets = Liabilities + Equity recovers the exact value from
-    the same filing's Assets and StockholdersEquity; only ends where both
-    components exist are filled, and an explicitly filed Liabilities value
-    is never overwritten.
+    ``StockholdersEquity`` — and others (e.g. Visa) never report a standalone
+    equity tag, so the balance-sheet tab and compare table showed "—".
+    Assets = Liabilities + Equity recovers the exact value from the same
+    filing's other two instants; only ends where both components exist are
+    filled, and an explicitly filed value is never overwritten. Assets is
+    never derived (it is the anchor the identity is checked against).
     """
     liabilities = balance_sheet[Metric.TOTAL_LIABILITIES]
     assets = balance_sheet[Metric.TOTAL_ASSETS]
     equity = balance_sheet[Metric.TOTAL_EQUITY]
     for end in sorted(set(assets) & set(equity)):
         liabilities.setdefault(end, assets[end] - equity[end])
+    for end in sorted(set(assets) & set(liabilities)):
+        equity.setdefault(end, assets[end] - liabilities[end])
 
 
 # SEC's fiscalYearEnd is a fixed MMDD, but 52/53-week filers use floating
@@ -671,7 +682,9 @@ def _derive_q4_income(
     fiscal_year_end: str | None,
 ) -> list[PeriodMetric]:
     annual = _dedup_by_end(facts, 340, 380, fiscal_year_end)
-    ytd_9m = _dedup_by_end(facts, 250, 290, fiscal_year_end)
+    # Same 240-day floor as quarterly_cash_flow_metric's m9 window (52/53-week
+    # filers like Costco file a 251-day 9M fact).
+    ytd_9m = _dedup_by_end(facts, 240, 290, fiscal_year_end)
     annual_by_start = _by_start(annual)
     ytd_by_start = _by_start(ytd_9m)
 

@@ -914,3 +914,118 @@ def test_fill_missing_eps_basic_empty_inputs() -> None:
     ]
     merged = _fill_missing_eps_basic([], only_diluted)
     assert len(merged) == 1 and merged[0].value == 20.98
+
+
+def test_capex_falls_back_to_other_ppande_tag() -> None:
+    """Mirror the Eli Lilly (LLY) case: no ``PaymentsToAcquirePropertyPlantAndEquipment``
+    facts at all, ``PaymentsToAcquireProductiveAssets`` abandoned in 2022, and
+    CapEx filed quarterly as ``PaymentsToAcquireOtherPropertyPlantAndEquipment``."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "PaymentsToAcquireProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2022-01-01", "2022-03-31", 400_000_000.0, 2022, "Q1"),
+                        ]
+                    }
+                },
+                "PaymentsToAcquireOtherPropertyPlantAndEquipment": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 1_200_000_000.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 2_500_000_000.0, 2026, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+    tag, _ = concept_facts(companyfacts, Metric.CAPEX)
+    assert tag == "PaymentsToAcquireOtherPropertyPlantAndEquipment"
+
+
+def test_cash_flow_9m_window_covers_52week_filer() -> None:
+    """Mirror the Costco (COST) case: a 52/53-week filer's 9M YTD fact is
+    251 days — below the old 255-day floor — so Q3 could not be uncumulated
+    and FCF showed None."""
+    companyfacts = make_companyfacts(
+        revenue_values=[],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[
+            ("2025-09-01", "2025-11-23", 3_000, 2026, "Q1"),   # 83d
+            ("2025-09-01", "2026-02-15", 5_500, 2026, "Q2"),   # 167d
+            ("2025-09-01", "2026-05-10", 9_000, 2026, "Q3"),   # 251d
+        ],
+        capex_values=[],
+    )
+
+    rows = quarterly_cash_flow_metric(
+        companyfacts,
+        Metric.OPERATING_CASH_FLOW,
+        fiscal_year_end="0830",
+    )
+
+    assert [(row.period, row.value) for row in rows] == [
+        ("FY2026 Q1", 3_000),
+        ("FY2026 Q2", 2_500),
+        ("FY2026 Q3", 3_500),
+    ]
+
+
+def test_missing_equity_derived_from_assets_minus_liabilities() -> None:
+    """Mirror the Visa (V) case: no standalone equity tag — only Assets and
+    Liabilities instants. Total equity is derived from the accounting
+    identity instead of showing None."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [fact("2026-01-01", "2026-03-31", 10_000, 2026, "Q1")]}
+                },
+                "Assets": {
+                    "units": {"USD": [instant_fact("2026-03-31", 95_049, 2026, "Q1")]}
+                },
+                "Liabilities": {
+                    "units": {"USD": [instant_fact("2026-03-31", 59_388, 2026, "Q1")]}
+                },
+            }
+        }
+    }
+
+    rows = extract_recent_quarterly_financials(companyfacts, fiscal_year_end="0930", periods=4)
+
+    assert len(rows) == 1
+    assert rows[0].total_assets == 95_049
+    assert rows[0].total_liabilities == 59_388
+    assert rows[0].total_equity == 95_049 - 59_388
+
+
+def test_assets_never_derived_from_identity() -> None:
+    """Assets is the anchor of the identity — when only Liabilities and
+    Equity are filed, assets stays None rather than being fabricated."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [fact("2026-01-01", "2026-03-31", 10_000, 2026, "Q1")]}
+                },
+                "Liabilities": {
+                    "units": {"USD": [instant_fact("2026-03-31", 59_388, 2026, "Q1")]}
+                },
+                "StockholdersEquity": {
+                    "units": {"USD": [instant_fact("2026-03-31", 35_661, 2026, "Q1")]}
+                },
+            }
+        }
+    }
+
+    rows = extract_recent_quarterly_financials(companyfacts, fiscal_year_end="0930", periods=4)
+
+    assert len(rows) == 1
+    assert rows[0].total_assets is None
+    assert rows[0].total_liabilities == 59_388
+    assert rows[0].total_equity == 35_661
