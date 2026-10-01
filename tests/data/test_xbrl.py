@@ -1377,3 +1377,194 @@ def test_gap_fill_excludes_long_abandoned_tag() -> None:
     assert len(metrics) == 1
     assert metrics[0].value == 724_000_000.0
     assert metrics[0].source_tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+def _split_companyfacts() -> dict:
+    """Mirror the NFLX case: a 10-for-1 split restated in later filings.
+
+    The Q2-2025 10-Q reported diluted EPS 7.19 (quarter) / 13.8 (6M YTD) on
+    the pre-split basis; the 2026 10-Q restated those comparatives as
+    0.72 / 1.38. Pre-split originals filed before the restating filing must
+    be rescaled to the latest basis; post-split facts stay untouched.
+    """
+    return {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 6.61, 2025, "Q1", filed="2025-04-18"),
+                            fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-01-01", "2025-06-30", 13.8, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-04-01", "2025-06-30", 0.72, 2026, "Q2", filed="2026-07-17"),
+                            fact("2025-01-01", "2025-06-30", 1.38, 2026, "Q2", filed="2026-07-17"),
+                            fact("2026-01-01", "2026-03-31", 1.23, 2026, "Q1", filed="2026-04-17"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+def test_stock_split_rescales_pre_split_eps_to_latest_basis() -> None:
+    series = quarterly_income_metric(_split_companyfacts(), Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+
+    # Pre-split Q1-2025 (6.61) rescaled by the observed ratio 0.72/7.19.
+    assert abs(by_end[dt.date(2025, 3, 31)] - 6.61 * 0.72 / 7.19) < 1e-9
+    # The restating filing's own facts already sit on the latest basis.
+    assert by_end[dt.date(2025, 6, 30)] == 0.72
+    assert by_end[dt.date(2026, 3, 31)] == 1.23
+
+
+def test_stock_split_adjustment_applies_to_basic_eps_too() -> None:
+    # Basic EPS restates at the same split ratio in real filings.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareBasic": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 6.55, 2025, "Q1", filed="2025-04-18"),
+                            fact("2025-04-01", "2025-06-30", 7.14, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-01-01", "2025-06-30", 13.69, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-04-01", "2025-06-30", 0.71, 2026, "Q2", filed="2026-07-17"),
+                            fact("2025-01-01", "2025-06-30", 1.37, 2026, "Q2", filed="2026-07-17"),
+                            fact("2026-01-01", "2026-03-31", 1.22, 2026, "Q1", filed="2026-04-17"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert abs(by_end[dt.date(2025, 3, 31)] - 6.55 * 1.37 / 13.69) < 1e-9
+    assert by_end[dt.date(2025, 6, 30)] == 0.71
+    assert by_end[dt.date(2026, 3, 31)] == 1.22
+
+
+def test_lone_split_like_ratio_does_not_trigger_rescale() -> None:
+    # A single (start, end) pair at a split-like ratio is not enough — it
+    # could be a data correction. The guard needs a second corroborating
+    # duration before rescaling anything.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-04-01", "2025-06-30", 0.72, 2026, "Q2", filed="2026-07-17"),
+                            fact("2026-01-01", "2026-03-31", 1.23, 2026, "Q1", filed="2026-04-17"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # No corroborating 6M-YTD pair, so nothing is rescaled: latest filed wins.
+    assert by_end[dt.date(2025, 6, 30)] == 0.72
+    assert by_end[dt.date(2026, 3, 31)] == 1.23
+
+
+def test_ordinary_restatement_does_not_trigger_rescale() -> None:
+    # A 2% accounting correction restated in a later filing is not a split.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 6.61, 2025, "Q1", filed="2025-04-18"),
+                            fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-01-01", "2025-06-30", 13.8, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-04-01", "2025-06-30", 7.05, 2025, "Q2", filed="2025-10-22"),
+                            fact("2025-01-01", "2025-06-30", 13.5, 2025, "Q2", filed="2025-10-22"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 3, 31)] == 6.61
+    assert by_end[dt.date(2025, 6, 30)] == 7.05
+
+
+def test_stock_split_keeps_q4_eps_derivation_sane() -> None:
+    # The NFLX defect: FY-2024 diluted EPS 19.83 and 9M 15.56 were both on
+    # the pre-split basis while the pipeline mixed them with restated facts,
+    # deriving a nonsensical Q4 diluted EPS of -13.58. After rescaling, the
+    # share-implied derivation sees consistent pairs and lands near 0.44.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2024-01-01", "2024-12-31", 19.83, 2024, "FY", filed="2025-01-27"),
+                            fact("2024-01-01", "2024-09-30", 15.56, 2024, "Q3", filed="2024-10-18"),
+                            fact("2024-07-01", "2024-09-30", 5.4, 2024, "Q3", filed="2024-10-18"),
+                            fact("2024-07-01", "2024-09-30", 0.54, 2026, "Q3", filed="2026-07-17"),
+                            fact("2024-01-01", "2024-09-30", 1.556, 2026, "Q3", filed="2026-07-17"),
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            fact("2024-01-01", "2024-12-31", 8_000_000_000.0, 2024, "FY", filed="2025-01-27"),
+                            fact("2024-01-01", "2024-09-30", 6_000_000_000.0, 2024, "Q3", filed="2024-10-18"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    q4 = next(item for item in series if item.fp == "Q4")
+    # Q4 NI 2B over implied Q4 shares: (12*8B/1.983 - 9*6B/1.556)/3.
+    expected = round(
+        2_000_000_000.0 / ((12 * 8_000_000_000.0 / 1.983 - 9 * 6_000_000_000.0 / 1.556) / 3),
+        4,
+    )
+    assert q4.value == expected
+    assert q4.value > 0
+
+
+def test_same_split_seen_by_two_filings_rescales_only_once() -> None:
+    # NFLX's FY2025 10-K and its Q2-2026 10-Q each restated pre-split
+    # comparatives ~10x. Without merging, the pre-split Q1-2025 fact would
+    # be rescaled twice (6.61 -> 0.066 instead of 0.66).
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 6.61, 2025, "Q1", filed="2025-04-18"),
+                            fact("2025-01-01", "2025-03-31", 0.66, 2026, "Q1", filed="2026-04-17"),
+                            fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-01-01", "2025-06-30", 13.8, 2025, "Q2", filed="2025-07-18"),
+                            fact("2025-04-01", "2025-06-30", 0.72, 2026, "Q2", filed="2026-07-17"),
+                            fact("2025-01-01", "2025-06-30", 1.38, 2026, "Q2", filed="2026-07-17"),
+                            fact("2026-01-01", "2026-03-31", 1.23, 2026, "Q1", filed="2026-04-17"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Exactly one 10x rescale: 0.66, not 0.066.
+    assert abs(by_end[dt.date(2025, 3, 31)] - 0.66) < 0.02
+    assert by_end[dt.date(2025, 3, 31)] > 0.3
+    # The post-split Q1-2026 fact (filed after the first restating filing)
+    # is left alone by the neighbor-consistency check.
+    assert by_end[dt.date(2026, 3, 31)] == 1.23

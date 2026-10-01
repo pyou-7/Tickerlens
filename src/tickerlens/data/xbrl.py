@@ -302,6 +302,171 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
     return rows
 
 
+# Stock splits restate per-share facts: the same (start, end) reported at two
+# filings whose values differ by an integer split ratio. Restated values are
+# exact divisions (7.19 -> 0.72), so a 3% tolerance is generous; anything
+# coarser risks mistaking an accounting restatement for a split.
+_SPLIT_RATIOS = (2, 3, 4, 5, 10, 20, 100)
+_SPLIT_RATIO_TOLERANCE = 0.03
+# A lone (start, end) pair at a split-like ratio could be a data correction,
+# so an event needs corroboration from a second duration (e.g. the quarterly
+# fact and the 6M YTD fact both restated 10x).
+_SPLIT_MIN_CORROBORATING_GROUPS = 2
+
+# Two restating filings can observe the same split (NFLX's FY2025 10-K and
+# Q2-2026 10-Q each restated pre-split comparatives ~10x, six months apart).
+# Without merging, pre-split facts would be rescaled twice. Events with
+# near-identical scales close in time are one split; genuinely repeated
+# splits (same ratio, well separated in time) stay distinct.
+_SPLIT_MERGE_MAX_DAYS = 400
+
+
+def _split_adjust_facts(facts: list[XbrlFact]) -> None:
+    """Rescale pre-split per-share facts to the latest filing's share basis.
+
+    After a stock split the filer restates comparative per-share facts in
+    later filings (NFLX's 10-for-1 split restated Q2-2025 diluted EPS from
+    7.19 to 0.72 in the 2026 10-Q), but facts filed before the restating
+    filing stay on the old basis — mixing them produced a bogus -87%
+    "trend" and a -13.58 derived Q4. Facts are mutated in place; callers
+    pass freshly built lists.
+
+    Classification per fact:
+    - its period was demonstrably restated at a split ratio → pre-split,
+      rescale unconditionally;
+    - otherwise (e.g. NFLX's Q3-2025, filed pre-split but never restated
+      since) → rescale only if the rescaled value is clearly closer to the
+      post-split neighborhood (nearest certain-basis quarters) than the
+      original, so genuinely post-split facts (NFLX's Q1-2026, filed
+      2026-04-17, before the restating 10-Q) are left alone.
+    """
+    events = _detect_split_events(facts)
+    if not events:
+        return
+    min_event_date = min(event.date for event in events)
+    # Post-split reference values: restated comparatives (latest filed wins)
+    # and any fact filed on/after the first restating filing.
+    latest_by_end: dict[dt.date, XbrlFact] = {}
+    for fact in facts:
+        prev = latest_by_end.get(fact.end)
+        if prev is None or fact.filed > prev.filed:
+            latest_by_end[fact.end] = fact
+    certain: dict[dt.date, float] = {}
+    for end, fact in latest_by_end.items():
+        if end in {e for event in events for e in event.period_ends} or fact.filed >= min_event_date:
+            certain[end] = fact.val
+    certain_ends = sorted(certain)
+
+    for fact in facts:
+        scale = 1.0
+        for event in events:
+            if event.date > fact.filed:
+                scale *= event.scale
+        if scale == 1.0:
+            continue
+        if fact.end in {e for event in events for e in event.period_ends}:
+            fact.val *= scale
+            continue
+        expected = _neighbor_value(fact.end, certain_ends, certain)
+        if expected is not None and abs(fact.val * scale - expected) < 0.5 * abs(fact.val - expected):
+            fact.val *= scale
+
+
+def _neighbor_value(
+    end: dt.date, certain_ends: list[dt.date], certain: dict[dt.date, float]
+) -> float | None:
+    """Interpolate the expected post-split value from certain-basis neighbors."""
+    below = [e for e in certain_ends if e < end]
+    above = [e for e in certain_ends if e > end]
+    if below and above:
+        lo, hi = below[-1], above[0]
+        span = (hi - lo).days or 1
+        w = (end - lo).days / span
+        return certain[lo] * (1 - w) + certain[hi] * w
+    if below:
+        return certain[below[-1]]
+    if above:
+        return certain[above[0]]
+    return None
+
+
+class _SplitEvent:
+    """A detected stock split: the restating filing's date, the rescale
+    factor for pre-split facts, and the period ends whose restatement
+    corroborated it (those periods are certainly pre-split)."""
+
+    def __init__(self, date: dt.date, scale: float, period_ends: set[dt.date]) -> None:
+        self.date = date
+        self.scale = scale
+        self.period_ends = period_ends
+
+
+def _detect_split_events(facts: list[XbrlFact]) -> list[_SplitEvent]:
+    """Detect stock splits from restated comparatives.
+
+    Groups facts by ``(start, end)``; a group whose consecutive filings
+    report values differing by ~a split ratio casts one vote for the later
+    filing's date. An event fires only with enough corroborating groups (a
+    lone split-like ratio could be a data correction), and duplicate events
+    on the same filing date collapse to their median scale.
+    """
+    by_period: dict[tuple[dt.date | None, dt.date], dict[dt.date, set[float]]] = {}
+    for fact in facts:
+        by_period.setdefault((fact.start, fact.end), {}).setdefault(fact.filed, set()).add(fact.val)
+
+    votes: dict[dt.date, list[tuple[float, dt.date]]] = {}
+    for (start, end), by_filed in by_period.items():
+        if start is None:
+            continue
+        # One filing reporting two values for the same period is ambiguous
+        # (or a data error) — it can't corroborate anything.
+        if any(len(vals) != 1 for vals in by_filed.values()):
+            continue
+        ordered = sorted((filed, next(iter(vals))) for filed, vals in by_filed.items())
+        for (filed_a, val_a), (filed_b, val_b) in zip(ordered, ordered[1:]):
+            if val_a == 0:
+                continue
+            ratio = val_b / val_a
+            if any(
+                abs(ratio - r) / r <= _SPLIT_RATIO_TOLERANCE
+                or abs(ratio - 1 / r) / (1 / r) <= _SPLIT_RATIO_TOLERANCE
+                for r in _SPLIT_RATIOS
+            ):
+                votes.setdefault(filed_b, []).append((ratio, end))
+
+    events = []
+    for event_date, corroborated in votes.items():
+        if len(corroborated) < _SPLIT_MIN_CORROBORATING_GROUPS:
+            logger.info(
+                "skipping lone split-like ratio on %s (needs %d corroborating groups)",
+                event_date, _SPLIT_MIN_CORROBORATING_GROUPS,
+            )
+            continue
+        ratios = sorted(ratio for ratio, _ in corroborated)
+        scale = ratios[len(ratios) // 2]
+        period_ends = {end for _, end in corroborated}
+        logger.warning(
+            "stock split detected: restated %s, rescaling earlier per-share facts by %s",
+            event_date, scale,
+        )
+        events.append(_SplitEvent(event_date, scale, period_ends))
+    return _merge_duplicate_events(events)
+
+
+def _merge_duplicate_events(events: list[_SplitEvent]) -> list[_SplitEvent]:
+    """Collapse multiple observations of one split into a single event."""
+    merged: list[_SplitEvent] = []
+    for event in sorted(events, key=lambda e: e.date):
+        for kept in merged:
+            same_scale = abs(kept.scale - event.scale) / kept.scale <= _SPLIT_RATIO_TOLERANCE
+            if same_scale and abs((kept.date - event.date).days) <= _SPLIT_MERGE_MAX_DAYS:
+                kept.period_ends |= event.period_ends
+                break
+        else:
+            merged.append(event)
+    return merged
+
+
 def quarterly_income_metric(
     companyfacts: dict[str, Any],
     metric: Metric,
@@ -344,6 +509,15 @@ def quarterly_income_metric(
         staleness_window=(70, 100),
         metric_name=metric.value,
     )
+    # Per-share metrics must share one share basis: after a stock split the
+    # filer restates comparative per-share facts in later filings (NFLX's
+    # 10-for-1 split restated Q2-2025 diluted EPS from 7.19 to 0.72 in the
+    # 2026 10-Q), but facts filed before the restating filing stay on the
+    # old basis — mixing them produced a bogus -87% "trend" and a -13.58
+    # derived Q4. Rescale pre-split facts to the latest basis first so the
+    # Q4 share-implied derivation below also sees consistent NI/EPS pairs.
+    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+        _split_adjust_facts([fact for _, facts in candidates for fact in facts])
     return _merge_gap_fill(
         [
             _income_series_for_tag(metric, tag, facts, fiscal_year_end, ni_facts)
