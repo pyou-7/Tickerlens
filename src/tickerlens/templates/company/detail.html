@@ -96,9 +96,35 @@
   </div>
 </div>
 
-<!-- Time slicer controls -->
+<!-- Time slicer controls. On mobile (<md) the panel becomes a bottom sheet:
+     a compact "Period" button opens it; selectors + mode toggle + Apply live
+     inside; Apply closes it (the form already submits on change via HTMX).
+     The closed state is pure CSS so there is no flash before Alpine loads. -->
 <div
-  x-data="{ gran: '{{ ctx.granularity }}', yr: '{{ ctx.selected_year }}' }"
+  x-data="{ gran: '{{ ctx.granularity }}', yr: '{{ ctx.selected_year }}', sheetOpen: false }"
+  @keydown.escape.window="sheetOpen = false"
+>
+<!-- Mobile backdrop -->
+<div
+  x-show="sheetOpen"
+  x-cloak
+  x-transition.opacity
+  @click="sheetOpen = false"
+  class="md:hidden fixed inset-0 z-40 bg-black/60"
+></div>
+
+<!-- Compact "Period" button (mobile only) -->
+<button
+  type="button"
+  @click="sheetOpen = true"
+  class="md:hidden fixed bottom-4 right-4 z-40 rounded-full bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-lg active:bg-indigo-500"
+>
+  Period
+</button>
+
+<div
+  id="slicer-panel"
+  :class="sheetOpen && 'open'"
   class="mb-8 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-4 sm:p-5 shadow-xs"
 >
   <form
@@ -205,8 +231,21 @@
       </svg>
       <span>Updating…</span>
     </span>
+
+    <!-- Apply bar (mobile bottom sheet only): closes the sheet; the form
+         already submitted on change, so this is just dismissal. -->
+    <div class="md:hidden mt-4">
+      <button
+        type="button"
+        @click="sheetOpen = false"
+        class="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white active:bg-indigo-500"
+      >
+        Apply
+      </button>
+    </div>
   </form>
-</div>
+</div><!-- /#slicer-panel -->
+</div><!-- /slicer wrapper -->
 
 <!-- Data section — swapped by HTMX on period change -->
 <div id="detail-data">
@@ -243,6 +282,24 @@
   .htmx-indicator { display: none; }
   .htmx-request .htmx-indicator { display: inline-flex; }
   .htmx-request.htmx-indicator { display: inline-flex; }
+  /* Mobile bottom sheet (PRD §4.2): below md the slicer panel docks to the
+     bottom and starts translated off-screen — pure CSS so it is hidden even
+     before Alpine initializes; Alpine toggles .open. */
+  @media (max-width: 767px) {
+    #slicer-panel {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 50;
+      margin-bottom: 0;
+      border-radius: 1rem 1rem 0 0;
+      border-bottom: none;
+      max-height: 80vh;
+      overflow-y: auto;
+      transform: translateY(105%);
+      transition: transform 0.3s ease;
+    }
+    #slicer-panel.open { transform: translateY(0); }
+  }
 </style>
 
 <script>
