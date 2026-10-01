@@ -75,9 +75,17 @@ class EdgarClient:
 
     def cik_for_ticker(self, ticker: str) -> str:
         ticker_upper = ticker.upper()
-        for item in self.company_tickers().values():
+        tickers = self.company_tickers()
+        for item in tickers.values():
             if item["ticker"].upper() == ticker_upper:
                 return normalize_cik(item["cik_str"])
+        # Berkshire-style: everyone types BRK.B / BRK/A, SEC lists BRK-B /
+        # BRK-A (hyphen). Fall back to the hyphenated form before giving up.
+        normalized = ticker_upper.replace(".", "-").replace("/", "-")
+        if normalized != ticker_upper:
+            for item in tickers.values():
+                if item["ticker"].upper() == normalized:
+                    return normalize_cik(item["cik_str"])
         raise KeyError(f"Ticker not found in SEC company_tickers.json: {ticker}")
 
     def submissions(self, cik: str | int) -> dict[str, Any]:

@@ -2,6 +2,7 @@ import datetime as dt
 
 from tickerlens.data.xbrl import (
     Metric,
+    UnsupportedFilerError,
     balance_sheet_metric,
     concept_facts,
     extract_recent_quarterly_financials,
@@ -1568,3 +1569,15 @@ def test_same_split_seen_by_two_filings_rescales_only_once() -> None:
     # The post-split Q1-2026 fact (filed after the first restating filing)
     # is left alone by the neighbor-consistency check.
     assert by_end[dt.date(2026, 3, 31)] == 1.23
+
+
+def test_ifrs_only_filer_raises_unsupported() -> None:
+    # Foreign private issuers (e.g. TSM) report under ifrs-full with no
+    # us-gaap taxonomy — previously a bare KeyError: 'us-gaap'.
+    companyfacts = {"facts": {"ifrs-full": {"ProfitLoss": {"units": {"USD": []}}}}}
+    try:
+        quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    except UnsupportedFilerError as exc:
+        assert "US-GAAP" in str(exc)
+    else:
+        raise AssertionError("expected UnsupportedFilerError")

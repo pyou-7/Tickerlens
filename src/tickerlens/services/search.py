@@ -82,6 +82,9 @@ def search_companies(query: str, entries: list[dict[str, str]]) -> list[SearchRe
     q = query.strip().lower()
     if not q:
         return []
+    # Berkshire-style: a typed "brk.b" should match SEC's "BRK-B". Normalize
+    # only the ticker comparisons — company names keep their punctuation.
+    tq = q.replace(".", "-").replace("/", "-")
     exact: list[dict[str, str]] = []
     ticker_prefix: list[dict[str, str]] = []
     name_prefix: list[dict[str, str]] = []
@@ -89,13 +92,13 @@ def search_companies(query: str, entries: list[dict[str, str]]) -> list[SearchRe
     for entry in entries:
         ticker = entry["ticker"].lower()
         name = entry["name"].lower()
-        if ticker == q:
+        if ticker == tq:
             exact.append(entry)
-        elif ticker.startswith(q):
+        elif ticker.startswith(tq):
             ticker_prefix.append(entry)
         elif name.startswith(q):
             name_prefix.append(entry)
-        elif q in ticker or q in name:
+        elif tq in ticker or q in name:
             contains.append(entry)
     ranked: list[dict[str, str]] = []
     for bucket in (exact, ticker_prefix, name_prefix, contains):

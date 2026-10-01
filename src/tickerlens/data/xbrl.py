@@ -729,6 +729,16 @@ def _select_tag_facts(
 _GAP_FILL_MAX_STALENESS_DAYS = 365
 
 
+class UnsupportedFilerError(Exception):
+    """Raised when a filer's companyfacts carry no US-GAAP taxonomy.
+
+    Foreign private issuers (e.g. TSM) report under IFRS (``ifrs-full``);
+    the concept chains in this module are US-GAAP tags, so there is nothing
+    to extract. Callers surface this as "not supported" instead of letting
+    a bare ``KeyError: 'us-gaap'`` through.
+    """
+
+
 def _chain_candidates(
     companyfacts: dict[str, Any],
     tags: tuple[str, ...],
@@ -755,7 +765,14 @@ def _chain_candidates(
     stale ``Revenues`` (640 days behind) stays out while AT&T's recently
     superseded plain OpCF tag (181 days behind) still backfills.
     """
-    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap_root = companyfacts.get("facts", {})
+    if "us-gaap" not in us_gaap_root:
+        have = ", ".join(sorted(us_gaap_root)) or "none"
+        raise UnsupportedFilerError(
+            f"no US-GAAP facts (reports under {have}); "
+            "Tickerlens supports US-GAAP filers only"
+        )
+    us_gaap = us_gaap_root["us-gaap"]
     candidates: list[tuple[str, list[XbrlFact], dt.date | None]] = []
     for tag in tags:
         units = us_gaap.get(tag, {}).get("units", {})

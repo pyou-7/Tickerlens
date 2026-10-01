@@ -109,3 +109,12 @@ def test_sibling_tickers_empty_for_single_class() -> None:
 
 def test_sibling_tickers_empty_for_unknown_cik() -> None:
     assert sibling_tickers("0000000000", "ZZZ", SIBLING_ENTRIES) == []
+
+
+def test_dot_ticker_matches_hyphenated_sec_ticker() -> None:
+    entries = ENTRIES + [
+        {"ticker": "BRK-B", "name": "Berkshire Hathaway Inc.", "cik": "0001067983"},
+        {"ticker": "BRK-A", "name": "Berkshire Hathaway Inc.", "cik": "0001067983"},
+    ]
+    assert _tickers("brk.b", entries)[0] == "BRK-B"
+    assert _tickers("brk/a", entries)[0] == "BRK-A"
