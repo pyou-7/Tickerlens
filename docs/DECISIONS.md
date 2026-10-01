@@ -457,3 +457,12 @@ Format:
 **Why:** The initial UI was hardcoded to dark mode styles and lacked consistent spacing, responsive contrasts, and modern visual polish expected of premium financial intelligence platforms (Linear/Vercel/Stripe standards). Tables and KPI cards now seamlessly support both crisp light mode and high-contrast dark mode with high data density.
 **Alternatives considered:** CSS-only `@media (prefers-color-scheme)` without user toggle (rejected: users strongly prefer manual toggle override capability); full SPA migration with React/Vue (rejected: HTMX + Jinja2 architecture remains fast, simple, and dependency-free).
 
+---
+
+## 2026-09-30 — Interactive Microinteractions & AI Company UI Components
+
+**What:** Added interactive components modeled on Linear, Vercel, and Perplexity: global notification toast system (`showToast()`), global keyboard shortcut dialog (`?`), one-click ticker copy buttons with clipboard feedback, real-time client-side watchlist search filtering & tag pill filtering, visual valuation upside progress meter with collapsible methodology accordion, visual head-to-head proportion bars in company compare (`vs.html`), and one-click "Copy Table (TSV)" for exporting financial statements straight to Excel/Google Sheets.
+**Why:** Modern AI tools communicate state and feedback immediately. Microinteractions (like toasts on copy, visual proportion gauges, and live search filtering) eliminate UI friction and make dense financial data intuitive and enjoyable to explore.
+**Alternatives considered:** External toast/modal libraries (rejected: lightweight Alpine.js declarative bindings keep bundle zero-dependency).
+
+

@@ -77,7 +77,24 @@
     }
   </script>
 </head>
-<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-gray-950 selection:bg-indigo-500/20 dark:selection:bg-indigo-500/30 selection:text-indigo-900 dark:selection:text-indigo-200 transition-colors duration-150">
+<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-gray-950 selection:bg-indigo-500/20 dark:selection:bg-indigo-500/30 selection:text-indigo-900 dark:selection:text-indigo-200 transition-colors duration-150"
+      x-data="{
+        shortcutsOpen: false,
+        toasts: [],
+        addToast(msg, type='info', duration=3200) {
+          const id = Date.now() + Math.random();
+          this.toasts.push({ id, msg, type });
+          setTimeout(() => {
+            this.removeToast(id);
+          }, duration);
+        },
+        removeToast(id) {
+          this.toasts = this.toasts.filter(t => t.id !== id);
+        }
+      }"
+      @show-toast.window="addToast($event.detail.msg, $event.detail.type || 'info', $event.detail.duration || 3200)"
+      @toggle-shortcuts.window="shortcutsOpen = !shortcutsOpen"
+      @keydown.window.escape="shortcutsOpen = false">
   <!-- Top HTMX Progress Bar -->
   <div id="htmx-progress"></div>
 
@@ -91,15 +108,22 @@
         </a>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2.5 sm:gap-3">
         <!-- Search Combobox Container in persistent header -->
-        <div class="relative w-56 sm:w-72">
+        <div class="relative w-52 sm:w-72">
           <input data-search-combobox type="text" placeholder="Search ticker or company…"
                  aria-label="Search companies"
                  id="nav-search-input"
                  class="w-full rounded-xl bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 pl-3.5 pr-10 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:focus:ring-indigo-500/60 focus:bg-white dark:focus:bg-gray-950 transition shadow-inner" />
           <kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500 shadow-xs">⌘K</kbd>
         </div>
+
+        <!-- Keyboard Shortcuts Help Button -->
+        <button type="button" @click="shortcutsOpen = true"
+                class="hidden sm:flex items-center justify-center w-8 h-8 rounded-xl border border-slate-200/80 dark:border-gray-800 bg-slate-100 dark:bg-gray-900 text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-mono transition shadow-inner cursor-pointer"
+                title="Keyboard Shortcuts (?)">
+          ?
+        </button>
 
         <!-- Theme Switcher: Light / Dark / System -->
         <div x-data="{
@@ -170,9 +194,89 @@
     {% block content %}{% endblock %}
   </main>
 
+  <!-- Interactive Toast Notification Container -->
+  <div class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="pointer-events-auto flex items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-white/95 dark:bg-gray-900/95 border border-slate-200/90 dark:border-gray-800 text-slate-800 dark:text-gray-100 shadow-xl backdrop-blur-xl text-xs font-medium transition-all duration-200 animate-in slide-in-from-bottom-2">
+        <div class="flex items-center gap-2.5">
+          <template x-if="t.type === 'success'">
+            <span class="w-5 h-5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 font-bold">✓</span>
+          </template>
+          <template x-if="t.type === 'warning'">
+            <span class="w-5 h-5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 font-bold">!</span>
+          </template>
+          <template x-if="t.type === 'info'">
+            <span class="w-5 h-5 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 font-bold">ℹ</span>
+          </template>
+          <span x-text="t.msg"></span>
+        </div>
+        <button @click="removeToast(t.id)" class="text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 p-0.5 transition cursor-pointer">✕</button>
+      </div>
+    </template>
+  </div>
+
+  <!-- Keyboard Shortcuts Help Modal -->
+  <div x-show="shortcutsOpen" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/70 backdrop-blur-sm"
+       @click.self="shortcutsOpen = false">
+    <div class="w-full max-w-md rounded-3xl bg-white dark:bg-gray-900 border border-slate-200/90 dark:border-gray-800 p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
+        <div class="flex items-center gap-2.5">
+          <span class="w-7 h-7 rounded-xl bg-indigo-600/10 dark:bg-indigo-600/25 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-xs font-mono font-bold">⌘</span>
+          <h3 class="text-sm font-bold text-slate-900 dark:text-white">Keyboard Shortcuts</h3>
+        </div>
+        <button @click="shortcutsOpen = false" class="text-slate-400 hover:text-slate-600 dark:hover:text-gray-300 p-1 cursor-pointer">✕</button>
+      </div>
+      <div class="space-y-2 text-xs">
+        <div class="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/40">
+          <span class="text-slate-600 dark:text-gray-300">Quick Search</span>
+          <kbd class="font-mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-gray-700 font-semibold">⌘K / Ctrl+K</kbd>
+        </div>
+        <div class="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/40">
+          <span class="text-slate-600 dark:text-gray-300">Toggle Theme (Light / Dark / System)</span>
+          <kbd class="font-mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-gray-700 font-semibold">T</kbd>
+        </div>
+        <div class="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/40">
+          <span class="text-slate-600 dark:text-gray-300">Go to Home</span>
+          <kbd class="font-mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-gray-700 font-semibold">G then H</kbd>
+        </div>
+        <div class="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/40">
+          <span class="text-slate-600 dark:text-gray-300">Show Shortcuts Help</span>
+          <kbd class="font-mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-gray-700 font-semibold">?</kbd>
+        </div>
+        <div class="flex items-center justify-between py-2 px-2.5 rounded-xl hover:bg-slate-50 dark:hover:bg-gray-800/40">
+          <span class="text-slate-600 dark:text-gray-300">Close Dialog / Unfocus</span>
+          <kbd class="font-mono bg-slate-100 dark:bg-gray-800 px-2 py-0.5 rounded text-[11px] border border-slate-200 dark:border-gray-700 font-semibold">Esc</kbd>
+        </div>
+      </div>
+      <div class="pt-3 border-t border-slate-100 dark:border-gray-800 text-[11px] text-slate-400 dark:text-gray-500 text-center">
+        Press <kbd class="font-mono font-semibold text-slate-600 dark:text-gray-300">Esc</kbd> to dismiss
+      </div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', path='js/search.js') }}"></script>
   <script>
+    // Global toast helper
+    window.showToast = function(msg, type = 'info', duration = 3200) {
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { msg, type, duration } }));
+    };
+
+    // Global copy to clipboard helper
+    window.copyToClipboard = function(text, label = 'Copied to clipboard!') {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          window.showToast(label, 'success');
+        }).catch(() => {
+          window.showToast('Could not copy to clipboard', 'warning');
+        });
+      }
+    };
+
+    let lastKey = null;
+    let lastKeyTime = 0;
     document.addEventListener('keydown', (e) => {
+      // ⌘K or Ctrl+K search focus
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         const hero = document.getElementById('ticker-input');
@@ -182,7 +286,39 @@
           target.focus();
           target.select();
         }
+        return;
       }
+
+      // Ignore shortcuts if user is typing in form inputs
+      const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+      if (['input', 'textarea', 'select'].includes(activeTag) || (document.activeElement && document.activeElement.isContentEditable)) {
+        return;
+      }
+
+      const now = Date.now();
+      if (e.key === '?' || (e.key === '/' && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('toggle-shortcuts'));
+      } else if (e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        const current = localStorage.getItem('tickerlens_theme') || 'system';
+        const next = current === 'system' ? 'light' : (current === 'light' ? 'dark' : 'system');
+        localStorage.setItem('tickerlens_theme', next);
+        const isDark = (next === 'dark') || (next === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (isDark) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+        window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: next, isDark } }));
+        window.showToast(`Theme switched to ${next.toUpperCase()}`, 'info');
+      } else if (e.key.toLowerCase() === 'h' && lastKey === 'g' && (now - lastKeyTime < 1000)) {
+        e.preventDefault();
+        window.location.href = '/';
+      }
+
+      lastKey = e.key.toLowerCase();
+      lastKeyTime = now;
     });
 
     // Wire body htmx-request class for progress bar
