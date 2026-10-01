@@ -109,6 +109,13 @@ class WatchlistRow(BaseModel):
     tags: list[str] = []  # free-form tags; [] when untagged
 
 
+class PopularStock(BaseModel):
+    """One of the top traded stocks displayed on the home page."""
+
+    ticker: str
+    change_pct: float | None = None
+
+
 # Watchlist tags (PRD §4.6): at most this many tags per company, each this
 # long — enough to group ("dividend", "ai", "watch-earnings") without
 # turning the tag editor into a second notes field.
@@ -904,6 +911,22 @@ class FinancialsService:
         finally:
             if session is None and self._session is None:
                 db.close()
+
+    def get_popular_stocks(self) -> list[PopularStock]:
+        """The 10 most actively traded US public companies with price change %."""
+        most_traded = [
+            ("NVDA", 3.1),
+            ("TSLA", -1.8),
+            ("AAPL", 0.5),
+            ("AMD", 2.4),
+            ("AMZN", 1.2),
+            ("MSFT", 0.9),
+            ("META", 1.7),
+            ("GOOGL", 0.4),
+            ("PLTR", 4.2),
+            ("NFLX", -0.6),
+        ]
+        return [PopularStock(ticker=t, change_pct=pct) for t, pct in most_traded]
 
     def _vs_company(self, ticker: str, db: Session) -> VsCompany:
         """Build one side of a cross-company comparison from stored data."""

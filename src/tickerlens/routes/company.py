@@ -31,6 +31,7 @@ def home(request: Request) -> HTMLResponse:
         context={
             "watchlist": _svc.get_watchlist(),
             "benchmarks": _svc.get_benchmarks(),
+            "popular_stocks": _svc.get_popular_stocks(),
         },
     )
 

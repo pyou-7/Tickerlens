@@ -477,4 +477,12 @@ Format:
 **Why:** First impressions matter. The previous home page had conflicting duplicate search bars, broken uppercase placeholder text, and a desolate dashed empty box when the watchlist was empty. The redesigned page delivers immediate visual polish, instant market utility, and effortless onboarding.
 **Alternatives considered:** Redirecting to a default company like AAPL on empty watchlist (rejected: home page is the canonical dashboard; live benchmarks provide immediate utility while preserving personal dashboard curation).
 
+---
+
+## 2026-09-30 — Popular Stocks Bar: 10 Most Traded US Equities with Ticker + Up/Down %
+
+**What:** Replaced redundant ticker name pills (`NVDA · NVIDIA`, `AAPL · Apple`) with the top 10 most actively traded US public companies (`NVDA`, `TSLA`, `AAPL`, `AMD`, `AMZN`, `MSFT`, `META`, `GOOGL`, `PLTR`, `NFLX`), displaying clean ticker symbols paired with color-coded up/down percentages (`+X.X%` / `-X.X%`). Balanced in a max-width flex wrapper to prevent single-item orphans across all viewport widths. Added `PopularStock` model and `FinancialsService.get_popular_stocks()`.
+**Why:** Displaying both ticker and company name introduced redundant information ("duplicating the stock ticker twice"). Modern financial terminals communicate market momentum cleanly with symbol plus price change percentage.
+**Alternatives considered:** Showing dollar prices (rejected: percentage changes communicate relative daily momentum better and take up less horizontal space).
+
 

@@ -173,3 +173,14 @@ def test_get_benchmarks_returns_stored_benchmarks(session: Session) -> None:
     tickers = [b.ticker for b in benchmarks]
     assert "NVDA" in tickers
     assert "AAPL" in tickers
+
+
+def test_get_popular_stocks_returns_ten_most_traded(session: Session) -> None:
+    svc = _svc(session)
+    popular = svc.get_popular_stocks()
+    assert len(popular) == 10
+    tickers = [s.ticker for s in popular]
+    assert tickers == ["NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "META", "GOOGL", "PLTR", "NFLX"]
+    # Verify each has a valid change_pct
+    for s in popular:
+        assert isinstance(s.change_pct, float)
