@@ -448,3 +448,12 @@ Format:
 ### 2026-09-30 — Cross-company compare (PRD §4.2, new mode)
 **What:** `GET /company/{ticker}/vs/{other}` — latest reported quarter side by side: revenue, net income, EPS diluted, FCF (each with its own YoY badge), share price, market cap, valuation signal badge, implied upside. "⇄ Compare" peer-ticker form on the Overview page; swap form on the vs page (both Alpine-driven, no extra JS). Either side fetched on first visit when not stored; 404 when unloadable.
 **Why:** Retail investors constantly ask "KO or PEP?" — this answers it with filing-derived numbers plus the valuation signal. Deliberately neutral presentation (no winner highlighting): the signal badge is the model's verdict, the table is just data. A note appears when the two latest quarters don't align (different fiscal calendars) rather than silently comparing mismatched periods.
+
+---
+
+## 2026-09-30 — Frontend Design Overhaul: Light/Dark/System Theme Engine, Zero-FOUC, and High-Density Financial UI
+
+**What:** Comprehensive frontend redesign across all templates (`base.html`, `index.html`, `overview.html`, `detail.html`, `detail_data.html`, `compare.html`, `vs.html`, `404.html`) and static assets. Added a zero-FOUC inline theme detector in `<head>`, a 3-way segmented theme switcher (`light` | `dark` | `system`) persisted in `localStorage`, Inter + JetBrains Mono typography with global `tabular-nums` financial alignment, dynamic theme-reactive Plotly charts via custom `theme-changed` events, and card-grid vs dense-table view switching on the home dashboard.
+**Why:** The initial UI was hardcoded to dark mode styles and lacked consistent spacing, responsive contrasts, and modern visual polish expected of premium financial intelligence platforms (Linear/Vercel/Stripe standards). Tables and KPI cards now seamlessly support both crisp light mode and high-contrast dark mode with high data density.
+**Alternatives considered:** CSS-only `@media (prefers-color-scheme)` without user toggle (rejected: users strongly prefer manual toggle override capability); full SPA migration with React/Vue (rejected: HTMX + Jinja2 architecture remains fast, simple, and dependency-free).
+

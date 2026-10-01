@@ -25,41 +25,69 @@
 {% block content %}
 
 <!-- Breadcrumb -->
-<div class="mb-6 text-sm text-gray-500 flex items-center gap-4">
-  <a href="/company/{{ ctx.ticker }}" class="text-indigo-400 hover:text-indigo-300 transition">← Back to Overview</a>
-  <a href="/company/{{ ctx.ticker }}/compare" class="text-gray-500 hover:text-gray-300 transition">⇄ Compare periods</a>
+<div class="mb-6 text-sm text-slate-500 dark:text-gray-400 flex items-center gap-4">
+  <a href="/company/{{ ctx.ticker }}" class="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-medium transition">
+    <span>←</span>
+    <span>Back to Overview</span>
+  </a>
+  <span class="text-slate-300 dark:text-gray-700">/</span>
+  <a href="/company/{{ ctx.ticker }}/compare" class="text-slate-500 hover:text-slate-800 dark:hover:text-gray-200 transition">
+    ⇄ Compare Periods
+  </a>
 </div>
 
 <!-- Company header -->
-<div class="flex items-start justify-between mb-8">
-  <div>
-    <div class="flex items-center gap-3 mb-1 flex-wrap">
-      <h1 class="text-3xl font-bold text-white">{{ ctx.name }}</h1>
+<div class="flex flex-col md:flex-row items-start justify-between gap-4 mb-8 pb-6 border-b border-slate-200/80 dark:border-gray-800/80">
+  <div class="space-y-1.5">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ ctx.name }}</h1>
       {% if ctx.ticker %}
-        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ ctx.ticker }}</span>
+        <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-0.5 shadow-xs">
+          {{ ctx.ticker }}
+        </span>
       {% endif %}
       {% if also_trades_as %}
-        <span class="text-xs text-gray-500">Also trades as {% for sib in also_trades_as %}<a href="/company/{{ sib }}" class="font-mono text-indigo-400 hover:text-indigo-300">{{ sib }}</a>{{ ", " if not loop.last }}{% endfor %}</span>
+        <span class="text-xs text-slate-500 dark:text-gray-400">
+          Also trades as
+          {% for sib in also_trades_as %}
+            <a href="/company/{{ sib }}" class="font-mono font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">{{ sib }}</a>{{ ", " if not loop.last }}
+          {% endfor %}
+        </span>
       {% endif %}
       {% if ctx.sector %}
-        <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ ctx.sector }}</span>
+        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-gray-700/60 px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">
+          {{ ctx.sector }}
+        </span>
       {% endif %}
     </div>
-    <div class="flex items-center gap-4 text-sm text-gray-400 flex-wrap">
+    <div class="flex items-baseline gap-4 text-sm text-slate-600 dark:text-gray-400 flex-wrap">
       {% if ctx.last_price %}
-        <span class="text-white font-semibold text-lg">{{ fmt_price(ctx.last_price) }}</span>
+        <span class="text-xl font-bold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ fmt_price(ctx.last_price) }}</span>
       {% endif %}
       {% if ctx.market_cap %}
-        <span>Mkt Cap {{ fmt_large(ctx.market_cap) }}</span>
+        <span class="text-xs text-slate-500 dark:text-gray-400 tabular-nums">Market Cap <strong class="text-slate-800 dark:text-slate-200">{{ fmt_large(ctx.market_cap) }}</strong></span>
       {% endif %}
     </div>
+  </div>
+
+  <!-- Full History ZIP Download Button -->
+  <div class="shrink-0 flex items-center gap-2">
+    <a href="/company/{{ ctx.ticker }}/download/history.zip"
+       download
+       class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition"
+       title="Download all stored quarterly statements in a single ZIP">
+      <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+      </svg>
+      <span>Full History (ZIP)</span>
+    </a>
   </div>
 </div>
 
 <!-- Time slicer controls -->
 <div
   x-data="{ gran: '{{ ctx.granularity }}', yr: '{{ ctx.selected_year }}' }"
-  class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4"
+  class="mb-8 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-4 sm:p-5 shadow-xs"
 >
   <form
     id="slicer-form"
@@ -68,98 +96,103 @@
     hx-swap="innerHTML"
     hx-trigger="change"
     hx-indicator="#slicer-spinner"
-    class="flex flex-wrap items-center gap-4"
+    class="flex flex-wrap items-center justify-between gap-4"
   >
-    <!-- Granularity radio toggle (styled as buttons) -->
-    <div class="flex rounded-lg overflow-hidden border border-gray-700 text-sm">
-      <label class="cursor-pointer">
-        <input type="radio" name="granularity" value="quarterly" class="sr-only"
-               x-model="gran" {% if ctx.granularity == 'quarterly' %}checked{% endif %}>
-        <span class="block px-4 py-1.5 transition"
-              :class="gran === 'quarterly' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">
-          Quarterly
-        </span>
-      </label>
-      <label class="cursor-pointer">
-        <input type="radio" name="granularity" value="yearly" class="sr-only"
-               x-model="gran" {% if ctx.granularity == 'yearly' %}checked{% endif %}>
-        <span class="block px-4 py-1.5 transition"
-              :class="gran === 'yearly' ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'">
-          Yearly
-        </span>
-      </label>
-    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <!-- Granularity radio toggle (styled as buttons) -->
+      <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-950 p-0.5 text-xs shadow-inner">
+        <label class="cursor-pointer">
+          <input type="radio" name="granularity" value="quarterly" class="sr-only"
+                 x-model="gran" {% if ctx.granularity == 'quarterly' %}checked{% endif %}>
+          <span class="block px-3.5 py-1.5 rounded-lg transition font-medium"
+                :class="gran === 'quarterly' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'">
+            Quarterly
+          </span>
+        </label>
+        <label class="cursor-pointer">
+          <input type="radio" name="granularity" value="yearly" class="sr-only"
+                 x-model="gran" {% if ctx.granularity == 'yearly' %}checked{% endif %}>
+          <span class="block px-3.5 py-1.5 rounded-lg transition font-medium"
+                :class="gran === 'yearly' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-sm' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'">
+            Yearly
+          </span>
+        </label>
+      </div>
 
-    <!-- Quarter selector -->
-    <div x-show="gran === 'quarterly'" x-cloak>
-      <select
-        name="quarter"
-        :disabled="gran !== 'quarterly'"
-        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        {% for opt in ctx.quarter_options %}
-          <option value="{{ opt }}" {% if opt == ctx.selected_quarter %}selected{% endif %}>{{ opt }}</option>
-        {% endfor %}
-      </select>
-    </div>
+      <!-- Quarter selector -->
+      <div x-show="gran === 'quarterly'" x-cloak class="flex items-center gap-1.5">
+        <span class="text-xs font-semibold text-slate-500 dark:text-gray-400">Quarter:</span>
+        <select
+          name="quarter"
+          :disabled="gran !== 'quarterly'"
+          class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner font-medium"
+        >
+          {% for opt in ctx.quarter_options %}
+            <option value="{{ opt }}" {% if opt == ctx.selected_quarter %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+      </div>
 
-    <!-- Year selector -->
-    <div x-show="gran === 'yearly'" x-cloak class="flex items-center gap-2">
-      <select
-        name="year"
-        x-model="yr"
-        :disabled="gran !== 'yearly'"
-        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        {% for yr in ctx.year_options %}
-          <option value="{{ yr }}" {% if yr == ctx.selected_year %}selected{% endif %}>FY{{ yr }}</option>
-        {% endfor %}
-      </select>
-      <!-- Single-year ZIP (PRD §4.8, fourth slice). Alpine-bound href tracks
-           the live select value so the archive always matches the chosen
-           year; plain link so it also works without HTMX. -->
-      <a :href="`/company/{{ ctx.ticker }}/download/year.zip?year=${yr}`"
-         download
-         class="text-xs text-gray-400 hover:text-white underline underline-offset-2 whitespace-nowrap"
-      >⇓ Year (ZIP)</a>
-    </div>
+      <!-- Year selector -->
+      <div x-show="gran === 'yearly'" x-cloak class="flex items-center gap-2">
+        <span class="text-xs font-semibold text-slate-500 dark:text-gray-400">Year:</span>
+        <select
+          name="year"
+          x-model="yr"
+          :disabled="gran !== 'yearly'"
+          class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner font-medium"
+        >
+          {% for yr in ctx.year_options %}
+            <option value="{{ yr }}" {% if yr == ctx.selected_year %}selected{% endif %}>FY{{ yr }}</option>
+          {% endfor %}
+        </select>
+        <!-- Single-year ZIP -->
+        <a :href="`/company/{{ ctx.ticker }}/download/year.zip?year=${yr}`"
+           download
+           class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline px-2 py-1 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40"
+        >⇓ Year (ZIP)</a>
+      </div>
 
-    <!-- Chart range window (PRD §4.2, range-mode slice 1). Quarterly only;
-         bounds the trend chart; KPI cards and tables still follow the
-         selected period above. Submitted with the form on change. -->
-    <div x-show="gran === 'quarterly'" x-cloak class="flex items-center gap-2">
-      <span class="text-xs text-gray-500">Chart:</span>
-      <select
-        name="chart_from"
-        :disabled="gran !== 'quarterly'"
-        aria-label="Chart range start"
-        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        {% for opt in ctx.chart_range_options %}
-          <option value="{{ opt }}" {% if opt == ctx.selected_chart_from %}selected{% endif %}>{{ opt }}</option>
-        {% endfor %}
-      </select>
-      <span class="text-xs text-gray-500">→</span>
-      <select
-        name="chart_to"
-        :disabled="gran !== 'quarterly'"
-        aria-label="Chart range end"
-        class="rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-      >
-        {% for opt in ctx.chart_range_options %}
-          <option value="{{ opt }}" {% if opt == ctx.selected_chart_to %}selected{% endif %}>{{ opt }}</option>
-        {% endfor %}
-      </select>
-      <!-- Range-view ZIP (PRD §4.8, third slice). Plain link so it works
-           without JS; mirrors the chart window's current selection. -->
-      <a href="/company/{{ ctx.ticker }}/download/range.zip?chart_from={{ ctx.selected_chart_from | urlencode }}&chart_to={{ ctx.selected_chart_to | urlencode }}"
-         download
-         class="text-xs text-gray-400 hover:text-white underline underline-offset-2 whitespace-nowrap"
-      >⇓ Range (ZIP)</a>
+      <!-- Chart range window (PRD §4.2). Quarterly only. -->
+      <div x-show="gran === 'quarterly'" x-cloak class="flex items-center gap-1.5 flex-wrap pl-2 border-l border-slate-200 dark:border-gray-800">
+        <span class="text-xs font-semibold text-slate-500 dark:text-gray-400">Range:</span>
+        <select
+          name="chart_from"
+          :disabled="gran !== 'quarterly'"
+          aria-label="Chart range start"
+          class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner"
+        >
+          {% for opt in ctx.chart_range_options %}
+            <option value="{{ opt }}" {% if opt == ctx.selected_chart_from %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+        <span class="text-xs text-slate-400 dark:text-gray-600">→</span>
+        <select
+          name="chart_to"
+          :disabled="gran !== 'quarterly'"
+          aria-label="Chart range end"
+          class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner"
+        >
+          {% for opt in ctx.chart_range_options %}
+            <option value="{{ opt }}" {% if opt == ctx.selected_chart_to %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+        <!-- Range-view ZIP -->
+        <a href="/company/{{ ctx.ticker }}/download/range.zip?chart_from={{ ctx.selected_chart_from | urlencode }}&chart_to={{ ctx.selected_chart_to | urlencode }}"
+           download
+           class="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline px-2 py-1 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40 whitespace-nowrap"
+        >⇓ Range (ZIP)</a>
+      </div>
     </div>
 
     <!-- Loading indicator -->
-    <span id="slicer-spinner" class="htmx-indicator text-xs text-gray-500">Loading…</span>
+    <span id="slicer-spinner" class="htmx-indicator text-xs text-indigo-600 dark:text-indigo-400 flex items-center gap-1 font-medium">
+      <svg class="animate-spin h-3.5 w-3.5 text-indigo-500" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      <span>Updating…</span>
+    </span>
   </form>
 </div>
 
@@ -168,11 +201,36 @@
   {% include "partials/detail_data.html" %}
 </div>
 
+<!-- Floating Sticky Action Pill (Print PDF & ZIP) -->
+<div class="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-slate-900/90 dark:bg-gray-900/90 text-white border border-slate-700/80 dark:border-gray-700/80 backdrop-blur-xl px-4 py-2 shadow-2xl print:hidden transition">
+  <button
+    type="button"
+    onclick="window.print()"
+    class="text-xs font-semibold text-slate-200 hover:text-white flex items-center gap-1.5 cursor-pointer"
+  >
+    <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+    </svg>
+    <span>Print PDF</span>
+  </button>
+  <span class="w-px h-3.5 bg-slate-700"></span>
+  <a
+    href="/company/{{ ctx.ticker }}/download/history.zip"
+    download
+    class="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5"
+  >
+    <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+    </svg>
+    <span>History ZIP</span>
+  </a>
+</div>
+
 <style>
   [x-cloak] { display: none !important; }
   .htmx-indicator { display: none; }
-  .htmx-request .htmx-indicator { display: inline; }
-  .htmx-request.htmx-indicator { display: inline; }
+  .htmx-request .htmx-indicator { display: inline-flex; }
+  .htmx-request.htmx-indicator { display: inline-flex; }
 </style>
 
 <script>
@@ -186,27 +244,30 @@
     var eps     = data.eps;
     var revenueB = revenue.map(function(v) { return v === null ? null : v / 1e9; });
 
-    var darkBg  = '#111827';
-    var gridCol = '#1f2937';
-    var textCol = '#9ca3af';
+    var isDark = document.documentElement.classList.contains('dark');
+    var darkBg  = isDark ? '#030712' : '#ffffff';
+    var gridCol = isDark ? '#1f2937' : '#f1f5f9';
+    var textCol = isDark ? '#9ca3af' : '#475569';
 
     var traceRevenue = {
-      x: labels, y: revenueB, name: 'Revenue (B)',
+      x: labels, y: revenueB, name: 'Revenue ($B)',
       type: 'scatter', mode: 'lines+markers',
-      line: { color: '#6366f1', width: 2 }, marker: { size: 5 },
+      line: { color: '#6366f1', width: 2.5 },
+      marker: { size: 6, color: '#6366f1' },
       connectgaps: false, yaxis: 'y',
     };
     var traceEPS = {
-      x: labels, y: eps, name: 'EPS Diluted',
+      x: labels, y: eps, name: 'EPS Diluted ($)',
       type: 'scatter', mode: 'lines+markers',
-      line: { color: '#34d399', width: 2 }, marker: { size: 5 },
+      line: { color: '#10b981', width: 2.5 },
+      marker: { size: 6, color: '#10b981' },
       connectgaps: false, yaxis: 'y2',
     };
     var layout = {
       paper_bgcolor: darkBg, plot_bgcolor: darkBg,
-      margin: { t: 10, r: 60, b: 60, l: 60 },
-      font: { color: textCol, size: 11 },
-      legend: { orientation: 'h', x: 0, y: -0.25, font: { color: textCol } },
+      margin: { t: 20, r: 60, b: 60, l: 60 },
+      font: { color: textCol, size: 11, family: 'Inter, system-ui, sans-serif' },
+      legend: { orientation: 'h', x: 0, y: -0.28, font: { color: textCol } },
       xaxis: { tickangle: -35, gridcolor: gridCol, linecolor: gridCol, tickfont: { size: 10 } },
       yaxis: {
         title: { text: 'Revenue ($B)', font: { color: '#6366f1', size: 11 } },
@@ -214,7 +275,7 @@
         tickprefix: '$', ticksuffix: 'B', tickfont: { size: 10 },
       },
       yaxis2: {
-        title: { text: 'EPS ($)', font: { color: '#34d399', size: 11 } },
+        title: { text: 'EPS ($)', font: { color: '#10b981', size: 11 } },
         overlaying: 'y', side: 'right', showgrid: false,
         tickprefix: '$', tickfont: { size: 10 },
       },
@@ -231,6 +292,9 @@
       renderTrendChart();
     }
   });
+
+  // Re-render chart on theme toggle
+  window.addEventListener('theme-changed', renderTrendChart);
 </script>
 
 {% endblock %}

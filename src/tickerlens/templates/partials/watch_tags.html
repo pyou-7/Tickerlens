@@ -1,11 +1,11 @@
 {# Watchlist tags (PRD §4.6). Inline editor on the Overview page —
    HTMX swaps this partial in place; plain POST redirects back. Tags are
    entered comma-separated, normalized server-side (max 5 × 20 chars). #}
-<div id="watch-tags" class="mt-2 max-w-md">
+<div id="watch-tags" class="mt-3 max-w-md">
   {% if tags %}
-  <div class="flex flex-wrap gap-1.5 mb-1.5">
+  <div class="flex flex-wrap gap-1.5 mb-2">
     {% for tag in tags %}
-    <span class="rounded-full bg-indigo-900/60 border border-indigo-500/40 px-2.5 py-0.5 text-indigo-300 text-xs">{{ tag }}</span>
+    <span class="rounded-md bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-2 py-0.5 text-indigo-700 dark:text-indigo-300 font-medium text-[11px]">#{{ tag }}</span>
     {% endfor %}
   </div>
   {% endif %}
@@ -13,12 +13,12 @@
         hx-post="/company/{{ ticker }}/watch/tags" hx-target="#watch-tags" hx-swap="outerHTML"
         class="flex gap-2">
     <input type="text" name="tags" value="{{ tags|join(', ') }}" maxlength="120"
-           placeholder="Add tags… (comma-separated, e.g. dividend, ai)"
+           placeholder="Add tags… (comma-separated, e.g. dividend, ai, core)"
            aria-label="Watchlist tags"
-           class="flex-1 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+           class="flex-1 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 text-xs px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner" />
     <button type="submit"
-            class="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
-      Save
+            class="rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-700 hover:border-slate-300 dark:hover:border-gray-600 transition shadow-xs cursor-pointer">
+      Save Tags
     </button>
   </form>
 </div>

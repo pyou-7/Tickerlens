@@ -42,7 +42,14 @@ Phase 1 is complete. Data flows end-to-end for one company: EDGAR fetch → XBRL
 
 ### Templates (`src/tickerlens/templates/`)
 
-- `base.html`, `index.html`, `company/overview.html`, `partials/` — Jinja2 templates. Phase 2 will flesh out `company/overview.html` to match PRD Section 4.1.
+- `base.html` — Zero-FOUC theme detector in `<head>`, Google Fonts (Inter + JetBrains Mono), `tabular-nums` formatting, HTMX progress bar, 3-way segmented theme switcher (`light`, `dark`, `system`) with custom `theme-changed` window events, and header search with `⌘K` keyboard shortcut.
+- `index.html` — Hero header with quick-action search and modern watchlist dashboard container.
+- `partials/watchlist.html` — Watchlist cards (Card Grid view) and dense table (Dense Table view) with persistent view preference via `localStorage`. Quick-pin shortcuts for empty states.
+- `company/overview.html` — Overview page with modern KPI cards, YoY percentage badges, interactive valuation signal card with target price and reasoning, and responsive action bar (Watch, Refresh, Compare).
+- `company/detail.html` & `partials/detail_data.html` — Time slicer with theme-reactive Plotly charts, quarterly/yearly selectors, metric × quarters range tables, tabbed statements (Income, Cash Flow, Balance Sheet), collapsible disclosures, and sticky full-history ZIP and period CSV download actions.
+- `company/compare.html` & `company/vs.html` — Intra-company two-period compare and cross-company head-to-head compare with delta pills and responsive tables.
+- `404.html` — Clean not found page with suggested company chips and back navigation.
+
 
 ### Scripts
 

@@ -1,56 +1,264 @@
-<div class="w-full max-w-md" id="watchlist-section">
-  <div class="flex items-center justify-between mb-2">
-    <h2 class="text-xs uppercase tracking-widest text-gray-500">Watchlist</h2>
-    <form action="/watchlist/refresh" method="post" class="inline"
-          hx-post="/watchlist/refresh" hx-target="#watchlist-section" hx-swap="outerHTML">
-      <button type="submit" title="Refresh quotes for all watched companies"
-              class="text-xs text-indigo-300 hover:text-indigo-100 border border-indigo-500/40 hover:border-indigo-400 rounded-lg px-2.5 py-1 transition">
-        ⟳ Refresh quotes
-      </button>
-    </form>
+<div id="watchlist-section" x-data="{
+  viewMode: localStorage.getItem('tl_watchlist_view') || 'grid',
+  setView(m) {
+    this.viewMode = m;
+    localStorage.setItem('tl_watchlist_view', m);
+  }
+}" class="w-full space-y-4">
+
+  <!-- Section Header -->
+  <div class="flex items-center justify-between pb-2 border-b border-slate-200/80 dark:border-gray-800/80">
+    <div class="flex items-center gap-3">
+      <h2 class="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+        <span>Pinned Watchlist</span>
+        <span class="rounded-full bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 text-xs px-2 py-0.5 font-mono">
+          {{ watchlist | length }}
+        </span>
+      </h2>
+      <span class="text-xs text-slate-400 dark:text-gray-500 hidden sm:inline">Tracked companies & valuation signals</span>
+    </div>
+
+    <div class="flex items-center gap-2.5">
+      <!-- Grid / Table View Switcher -->
+      <div class="flex items-center bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 rounded-xl p-0.5 text-xs shadow-inner">
+        <button type="button" @click="setView('grid')"
+                :class="viewMode === 'grid' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                class="p-1.5 rounded-lg transition" title="Card Grid View">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+          </svg>
+        </button>
+        <button type="button" @click="setView('table')"
+                :class="viewMode === 'table' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                class="p-1.5 rounded-lg transition" title="Dense Table View">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Refresh Quotes Button -->
+      <form action="/watchlist/refresh" method="post" class="inline"
+            hx-post="/watchlist/refresh" hx-target="#watchlist-section" hx-swap="outerHTML">
+        <button type="submit" title="Refresh quotes for all watched companies"
+                class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-indigo-300 dark:hover:border-indigo-800 rounded-xl px-3 py-1.5 transition shadow-xs cursor-pointer">
+          <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>Refresh</span>
+        </button>
+      </form>
+    </div>
   </div>
-  <div class="rounded-xl bg-gray-900 border border-gray-800 divide-y divide-gray-800">
-    {% for row in watchlist %}
-    <div class="flex items-center justify-between px-4 py-2.5 hover:bg-gray-800/50 transition">
-      <a href="/company/{{ row.ticker }}" class="flex items-center gap-3 min-w-0 flex-1">
-        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm shrink-0">{{ row.ticker }}</span>
-        <span class="min-w-0">
-          <span class="text-gray-300 text-sm truncate block">{{ row.name }}</span>
+
+  {% if watchlist %}
+    <!-- 1. CARD GRID VIEW -->
+    <div x-show="viewMode === 'grid'" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" x-cloak>
+      {% for row in watchlist %}
+      <div class="group relative rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-900/60 transition-all duration-150 flex flex-col justify-between gap-4">
+        <div>
+          <!-- Card Header: Ticker, Name, Actions -->
+          <div class="flex items-start justify-between gap-3">
+            <a href="/company/{{ row.ticker }}" class="flex items-center gap-2.5 min-w-0 flex-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">
+              <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-xs px-2.5 py-1 shrink-0">
+                {{ row.ticker }}
+              </span>
+              <span class="text-sm font-semibold text-slate-900 dark:text-white truncate block">
+                {{ row.name }}
+              </span>
+            </a>
+            <form action="/company/{{ row.ticker }}/watch/remove?next=home" method="post" class="inline"
+                  hx-post="/company/{{ row.ticker }}/watch/remove?next=home" hx-target="#watchlist-section" hx-swap="outerHTML">
+              <button type="submit" title="Remove {{ row.ticker }} from watchlist"
+                      class="text-slate-400 hover:text-rose-500 dark:text-gray-600 dark:hover:text-rose-400 p-1 transition cursor-pointer">
+                ✕
+              </button>
+            </form>
+          </div>
+
+          <!-- Price & Valuation Signal -->
+          <div class="mt-4 flex items-baseline justify-between gap-2">
+            <div>
+              {% if row.last_price is not none %}
+              <div class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white tabular-nums">
+                ${{ "%.2f"|format(row.last_price) }}
+              </div>
+              {% endif %}
+              {% if row.market_cap is not none %}
+              <div class="text-[11px] text-slate-400 dark:text-gray-500 tabular-nums mt-0.5">
+                {%- set abs = row.market_cap | abs -%}
+                Mkt Cap
+                {%- if abs >= 1_000_000_000_000 %} ${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+                {%- elif abs >= 1_000_000_000 %} ${{ "%.2f"|format(abs / 1_000_000_000) }}B
+                {%- elif abs >= 1_000_000 %} ${{ "%.2f"|format(abs / 1_000_000) }}M
+                {%- else %} ${{ "%.0f"|format(abs) }}
+                {%- endif %}
+              </div>
+              {% endif %}
+            </div>
+
+            {% if row.signal %}
+              {% if row.signal == "Strong Buy" %}
+                <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  ▲ {{ row.signal }}
+                </span>
+              {% elif row.signal == "Buy" %}
+                <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-green-50 dark:bg-green-950/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800">
+                  ▲ {{ row.signal }}
+                </span>
+              {% elif row.signal == "Hold" %}
+                <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                  ◆ {{ row.signal }}
+                </span>
+              {% elif row.signal in ["Sell", "Strong Sell"] %}
+                <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                  ▼ {{ row.signal }}
+                </span>
+              {% else %}
+                <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
+                  {{ row.signal }}
+                </span>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Notes & Tags -->
+        <div class="pt-3 border-t border-slate-100 dark:border-gray-800/80 space-y-2">
           {% if row.note %}
-          <span class="text-gray-500 text-xs italic truncate block" title="{{ row.note }}">{{ row.note }}</span>
+          <div class="text-xs text-slate-500 dark:text-gray-400 italic flex items-start gap-1.5 line-clamp-2" title="{{ row.note }}">
+            <span class="text-indigo-400 text-xs shrink-0">📝</span>
+            <span>{{ row.note }}</span>
+          </div>
           {% endif %}
           {% if row.tags %}
-          <span class="flex flex-wrap gap-1 mt-1">
+          <div class="flex flex-wrap gap-1.5">
             {% for tag in row.tags %}
-            <span class="rounded-full bg-indigo-900/60 border border-indigo-500/40 px-1.5 py-px text-indigo-300 text-[10px]">{{ tag }}</span>
+            <span class="rounded-md bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 text-[10px] font-medium px-2 py-0.5 border border-slate-200/60 dark:border-gray-700/60">
+              #{{ tag }}
+            </span>
             {% endfor %}
-          </span>
+          </div>
           {% endif %}
-        </span>
-      </a>
-      <div class="flex items-center gap-3 shrink-0">
-        {% if row.last_price is not none %}
-        <span class="text-white text-sm font-medium">${{ "%.2f"|format(row.last_price) }}</span>
-        {% endif %}
-        {% if row.signal %}
-          {% if row.signal in ["Strong Buy", "Buy"] %}
-            {% set sc = "text-green-400" %}
-          {% elif row.signal == "Hold" %}
-            {% set sc = "text-yellow-300" %}
-          {% elif row.signal in ["Sell", "Strong Sell"] %}
-            {% set sc = "text-red-400" %}
-          {% else %}
-            {% set sc = "text-gray-400" %}
-          {% endif %}
-        <span class="text-xs font-semibold {{ sc }}">{{ row.signal }}</span>
-        {% endif %}
-        <form action="/company/{{ row.ticker }}/watch/remove?next=home" method="post" class="inline"
-              hx-post="/company/{{ row.ticker }}/watch/remove?next=home" hx-target="#watchlist-section" hx-swap="outerHTML">
-          <button type="submit" title="Remove {{ row.ticker }} from watchlist"
-                  class="text-gray-600 hover:text-red-400 text-sm px-1 transition">✕</button>
-        </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- 2. DENSE TABLE VIEW -->
+    <div x-show="viewMode === 'table'" class="overflow-x-auto rounded-2xl border border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-xs" x-cloak>
+      <table class="w-full text-left text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-slate-200/80 dark:border-gray-800 bg-slate-50/75 dark:bg-gray-950/60 text-xs font-semibold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
+            <th class="py-3 px-4">Ticker</th>
+            <th class="py-3 px-4">Company</th>
+            <th class="py-3 px-4 text-right">Price</th>
+            <th class="py-3 px-4 text-right">Market Cap</th>
+            <th class="py-3 px-4 text-center">Valuation Signal</th>
+            <th class="py-3 px-4">Notes & Tags</th>
+            <th class="py-3 px-4 text-center">Action</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60 text-xs font-sans">
+          {% for row in watchlist %}
+          <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition-colors">
+            <td class="py-3 px-4 font-mono font-bold">
+              <a href="/company/{{ row.ticker }}" class="text-indigo-600 dark:text-indigo-400 hover:underline">
+                {{ row.ticker }}
+              </a>
+            </td>
+            <td class="py-3 px-4 font-medium text-slate-900 dark:text-white truncate max-w-xs">
+              <a href="/company/{{ row.ticker }}" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                {{ row.name }}
+              </a>
+            </td>
+            <td class="py-3 px-4 text-right tabular-nums font-semibold text-slate-900 dark:text-white">
+              {% if row.last_price is not none %}${{ "%.2f"|format(row.last_price) }}{% else %}—{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right tabular-nums text-slate-600 dark:text-gray-400">
+              {% if row.market_cap is not none %}
+                {%- set abs = row.market_cap | abs -%}
+                {%- if abs >= 1_000_000_000_000 %} ${{ "%.2f"|format(abs / 1_000_000_000_000) }}T
+                {%- elif abs >= 1_000_000_000 %} ${{ "%.2f"|format(abs / 1_000_000_000) }}B
+                {%- elif abs >= 1_000_000 %} ${{ "%.2f"|format(abs / 1_000_000) }}M
+                {%- else %} ${{ "%.0f"|format(abs) }}
+                {%- endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td class="py-3 px-4 text-center">
+              {% if row.signal %}
+                {% if row.signal in ["Strong Buy", "Buy"] %}
+                  <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    ▲ {{ row.signal }}
+                  </span>
+                {% elif row.signal == "Hold" %}
+                  <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                    ◆ {{ row.signal }}
+                  </span>
+                {% elif row.signal in ["Sell", "Strong Sell"] %}
+                  <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                    ▼ {{ row.signal }}
+                  </span>
+                {% else %}
+                  <span class="text-slate-400 dark:text-gray-500">—</span>
+                {% endif %}
+              {% else %}—{% endif %}
+            </td>
+            <td class="py-3 px-4 max-w-sm">
+              <div class="flex flex-col gap-1">
+                {% if row.note %}
+                <span class="text-slate-500 dark:text-gray-400 italic truncate" title="{{ row.note }}">
+                  {{ row.note }}
+                </span>
+                {% endif %}
+                {% if row.tags %}
+                <div class="flex flex-wrap gap-1">
+                  {% for tag in row.tags %}
+                  <span class="rounded bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 text-[10px] px-1.5 py-0.2 border border-slate-200/60 dark:border-gray-700/60">
+                    #{{ tag }}
+                  </span>
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </div>
+            </td>
+            <td class="py-3 px-4 text-center">
+              <form action="/company/{{ row.ticker }}/watch/remove?next=home" method="post" class="inline"
+                    hx-post="/company/{{ row.ticker }}/watch/remove?next=home" hx-target="#watchlist-section" hx-swap="outerHTML">
+                <button type="submit" title="Remove {{ row.ticker }} from watchlist"
+                        class="text-slate-400 hover:text-rose-500 dark:text-gray-500 dark:hover:text-rose-400 px-2 py-1 transition cursor-pointer">
+                  ✕
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  {% else %}
+    <!-- Empty Watchlist State -->
+    <div class="rounded-3xl border border-dashed border-slate-200 dark:border-gray-800 p-10 text-center bg-white/50 dark:bg-gray-900/30">
+      <div class="mx-auto w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xl font-bold mb-4 shadow-sm">
+        ☆
+      </div>
+      <h3 class="text-base font-semibold text-slate-900 dark:text-white">Your watchlist is currently empty</h3>
+      <p class="text-xs text-slate-500 dark:text-gray-400 mt-1 max-w-sm mx-auto">
+        Search any company and click "☆ Watch" to pin it to your personal investment dashboard.
+      </p>
+
+      <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
+        <span class="text-xs text-slate-400 dark:text-gray-500 font-medium mr-1">Popular companies:</span>
+        {% for pop in ["AAPL", "NVDA", "MSFT", "GOOGL", "AMZN"] %}
+        <a href="/company/{{ pop }}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:border-indigo-300 dark:hover:border-indigo-800 text-xs font-mono font-semibold text-slate-700 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition shadow-xs">
+          <span>{{ pop }}</span>
+          <span class="text-[10px] text-slate-400 dark:text-gray-500">→</span>
+        </a>
+        {% endfor %}
       </div>
     </div>
-    {% endfor %}
-  </div>
+  {% endif %}
+
 </div>

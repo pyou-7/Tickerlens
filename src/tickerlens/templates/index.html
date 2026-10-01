@@ -1,27 +1,47 @@
 {% extends "base.html" %}
-{% block title %}Tickerlens{% endblock %}
+{% block title %}Tickerlens — Financial Research & Fundamentals{% endblock %}
+
 {% block content %}
-<div class="flex flex-col items-center justify-center min-h-[60vh] gap-6">
-  <h1 class="text-4xl font-bold text-white">Tickerlens</h1>
+<div class="space-y-10">
+  <!-- Hero Section -->
+  <div class="relative overflow-hidden rounded-3xl bg-gradient-to-b from-indigo-50/70 via-white to-transparent dark:from-indigo-950/20 dark:via-gray-900/30 dark:to-transparent border border-slate-200/80 dark:border-gray-800/80 p-8 sm:p-12 text-center shadow-xs">
+    <div class="max-w-2xl mx-auto space-y-4">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 text-xs font-semibold tracking-wide">
+        <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+        SEC EDGAR Fundamentals & Valuation
+      </div>
+      <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight">
+        Financial Intelligence, <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Demystified</span>
+      </h1>
+      <p class="text-slate-600 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl mx-auto">
+        Search any US public company for normalized 10-Q/10-K financial statements, peer benchmarking, valuation signals, and primary source filing archives.
+      </p>
 
-  {% if watchlist %}
-    {% include "partials/watchlist.html" %}
-  {% endif %}
-
-  <p class="text-gray-400">Search a ticker or company name to get started.</p>
-  <form action="" method="get" id="ticker-form"
-        onsubmit="var v=document.getElementById('ticker-input').value.trim();if(v)window.location='/company/'+encodeURIComponent(v.toUpperCase());return false;"
-        class="flex gap-2 w-full max-w-md">
-    <div class="flex-1">
-      <input data-search-combobox id="ticker-input" type="text" placeholder="AAPL or Apple"
-             aria-label="Search ticker or company"
-             class="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 uppercase"
-             autofocus />
+      <!-- Prominent Search Bar -->
+      <div class="pt-2 max-w-lg mx-auto">
+        <form action="" method="get" id="ticker-form"
+              onsubmit="var v=document.getElementById('ticker-input').value.trim();if(v)window.location='/company/'+encodeURIComponent(v.toUpperCase());return false;"
+              class="relative flex items-center shadow-lg shadow-indigo-500/5 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700/80 p-1.5 focus-within:ring-2 focus-within:ring-indigo-500/50 transition">
+          <div class="pl-3.5 pr-2 text-slate-400 dark:text-gray-500">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
+          <input data-search-combobox id="ticker-input" type="text" placeholder="Search ticker or company (e.g. AAPL, NVDA, Microsoft)..."
+                 aria-label="Search ticker or company"
+                 class="w-full bg-transparent border-0 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 text-sm focus:outline-none uppercase pr-16 py-2 font-medium"
+                 autofocus />
+          <kbd class="pointer-events-none absolute right-24 top-1/2 -translate-y-1/2 rounded border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500">⌘K</kbd>
+          <button type="submit"
+                  class="rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 text-xs font-semibold transition shrink-0 shadow-sm cursor-pointer">
+            Explore
+          </button>
+        </form>
+      </div>
     </div>
-    <button type="submit"
-            class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2 font-semibold text-white transition">
-      Go
-    </button>
-  </form>
+  </div>
+
+  <!-- Pinned Companies Dashboard -->
+  {% include "partials/watchlist.html" %}
 </div>
 {% endblock %}

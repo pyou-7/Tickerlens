@@ -21,142 +21,168 @@
 {% macro delta_pct(pct) %}
   {%- if pct is not none -%}
     {%- if pct >= 0 -%}
-      <span class="inline-flex items-center gap-0.5 text-green-400 text-xs font-medium">▲ +{{ "%.1f"|format(pct) }}%</span>
+      <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 tabular-nums">
+        ▲ +{{ "%.1f"|format(pct) }}%
+      </span>
     {%- else -%}
-      <span class="inline-flex items-center gap-0.5 text-red-400 text-xs font-medium">▼ {{ "%.1f"|format(pct) }}%</span>
+      <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 tabular-nums">
+        ▼ {{ "%.1f"|format(pct) }}%
+      </span>
     {%- endif -%}
   {%- else -%}
-    <span class="text-gray-600 text-xs">—</span>
+    <span class="text-slate-400 dark:text-gray-600 text-xs font-medium">—</span>
   {%- endif -%}
 {% endmacro %}
 
 {% macro cmp_row(label, a_val, b_val, delta, money=true) %}
-<tr class="border-t border-gray-800 hover:bg-gray-900/50">
-  <td class="px-4 py-3 text-sm text-gray-400">{{ label }}</td>
-  <td class="px-4 py-3 text-sm text-white text-right font-medium">{% if money %}{{ fmt_large(a_val) }}{% else %}{{ fmt_eps(a_val) }}{% endif %}</td>
-  <td class="px-4 py-3 text-sm text-white text-right font-medium">{% if money %}{{ fmt_large(b_val) }}{% else %}{{ fmt_eps(b_val) }}{% endif %}</td>
-  <td class="px-4 py-3 text-sm text-gray-300 text-right">{% if money %}{{ fmt_large(delta.absolute) }}{% else %}{{ fmt_eps(delta.absolute) }}{% endif %}</td>
-  <td class="px-4 py-3 text-right">{{ delta_pct(delta.pct) }}</td>
+<tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+  <td class="px-5 py-3 text-slate-700 dark:text-gray-300 font-medium whitespace-nowrap">{{ label }}</td>
+  <td class="px-5 py-3 text-slate-900 dark:text-white text-right font-semibold tabular-nums whitespace-nowrap">{% if money %}{{ fmt_large(a_val) }}{% else %}{{ fmt_eps(a_val) }}{% endif %}</td>
+  <td class="px-5 py-3 text-slate-900 dark:text-white text-right font-semibold tabular-nums whitespace-nowrap">{% if money %}{{ fmt_large(b_val) }}{% else %}{{ fmt_eps(b_val) }}{% endif %}</td>
+  <td class="px-5 py-3 text-slate-700 dark:text-gray-300 text-right font-medium tabular-nums whitespace-nowrap">{% if money %}{{ fmt_large(delta.absolute) }}{% else %}{{ fmt_eps(delta.absolute) }}{% endif %}</td>
+  <td class="px-5 py-3 text-right whitespace-nowrap">{{ delta_pct(delta.pct) }}</td>
 </tr>
 {% endmacro %}
 
 {% block content %}
 
 <!-- Breadcrumb -->
-<div class="mb-6 text-sm text-gray-500 flex items-center gap-4">
-  <a href="/company/{{ ctx.ticker }}/detail" class="text-indigo-400 hover:text-indigo-300 transition">← Back to Detail</a>
-  <a href="/company/{{ ctx.ticker }}" class="text-gray-500 hover:text-gray-300 transition">Overview</a>
+<div class="mb-6 text-sm text-slate-500 dark:text-gray-400 flex items-center gap-4">
+  <a href="/company/{{ ctx.ticker }}/detail" class="inline-flex items-center gap-1 text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 font-medium transition">
+    <span>←</span>
+    <span>Back to Detail</span>
+  </a>
+  <span class="text-slate-300 dark:text-gray-700">/</span>
+  <a href="/company/{{ ctx.ticker }}" class="text-slate-500 hover:text-slate-800 dark:hover:text-gray-200 transition">
+    Overview
+  </a>
 </div>
 
 <!-- Company header -->
-<div class="mb-8">
-  <div class="flex items-center gap-3 mb-1 flex-wrap">
-    <h1 class="text-3xl font-bold text-white">{{ ctx.name }}</h1>
+<div class="mb-8 pb-6 border-b border-slate-200/80 dark:border-gray-800/80">
+  <div class="flex items-center gap-3 mb-1.5 flex-wrap">
+    <h1 class="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ ctx.name }}</h1>
     {% if ctx.ticker %}
-      <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ ctx.ticker }}</span>
+      <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-0.5 shadow-xs">{{ ctx.ticker }}</span>
     {% endif %}
     {% if also_trades_as %}
-      <span class="text-xs text-gray-500">Also trades as {% for sib in also_trades_as %}<a href="/company/{{ sib }}" class="font-mono text-indigo-400 hover:text-indigo-300">{{ sib }}</a>{{ ", " if not loop.last }}{% endfor %}</span>
+      <span class="text-xs text-slate-500 dark:text-gray-400 flex items-center gap-1">
+        Also trades as
+        {% for sib in also_trades_as %}
+          <a href="/company/{{ sib }}" class="font-mono font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">{{ sib }}</a>{{ ", " if not loop.last }}
+        {% endfor %}
+      </span>
     {% endif %}
     {% if ctx.sector %}
-      <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ ctx.sector }}</span>
+      <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-gray-700/60 px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">{{ ctx.sector }}</span>
     {% endif %}
   </div>
-  <p class="text-gray-500 text-sm">Side-by-side period comparison — deltas are {{ ctx.period_a_label }} minus {{ ctx.period_b_label }}.</p>
+  <p class="text-slate-500 dark:text-gray-400 text-sm">Side-by-side period comparison — deltas are {{ ctx.period_a_label }} minus {{ ctx.period_b_label }}.</p>
 </div>
 
 <!-- Compare controls -->
-<div class="mb-8 rounded-xl bg-gray-900 border border-gray-800 p-4">
+<div class="mb-8 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs">
   <div class="flex items-center gap-2 mb-4 flex-wrap">
-    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Mode</span>
-    <a href="/company/{{ ctx.ticker }}/compare?mode=quarterly"
-       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.mode == 'quarterly' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">Quarterly</a>
-    <a href="/company/{{ ctx.ticker }}/compare?mode=yearly"
-       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.mode == 'yearly' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">Yearly</a>
+    <span class="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 mr-1">Mode</span>
+    <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-950 p-0.5 text-xs shadow-inner">
+      <a href="/company/{{ ctx.ticker }}/compare?mode=quarterly"
+         class="px-3.5 py-1.5 rounded-lg transition font-medium {{ 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs' if ctx.mode == 'quarterly' else 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200' }}">Quarterly</a>
+      <a href="/company/{{ ctx.ticker }}/compare?mode=yearly"
+         class="px-3.5 py-1.5 rounded-lg transition font-medium {{ 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs' if ctx.mode == 'yearly' else 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200' }}">Yearly</a>
+    </div>
   </div>
+
   {% if ctx.mode == "quarterly" %}
   <div class="flex items-center gap-2 mb-4 flex-wrap">
-    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Presets</span>
-    <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=yoy"
-       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'yoy' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">YoY</a>
-    <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=qoq"
-       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == 'qoq' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">QoQ</a>
-    <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=5y"
-       class="rounded-lg px-3 py-1.5 text-sm border transition {{ 'bg-indigo-600 border-indigo-600 text-white' if ctx.preset == '5y' else 'border-gray-700 text-gray-300 hover:border-indigo-500' }}">5Y</a>
+    <span class="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 mr-1">Presets</span>
+    <div class="flex items-center gap-1.5">
+      <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=yoy"
+         class="rounded-xl px-3 py-1 text-xs border font-medium transition {{ 'bg-indigo-600 border-indigo-600 text-white shadow-xs' if ctx.preset == 'yoy' else 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/80 text-slate-600 dark:text-gray-300 hover:border-indigo-500' }}">YoY</a>
+      <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=qoq"
+         class="rounded-xl px-3 py-1 text-xs border font-medium transition {{ 'bg-indigo-600 border-indigo-600 text-white shadow-xs' if ctx.preset == 'qoq' else 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/80 text-slate-600 dark:text-gray-300 hover:border-indigo-500' }}">QoQ</a>
+      <a href="/company/{{ ctx.ticker }}/compare?period_a={{ ctx.period_a_label | urlencode }}&preset=5y"
+         class="rounded-xl px-3 py-1 text-xs border font-medium transition {{ 'bg-indigo-600 border-indigo-600 text-white shadow-xs' if ctx.preset == '5y' else 'border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/80 text-slate-600 dark:text-gray-300 hover:border-indigo-500' }}">5Y</a>
+    </div>
   </div>
   <form method="get" action="/company/{{ ctx.ticker }}/compare" class="flex items-end gap-3 flex-wrap">
     <input type="hidden" name="mode" value="quarterly">
     <div>
-      <label for="period_a" class="block text-xs text-gray-500 mb-1">Period A (focus)</label>
-      <select id="period_a" name="period_a" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+      <label for="period_a" class="block text-xs font-semibold text-slate-500 dark:text-gray-400 mb-1">Period A (focus)</label>
+      <select id="period_a" name="period_a" class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 px-3 py-1.5 text-xs text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500/50 shadow-inner">
         {% for opt in ctx.quarter_options %}
           <option value="{{ opt }}" {% if opt == ctx.period_a_label %}selected{% endif %}>{{ opt }}</option>
         {% endfor %}
       </select>
     </div>
     <div>
-      <label for="period_b" class="block text-xs text-gray-500 mb-1">Period B (baseline)</label>
-      <select id="period_b" name="period_b" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+      <label for="period_b" class="block text-xs font-semibold text-slate-500 dark:text-gray-400 mb-1">Period B (baseline)</label>
+      <select id="period_b" name="period_b" class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 px-3 py-1.5 text-xs text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500/50 shadow-inner">
         {% for opt in ctx.quarter_options %}
           <option value="{{ opt }}" {% if opt == ctx.period_b_label %}selected{% endif %}>{{ opt }}</option>
         {% endfor %}
       </select>
     </div>
-    <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
+    <button type="submit" class="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-xs transition cursor-pointer">Compare</button>
   </form>
   {% else %}
   <form method="get" action="/company/{{ ctx.ticker }}/compare" class="flex items-end gap-3 flex-wrap">
     <input type="hidden" name="mode" value="yearly">
     <div>
-      <label for="year_a" class="block text-xs text-gray-500 mb-1">Year A (focus)</label>
-      <select id="year_a" name="year_a" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+      <label for="year_a" class="block text-xs font-semibold text-slate-500 dark:text-gray-400 mb-1">Year A (focus)</label>
+      <select id="year_a" name="year_a" class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 px-3 py-1.5 text-xs text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500/50 shadow-inner">
         {% for opt in ctx.year_options %}
           <option value="{{ opt }}" {% if "FY" ~ opt == ctx.period_a_label %}selected{% endif %}>FY{{ opt }}</option>
         {% endfor %}
       </select>
     </div>
     <div>
-      <label for="year_b" class="block text-xs text-gray-500 mb-1">Year B (baseline)</label>
-      <select id="year_b" name="year_b" class="rounded-lg bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white">
+      <label for="year_b" class="block text-xs font-semibold text-slate-500 dark:text-gray-400 mb-1">Year B (baseline)</label>
+      <select id="year_b" name="year_b" class="rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 px-3 py-1.5 text-xs text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500/50 shadow-inner">
         {% for opt in ctx.year_options %}
           <option value="{{ opt }}" {% if "FY" ~ opt == ctx.period_b_label %}selected{% endif %}>FY{{ opt }}</option>
         {% endfor %}
       </select>
     </div>
-    <button type="submit" class="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-sm font-medium text-white transition">Compare</button>
+    <button type="submit" class="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-xs transition cursor-pointer">Compare</button>
   </form>
   {% endif %}
-  <div class="mt-4 flex items-center gap-2">
-    <span class="text-xs uppercase tracking-wider text-gray-500 mr-1">Export</span>
+
+  <div class="mt-4 pt-3 border-t border-slate-100 dark:border-gray-800/80 flex items-center gap-2">
+    <span class="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 mr-1">Export</span>
     <a href="/company/{{ ctx.ticker }}/compare/download?mode={{ ctx.mode }}&period_a={{ ctx.period_a_label | urlencode }}&period_b={{ ctx.period_b_label | urlencode }}{% if ctx.preset %}&preset={{ ctx.preset }}{% endif %}{% if ctx.mode == 'yearly' %}&year_a={{ ctx.a.fiscal_year }}&year_b={{ ctx.b.fiscal_year }}{% endif %}"
-       class="rounded-lg px-3 py-1.5 text-sm border border-gray-700 text-gray-300 hover:border-indigo-500 transition">⇓ Compare (ZIP)</a>
+       class="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800/80 text-slate-700 dark:text-gray-300 hover:border-indigo-500 transition shadow-xs">
+      <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Compare (ZIP)
+    </a>
   </div>
 </div>
 
 <!-- Comparison table -->
-<div class="rounded-xl bg-gray-950 border border-gray-800 overflow-hidden mb-8">
-  <table class="w-full">
-    <thead>
-      <tr class="text-left">
-        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500">Metric</th>
-        <th class="px-4 py-3 text-xs uppercase tracking-wider text-indigo-300 text-right">{{ ctx.period_a_label }}</th>
-        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">{{ ctx.period_b_label }}</th>
-        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">Δ (A − B)</th>
-        <th class="px-4 py-3 text-xs uppercase tracking-wider text-gray-500 text-right">Δ %</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{ cmp_row("Revenue", ctx.a.kpi.revenue, ctx.b.kpi.revenue, ctx.deltas.revenue) }}
-      {{ cmp_row("Net Income", ctx.a.kpi.net_income, ctx.b.kpi.net_income, ctx.deltas.net_income) }}
-      {{ cmp_row("EPS (Basic)", ctx.a.kpi.eps_basic, ctx.b.kpi.eps_basic, ctx.deltas.eps_basic, money=false) }}
-      {{ cmp_row("EPS (Diluted)", ctx.a.kpi.eps_diluted, ctx.b.kpi.eps_diluted, ctx.deltas.eps_diluted, money=false) }}
-      {{ cmp_row("Free Cash Flow", ctx.a.kpi.free_cash_flow, ctx.b.kpi.free_cash_flow, ctx.deltas.free_cash_flow) }}
-      {{ cmp_row("Total Assets", ctx.a.balance_sheet.total_assets, ctx.b.balance_sheet.total_assets, ctx.deltas.total_assets) }}
-      {{ cmp_row("Total Liabilities", ctx.a.balance_sheet.total_liabilities, ctx.b.balance_sheet.total_liabilities, ctx.deltas.total_liabilities) }}
-      {{ cmp_row("Total Equity", ctx.a.balance_sheet.total_equity, ctx.b.balance_sheet.total_equity, ctx.deltas.total_equity) }}
-      {{ cmp_row("Cash & Equivalents", ctx.a.balance_sheet.cash_and_equivalents, ctx.b.balance_sheet.cash_and_equivalents, ctx.deltas.cash_and_equivalents) }}
-    </tbody>
-  </table>
+<div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 overflow-hidden mb-8 shadow-xs">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-left border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/30">
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400">Metric</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-indigo-600 dark:text-indigo-400 text-right">{{ ctx.period_a_label }}</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">{{ ctx.period_b_label }}</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">Δ (A − B)</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">Δ %</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
+        {{ cmp_row("Revenue", ctx.a.kpi.revenue, ctx.b.kpi.revenue, ctx.deltas.revenue) }}
+        {{ cmp_row("Net Income", ctx.a.kpi.net_income, ctx.b.kpi.net_income, ctx.deltas.net_income) }}
+        {{ cmp_row("EPS (Basic)", ctx.a.kpi.eps_basic, ctx.b.kpi.eps_basic, ctx.deltas.eps_basic, money=false) }}
+        {{ cmp_row("EPS (Diluted)", ctx.a.kpi.eps_diluted, ctx.b.kpi.eps_diluted, ctx.deltas.eps_diluted, money=false) }}
+        {{ cmp_row("Free Cash Flow", ctx.a.kpi.free_cash_flow, ctx.b.kpi.free_cash_flow, ctx.deltas.free_cash_flow) }}
+        {{ cmp_row("Total Assets", ctx.a.balance_sheet.total_assets, ctx.b.balance_sheet.total_assets, ctx.deltas.total_assets) }}
+        {{ cmp_row("Total Liabilities", ctx.a.balance_sheet.total_liabilities, ctx.b.balance_sheet.total_liabilities, ctx.deltas.total_liabilities) }}
+        {{ cmp_row("Total Equity", ctx.a.balance_sheet.total_equity, ctx.b.balance_sheet.total_equity, ctx.deltas.total_equity) }}
+        {{ cmp_row("Cash & Equivalents", ctx.a.balance_sheet.cash_and_equivalents, ctx.b.balance_sheet.cash_and_equivalents, ctx.deltas.cash_and_equivalents) }}
+      </tbody>
+    </table>
+  </div>
 </div>
 
 {% endblock %}

@@ -24,15 +24,21 @@
 
 {# kpi_card: label, value string, yoy pct (float or none) #}
 {% macro kpi_card(label, value, yoy_pct) %}
-<div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-4">
-  <div class="text-xs text-gray-500 mb-1">{{ label }}</div>
-  <div class="text-2xl font-bold text-white">{{ value }}</div>
-  <div class="mt-1 h-4">
+<div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-900/60 transition flex flex-col justify-between">
+  <div>
+    <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-1.5">{{ label }}</div>
+    <div class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ value }}</div>
+  </div>
+  <div class="mt-2.5 min-h-[1.25rem]">
     {%- if yoy_pct is not none -%}
       {%- if yoy_pct >= 0 -%}
-        <span class="text-green-400 text-xs font-medium">+{{ "%.1f"|format(yoy_pct) }}% YoY</span>
+        <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+          ▲ +{{ "%.1f"|format(yoy_pct) }}% YoY
+        </span>
       {%- else -%}
-        <span class="text-red-400 text-xs font-medium">{{ "%.1f"|format(yoy_pct) }}% YoY</span>
+        <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+          ▼ {{ "%.1f"|format(yoy_pct) }}% YoY
+        </span>
       {%- endif -%}
     {%- endif -%}
   </div>
@@ -42,68 +48,94 @@
 {% block content %}
 
 <!-- Company header -->
-<div class="flex items-start justify-between mb-8">
-  <div>
-    <div class="flex items-center gap-3 mb-1 flex-wrap">
-      <h1 class="text-3xl font-bold text-white">{{ overview.name }}</h1>
+<div class="flex flex-col md:flex-row items-start justify-between gap-6 mb-8 pb-6 border-b border-slate-200/80 dark:border-gray-800/80">
+  <div class="space-y-2 max-w-2xl">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ overview.name }}</h1>
       {% if overview.ticker %}
-        <span class="rounded bg-indigo-900/60 px-2 py-0.5 text-indigo-300 font-mono text-sm">{{ overview.ticker }}</span>
+        <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-1 shadow-xs">
+          {{ overview.ticker }}
+        </span>
       {% endif %}
       {% if also_trades_as %}
-        <span class="text-xs text-gray-500">Also trades as {% for sib in also_trades_as %}<a href="/company/{{ sib }}" class="font-mono text-indigo-400 hover:text-indigo-300">{{ sib }}</a>{{ ", " if not loop.last }}{% endfor %}</span>
+        <span class="text-xs text-slate-500 dark:text-gray-400 flex items-center gap-1">
+          Also trades as
+          {% for sib in also_trades_as %}
+            <a href="/company/{{ sib }}" class="font-mono font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">{{ sib }}</a>{{ ", " if not loop.last }}
+          {% endfor %}
+        </span>
       {% endif %}
       {% if overview.sector %}
-        <span class="rounded bg-gray-800 px-2 py-0.5 text-gray-400 text-xs">{{ overview.sector }}</span>
+        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-gray-700/60 px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">
+          {{ overview.sector }}
+        </span>
       {% endif %}
     </div>
-    <div class="flex items-center gap-4 text-sm text-gray-400 flex-wrap">
+
+    <div class="flex items-baseline gap-4 text-sm text-slate-600 dark:text-gray-400 flex-wrap">
       {% if overview.last_price %}
-        <span class="text-white font-semibold text-lg">{{ fmt_price(overview.last_price) }}</span>
+        <span class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ fmt_price(overview.last_price) }}</span>
       {% endif %}
       {% if overview.market_cap %}
-        <span>Mkt Cap {{ fmt_large(overview.market_cap) }}</span>
+        <span class="text-xs font-medium text-slate-500 dark:text-gray-400 tabular-nums">Market Cap <strong class="text-slate-800 dark:text-slate-200">{{ fmt_large(overview.market_cap) }}</strong></span>
       {% endif %}
     </div>
   </div>
 
-  <div class="flex gap-2">
-    <div>
+  <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
+    <div class="shrink-0">
       {% set ticker = overview.ticker %}
       {% include "partials/watch_button.html" %}
-      {% if watching %}
-        {% include "partials/watch_note.html" %}
-        {% include "partials/watch_tags.html" %}
-      {% endif %}
     </div>
-    <form method="post" action="/company/{{ overview.ticker }}/refresh">
+
+    <form method="post" action="/company/{{ overview.ticker }}/refresh" class="shrink-0">
       <button type="submit"
-              class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
-        ↻ Refresh
+              title="Refresh company fundamentals and Yahoo price quote"
+              class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
+        <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>Refresh</span>
       </button>
     </form>
+
     <form @submit.prevent="if ($event.target.peer.value.trim()) location = '/company/{{ overview.ticker }}/vs/' + $event.target.peer.value.trim().toUpperCase()"
-          class="flex gap-2" x-data>
+          class="flex gap-1.5" x-data>
       <input type="text" name="peer" maxlength="10" placeholder="Compare vs… (ticker)" aria-label="Compare with ticker"
-             class="w-36 rounded-lg bg-gray-800 border border-gray-700 text-white text-sm px-3 py-1.5 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+             class="w-36 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-3 py-2 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner" />
       <button type="submit"
-              class="rounded-lg border border-gray-700 px-4 py-1.5 text-sm text-gray-300 hover:bg-gray-800 transition">
+              class="rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
         ⇄ Compare
       </button>
     </form>
   </div>
 </div>
 
+{% if watching %}
+<!-- Watchlist Notes & Tags Editor -->
+<div class="mb-8 p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40">
+  <div class="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-400 mb-1">Watchlist Annotations</div>
+  {% include "partials/watch_note.html" %}
+  {% include "partials/watch_tags.html" %}
+</div>
+{% endif %}
+
 <!-- Description -->
 {% if overview.description %}
-<p class="text-gray-400 text-sm leading-relaxed mb-8 max-w-3xl">{{ overview.description }}</p>
+<div class="rounded-2xl bg-white dark:bg-gray-900/60 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs mb-8 max-w-4xl">
+  <h2 class="text-xs uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500 mb-2">Company Overview</h2>
+  <p class="text-slate-700 dark:text-gray-300 text-sm leading-relaxed">{{ overview.description }}</p>
+</div>
 {% endif %}
 
 <!-- Latest quarter snapshot -->
-<div class="mb-6">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">
-    Latest quarter — {{ overview.latest_label }}
-    <span class="normal-case text-gray-600 ml-1">(ended {{ overview.latest_period_end }})</span>
-  </h2>
+<div class="mb-8">
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+      Latest Quarter · <span class="text-slate-900 dark:text-white font-mono">{{ overview.latest_label }}</span>
+      <span class="font-normal text-slate-400 dark:text-gray-500 ml-1">(ended {{ overview.latest_period_end }})</span>
+    </h2>
+  </div>
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
     {{ kpi_card("Revenue", fmt_large(overview.latest_kpi.revenue), overview.yoy.revenue) }}
     {{ kpi_card("Net Income", fmt_large(overview.latest_kpi.net_income), overview.yoy.net_income) }}
@@ -114,12 +146,14 @@
 
 <!-- TTM snapshot -->
 <div class="mb-10">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">
-    Trailing twelve months (TTM)
-    {%- if overview.ttm_quarters < 4 %}
-      <span class="normal-case text-yellow-600 ml-1">({{ overview.ttm_quarters }}-quarter partial — limited history)</span>
-    {%- endif %}
-  </h2>
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+      Trailing Twelve Months (TTM)
+      {%- if overview.ttm_quarters < 4 %}
+        <span class="normal-case text-amber-600 dark:text-amber-400 ml-1">({{ overview.ttm_quarters }}-quarter partial)</span>
+      {%- endif %}
+    </h2>
+  </div>
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
     {{ kpi_card("Revenue", fmt_large(overview.ttm_kpi.revenue), none) }}
     {{ kpi_card("Net Income", fmt_large(overview.ttm_kpi.net_income), none) }}
@@ -131,68 +165,84 @@
 <!-- Valuation signal -->
 {% if valuation %}
 <div class="mb-10">
-  <h2 class="text-xs uppercase tracking-widest text-gray-500 mb-3">Valuation signal</h2>
-  <div class="rounded-xl bg-gray-900 border border-gray-800 px-5 py-5 max-w-3xl">
-    <div class="flex items-center gap-3 flex-wrap mb-4">
+  <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Valuation Signal & Price Target</h2>
+  <div class="rounded-3xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-6 sm:p-7 shadow-xs max-w-4xl space-y-5">
+    <div class="flex items-center gap-3 flex-wrap">
       {% set sig = valuation.signal %}
       {% if sig == "Strong Buy" %}
-        {% set badge = "bg-green-500/20 text-green-300 border-green-500/40" %}
+        {% set badge = "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800" %}
       {% elif sig == "Buy" %}
-        {% set badge = "bg-green-900/40 text-green-400 border-green-800" %}
+        {% set badge = "bg-green-50 dark:bg-green-950/50 text-green-700 dark:text-green-300 border-green-300 dark:border-green-800" %}
       {% elif sig == "Hold" %}
-        {% set badge = "bg-yellow-900/40 text-yellow-300 border-yellow-800" %}
-      {% elif sig == "Sell" %}
-        {% set badge = "bg-red-900/40 text-red-400 border-red-800" %}
-      {% elif sig == "Strong Sell" %}
-        {% set badge = "bg-red-500/20 text-red-300 border-red-500/40" %}
+        {% set badge = "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800" %}
+      {% elif sig in ["Sell", "Strong Sell"] %}
+        {% set badge = "bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800" %}
       {% else %}
-        {% set badge = "bg-gray-800 text-gray-300 border-gray-700" %}
+        {% set badge = "bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700" %}
       {% endif %}
-      <span class="rounded-lg border px-3 py-1 font-bold text-lg {{ badge }}">{{ sig }}</span>
-      <span class="text-xs text-gray-500">confidence: {{ valuation.confidence }}</span>
+      <span class="rounded-xl border px-3.5 py-1.5 font-extrabold text-lg tracking-tight {{ badge }} shadow-xs">
+        {{ sig }}
+      </span>
+      <span class="text-xs text-slate-400 dark:text-gray-500 font-medium">Confidence: <strong class="text-slate-700 dark:text-gray-300">{{ valuation.confidence | capitalize }}</strong></span>
       {% if signal_change %}
-      <span class="text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1">
+      <span class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-1 font-medium">
         Signal changed from {{ signal_change.previous_signal }} to {{ signal_change.current_signal }} since {{ signal_change.previous_date }}
       </span>
       {% endif %}
     </div>
-    <div class="flex items-baseline gap-6 flex-wrap mb-4">
+
+    <!-- Price Target & Implied Upside -->
+    <div class="flex items-baseline gap-8 flex-wrap pt-2 border-t border-slate-100 dark:border-gray-800/60">
       <div>
-        <div class="text-xs text-gray-500">Current price</div>
-        <div class="text-xl font-semibold text-white">{{ fmt_price(valuation.current_price) }}</div>
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Current Price</div>
+        <div class="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.current_price) }}</div>
       </div>
-      <div class="text-gray-600 text-xl">→</div>
+      <div class="text-slate-300 dark:text-gray-700 text-2xl font-light">→</div>
       <div>
-        <div class="text-xs text-gray-500">Model target</div>
-        <div class="text-xl font-semibold text-white">{{ fmt_price(valuation.target_price) }}</div>
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Model Target</div>
+        <div class="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.target_price) }}</div>
       </div>
       {% if valuation.upside_pct is not none %}
       <div>
-        <div class="text-xs text-gray-500">Implied upside</div>
-        <div class="text-xl font-bold {% if valuation.upside_pct >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Implied Upside</div>
+        <div class="text-2xl font-extrabold tabular-nums {% if valuation.upside_pct >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
           {{ "%+.1f"|format(valuation.upside_pct) }}%
         </div>
       </div>
       {% endif %}
     </div>
-    <ul class="list-disc list-inside text-sm text-gray-400 space-y-1 mb-3">
-      {% for point in valuation.reasoning %}
-      <li>{{ point }}</li>
-      {% endfor %}
-    </ul>
+
+    <!-- Reasoning Points -->
+    <div class="pt-2">
+      <div class="text-xs font-semibold text-slate-500 dark:text-gray-400 mb-2">Model Rationale:</div>
+      <ul class="text-sm text-slate-700 dark:text-gray-300 space-y-1.5 pl-1">
+        {% for point in valuation.reasoning %}
+        <li class="flex items-start gap-2">
+          <span class="text-indigo-500 shrink-0 font-bold">•</span>
+          <span>{{ point }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+
     {% if valuation.fcf_note %}
-    <p class="text-xs text-gray-500 mb-3">🔍 {{ valuation.fcf_note }}</p>
+    <p class="text-xs text-slate-500 dark:text-gray-400 bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3 border border-slate-100 dark:border-gray-800">
+      🔍 {{ valuation.fcf_note }}
+    </p>
     {% endif %}
-    <p class="text-xs text-gray-600">Model estimate based on SEC filings — not investment advice.</p>
+    <p class="text-[11px] text-slate-400 dark:text-gray-500 italic">
+      Fundamental model estimate based on SEC EDGAR filings and financial metrics. Not investment advice.
+    </p>
   </div>
 </div>
 {% endif %}
 
-<!-- View detail -->
-<div>
+<!-- Action to View Detail -->
+<div class="pt-2">
   <a href="/company/{{ overview.ticker }}/detail"
-     class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 font-semibold text-white transition text-sm">
-    View detailed periods →
+     class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 font-semibold text-white shadow-md shadow-indigo-600/20 hover:shadow-indigo-600/30 transition text-sm cursor-pointer">
+    <span>View Detailed Time Slicer & Statements</span>
+    <span>→</span>
   </a>
 </div>
 

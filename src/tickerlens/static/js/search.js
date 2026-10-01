@@ -47,8 +47,8 @@
 
     var dropdown = document.createElement("div");
     dropdown.className =
-      "absolute z-50 mt-1 w-full max-h-72 overflow-auto rounded-lg " +
-      "bg-gray-900 border border-gray-700 shadow-xl";
+      "absolute z-50 mt-1.5 w-full max-h-72 overflow-auto rounded-xl " +
+      "bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-2xl backdrop-blur-xl divide-y divide-slate-100 dark:divide-gray-800/50";
     dropdown.setAttribute("role", "listbox");
     dropdown.hidden = true;
     wrap.appendChild(dropdown);
@@ -73,11 +73,11 @@
       var rows = dropdown.querySelectorAll("[role=option]");
       rows.forEach(function (row, j) {
         if (j === i) {
-          row.classList.add("bg-indigo-600/40");
+          row.classList.add("bg-indigo-50", "dark:bg-indigo-950/40");
           row.setAttribute("aria-selected", "true");
           row.scrollIntoView({ block: "nearest" });
         } else {
-          row.classList.remove("bg-indigo-600/40");
+          row.classList.remove("bg-indigo-50", "dark:bg-indigo-950/40");
           row.setAttribute("aria-selected", "false");
         }
       });
@@ -87,7 +87,7 @@
       dropdown.innerHTML = "";
       if (!results.length) {
         var empty = document.createElement("div");
-        empty.className = "px-4 py-3 text-sm text-gray-500";
+        empty.className = "px-4 py-3 text-sm text-slate-500 dark:text-gray-400 text-center";
         empty.textContent = "No companies found for '" + query + "'";
         dropdown.appendChild(empty);
       } else {
@@ -96,16 +96,18 @@
           row.setAttribute("role", "option");
           row.setAttribute("aria-selected", "false");
           row.className =
-            "px-4 py-2.5 cursor-pointer text-sm flex items-baseline gap-2 " +
-            "hover:bg-gray-800 border-b border-gray-800/50 last:border-0";
+            "px-4 py-2.5 cursor-pointer text-sm flex items-center justify-between gap-3 " +
+            "hover:bg-slate-50 dark:hover:bg-gray-800/60 transition-colors";
           var tickerEl = highlight(r.ticker, query);
           var nameEl = highlight(r.name, query);
           row.innerHTML =
-            '<span class="font-bold text-white shrink-0">' +
+            '<div class="flex items-center gap-2.5 min-w-0">' +
+            '<span class="font-bold font-mono text-xs px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 shrink-0">' +
             tickerEl +
-            '</span><span class="text-gray-400 truncate">' +
+            '</span><span class="text-slate-700 dark:text-gray-300 text-xs truncate font-medium">' +
             nameEl +
-            "</span>";
+            '</span></div>' +
+            '<span class="text-[10px] text-slate-400 dark:text-gray-500 font-mono shrink-0">⏎ Select</span>';
           // mousedown fires before input blur, so selection wins over dismiss
           row.addEventListener("mousedown", function (e) {
             e.preventDefault();

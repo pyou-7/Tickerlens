@@ -1,9 +1,55 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-gray-950">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{% block title %}Tickerlens{% endblock %}</title>
+  <title>{% block title %}Tickerlens — Financial Research{% endblock %}</title>
+
+  <!-- Prevent FOUC: Apply dark class immediately before render -->
+  <script>
+    (function() {
+      try {
+        const storedTheme = localStorage.getItem('tickerlens_theme');
+        const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (storedTheme === 'dark' || (!storedTheme && systemDark) || (storedTheme === 'system' && systemDark)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* Global tabular numbers alignment */
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    
+    /* Top Progress Bar for HTMX Requests */
+    #htmx-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 2.5px;
+      width: 0%;
+      background: linear-gradient(90deg, #6366f1, #818cf8, #a855f7);
+      transition: width 250ms ease, opacity 350ms ease;
+      z-index: 9999;
+      pointer-events: none;
+      opacity: 0;
+    }
+    body.htmx-request #htmx-progress {
+      width: 75%;
+      opacity: 1;
+    }
+
+    [x-cloak] { display: none !important; }
+  </style>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -13,26 +59,107 @@
       darkMode: 'class',
       theme: {
         extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
           colors: {
-            brand: '#6366f1',
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
           }
         }
       }
     }
   </script>
 </head>
-<body class="h-full text-gray-100 font-sans antialiased">
+<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-gray-950 selection:bg-indigo-500/20 dark:selection:bg-indigo-500/30 selection:text-indigo-900 dark:selection:text-indigo-200 transition-colors duration-150">
+  <!-- Top HTMX Progress Bar -->
+  <div id="htmx-progress"></div>
 
-  <!-- Nav -->
-  <nav class="border-b border-gray-800 bg-gray-950">
-    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center h-14 gap-6">
-      <a href="/" class="text-indigo-400 font-bold tracking-tight text-lg">Tickerlens</a>
-      <div class="ml-auto hidden sm:block">
-        <div class="relative">
+  <!-- Global Nav -->
+  <nav class="border-b border-slate-200/80 dark:border-gray-800/80 bg-white/85 dark:bg-gray-950/85 backdrop-blur-xl sticky top-0 z-40 transition-colors duration-150 shadow-sm dark:shadow-none">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
+      <div class="flex items-center gap-6">
+        <a href="/" class="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-extrabold tracking-tight text-lg hover:text-indigo-500 dark:hover:text-indigo-300 transition shrink-0">
+          <span class="w-7 h-7 rounded-lg bg-indigo-600/10 dark:bg-indigo-600/25 border border-indigo-500/30 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-xs font-mono font-bold shadow-sm">TL</span>
+          <span class="text-slate-900 dark:text-white font-bold">Tickerlens</span>
+        </a>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <!-- Search Combobox Container in persistent header -->
+        <div class="relative w-56 sm:w-72">
           <input data-search-combobox type="text" placeholder="Search ticker or company…"
                  aria-label="Search companies"
-                 class="w-56 rounded-lg bg-gray-800 border border-gray-700 pl-3 pr-10 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-gray-700 bg-gray-900 px-1.5 text-[10px] text-gray-500">⌘K</kbd>
+                 id="nav-search-input"
+                 class="w-full rounded-xl bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 pl-3.5 pr-10 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:focus:ring-indigo-500/60 focus:bg-white dark:focus:bg-gray-950 transition shadow-inner" />
+          <kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500 shadow-xs">⌘K</kbd>
+        </div>
+
+        <!-- Theme Switcher: Light / Dark / System -->
+        <div x-data="{
+          theme: localStorage.getItem('tickerlens_theme') || 'system',
+          setTheme(t) {
+            this.theme = t;
+            localStorage.setItem('tickerlens_theme', t);
+            const isDark = (t === 'dark') || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+              document.documentElement.classList.add('dark');
+            } else {
+              document.documentElement.classList.remove('dark');
+            }
+            window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: t, isDark: isDark } }));
+          },
+          init() {
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+              if (this.theme === 'system') {
+                if (e.matches) {
+                  document.documentElement.classList.add('dark');
+                } else {
+                  document.documentElement.classList.remove('dark');
+                }
+                window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: 'system', isDark: e.matches } }));
+              }
+            });
+          }
+        }" class="flex items-center bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 rounded-xl p-0.5 text-xs shadow-inner">
+          <!-- Light Mode Button -->
+          <button type="button"
+                  @click="setTheme('light')"
+                  :class="theme === 'light' ? 'bg-white dark:bg-gray-800 text-amber-500 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-lg transition cursor-pointer"
+                  title="Light mode">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          </button>
+
+          <!-- Dark Mode Button -->
+          <button type="button"
+                  @click="setTheme('dark')"
+                  :class="theme === 'dark' ? 'bg-white dark:bg-gray-800 text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-lg transition cursor-pointer"
+                  title="Dark mode">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+            </svg>
+          </button>
+
+          <!-- System Default Button -->
+          <button type="button"
+                  @click="setTheme('system')"
+                  :class="theme === 'system' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm' : 'text-slate-400 hover:text-slate-600 dark:hover:text-gray-300'"
+                  class="p-1.5 rounded-lg transition cursor-pointer"
+                  title="System default">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -44,5 +171,30 @@
   </main>
 
   <script src="{{ url_for('static', path='js/search.js') }}"></script>
+  <script>
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const hero = document.getElementById('ticker-input');
+        const nav = document.getElementById('nav-search-input');
+        const target = hero || nav;
+        if (target) {
+          target.focus();
+          target.select();
+        }
+      }
+    });
+
+    // Wire body htmx-request class for progress bar
+    document.addEventListener('htmx:beforeRequest', () => {
+      document.body.classList.add('htmx-request');
+    });
+    document.addEventListener('htmx:afterOnLoad', () => {
+      document.body.classList.remove('htmx-request');
+    });
+    document.addEventListener('htmx:sendError', () => {
+      document.body.classList.remove('htmx-request');
+    });
+  </script>
 </body>
 </html>
