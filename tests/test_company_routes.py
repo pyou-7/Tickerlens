@@ -489,6 +489,37 @@ def test_unwatch_from_overview_still_swaps_button(client: TestClient, monkeypatc
     assert resp.headers["location"] == "/company/AAPL"
 
 
+def test_watch_from_home_plain_post_redirects_home(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/NVDA/watch?next=home", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    mock_svc.watch_ticker.assert_called_once_with("NVDA")
+
+
+def test_watch_from_home_htmx_returns_pins_partial(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import WatchlistRow
+
+    mock_svc = MagicMock()
+    mock_svc.get_watchlist.return_value = [
+        WatchlistRow(cik="0001045810", ticker="NVDA", name="NVIDIA Corp.",
+                     last_price=225.0, market_cap=5e12, signal="Strong Buy")
+    ]
+    mock_svc.get_benchmarks.return_value = []
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.post("/company/NVDA/watch?next=home", headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    assert 'id="watchlist-section"' in resp.text
+    assert "NVDA" in resp.text
+    mock_svc.watch_ticker.assert_called_once_with("NVDA")
+
+
 # ── compare yearly mode (PRD §4.2, compare-mode slice 2) ──────────────────────
 
 def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -> None:

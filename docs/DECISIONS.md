@@ -465,4 +465,16 @@ Format:
 **Why:** Modern AI tools communicate state and feedback immediately. Microinteractions (like toasts on copy, visual proportion gauges, and live search filtering) eliminate UI friction and make dense financial data intuitive and enjoyable to explore.
 **Alternatives considered:** External toast/modal libraries (rejected: lightweight Alpine.js declarative bindings keep bundle zero-dependency).
 
+---
+
+## 2026-09-30 — Home Page Redesign: Unified Command Search Bar, Market Benchmarks Pulse, and Feature Bento Grid
+
+**What:** Redesigned the home page (`index.html`, `partials/watchlist.html`, `base.html`, `search.js`):
+1. Removed duplicate header search bar on the home page via `{% block nav_search %}`, replacing it with a live SEC EDGAR primary source status pill so the hero search bar serves as the undivided command center.
+2. Rebuilt the hero search bar with clean flexbox alignment, normal-case placeholder (fixing the truncated uppercase bug), docked `⌘K` keyboard badge, and instant dropdown.
+3. Replaced the empty watchlist state with a rich "Market Leaders & Benchmarks" section displaying live normalized fundamental cards (NVDA, AAPL, MSFT, AMZN, GOOGL, TSLA) with 1-click "☆ Pin" HTMX actions (`?next=home`).
+4. Added an interactive 3-card Feature Highlights Bento Grid (Normalized SEC XBRL, Rules-Based Valuation, Time Slicer & Peer Compare) and quick keyboard hints bar.
+**Why:** First impressions matter. The previous home page had conflicting duplicate search bars, broken uppercase placeholder text, and a desolate dashed empty box when the watchlist was empty. The redesigned page delivers immediate visual polish, instant market utility, and effortless onboarding.
+**Alternatives considered:** Redirecting to a default company like AAPL on empty watchlist (rejected: home page is the canonical dashboard; live benchmarks provide immediate utility while preserving personal dashboard curation).
+
 

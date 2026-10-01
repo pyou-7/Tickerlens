@@ -866,6 +866,45 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def get_benchmarks(self, session: Session | None = None) -> list[WatchlistRow]:
+        """Curated list of market leader benchmarks for the home page."""
+        db = session or self._session or get_session()
+        try:
+            benchmark_tickers = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "TSLA"]
+            comps = (
+                db.execute(
+                    select(Company).where(Company.ticker.in_(benchmark_tickers))
+                )
+                .scalars()
+                .all()
+            )
+            comp_map = {c.ticker.upper(): c for c in comps if c.ticker}
+            result: list[WatchlistRow] = []
+            for t in benchmark_tickers:
+                if t in comp_map:
+                    c = comp_map[t]
+                    try:
+                        val = self.get_valuation(c.ticker, session=db)
+                        signal = val.signal
+                    except Exception:
+                        signal = None
+                    result.append(
+                        WatchlistRow(
+                            cik=c.cik,
+                            ticker=c.ticker,
+                            name=c.name,
+                            last_price=c.last_price,
+                            market_cap=c.market_cap,
+                            signal=signal,
+                            note=None,
+                            tags=[],
+                        )
+                    )
+            return result
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def _vs_company(self, ticker: str, db: Session) -> VsCompany:
         """Build one side of a cross-company comparison from stored data."""
         detail = self.get_detail(ticker, session=db)

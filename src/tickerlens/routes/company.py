@@ -26,7 +26,12 @@ _svc = FinancialsService()
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
-        request=request, name="index.html", context={"watchlist": _svc.get_watchlist()}
+        request=request,
+        name="index.html",
+        context={
+            "watchlist": _svc.get_watchlist(),
+            "benchmarks": _svc.get_benchmarks(),
+        },
     )
 
 
@@ -60,19 +65,31 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
 
 @router.post("/company/{ticker}/watch", response_class=HTMLResponse)
 def watch_company(request: Request, ticker: str):
-    """Pin a company to the watchlist. HTMX swaps the button in place."""
+    """Pin a company to the watchlist. HTMX swaps the button or pins section in place."""
     ticker = ticker.upper()
     try:
         _svc.watch_ticker(ticker)
     except CompanyNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    from_home = request.query_params.get("next") == "home"
     if request.headers.get("HX-Request"):
+        if from_home:
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/watchlist.html",
+                context={
+                    "watchlist": _svc.get_watchlist(),
+                    "benchmarks": _svc.get_benchmarks(),
+                },
+            )
         return templates.TemplateResponse(
             request=request,
             name="partials/watch_button.html",
             context={"ticker": ticker, "watching": True},
         )
-    return RedirectResponse(url=f"/company/{ticker}", status_code=303)
+    return RedirectResponse(
+        url="/" if from_home else f"/company/{ticker}", status_code=303
+    )
 
 
 @router.post("/company/{ticker}/watch/remove", response_class=HTMLResponse)
@@ -91,7 +108,10 @@ def unwatch_company(request: Request, ticker: str):
             return templates.TemplateResponse(
                 request=request,
                 name="partials/watchlist.html",
-                context={"watchlist": _svc.get_watchlist()},
+                context={
+                    "watchlist": _svc.get_watchlist(),
+                    "benchmarks": _svc.get_benchmarks(),
+                },
             )
         return templates.TemplateResponse(
             request=request,
@@ -167,7 +187,10 @@ def refresh_watchlist(request: Request):
         return templates.TemplateResponse(
             request=request,
             name="partials/watchlist.html",
-            context={"watchlist": _svc.get_watchlist()},
+            context={
+                "watchlist": _svc.get_watchlist(),
+                "benchmarks": _svc.get_benchmarks(),
+            },
         )
     return RedirectResponse(url="/", status_code=303)
 

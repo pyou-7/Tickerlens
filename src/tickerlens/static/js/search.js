@@ -41,7 +41,7 @@
     input.setAttribute("aria-autocomplete", "list");
 
     var wrap = document.createElement("div");
-    wrap.className = "relative";
+    wrap.className = "relative flex-1 w-full min-w-0";
     input.parentNode.insertBefore(wrap, input);
     wrap.appendChild(input);
 

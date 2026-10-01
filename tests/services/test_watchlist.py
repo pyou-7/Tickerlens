@@ -161,3 +161,15 @@ def test_get_watchlist_includes_tags(session: Session) -> None:
     rows = svc.get_watchlist()
     assert len(rows) == 1
     assert rows[0].tags == ["dividend", "ai"]
+
+
+def test_get_benchmarks_returns_stored_benchmarks(session: Session) -> None:
+    session.add(_company(cik="0000320193", ticker="AAPL", name="Apple Inc."))
+    session.add(_company(cik="0001045810", ticker="NVDA", name="NVIDIA Corp."))
+    session.commit()
+    svc = _svc(session)
+    benchmarks = svc.get_benchmarks()
+    assert len(benchmarks) >= 2
+    tickers = [b.ticker for b in benchmarks]
+    assert "NVDA" in tickers
+    assert "AAPL" in tickers

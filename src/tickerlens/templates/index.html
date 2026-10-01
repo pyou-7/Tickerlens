@@ -1,50 +1,72 @@
 {% extends "base.html" %}
-{% block title %}Tickerlens — Financial Research & Fundamentals{% endblock %}
+{% block title %}Tickerlens — Financial Intelligence & SEC Fundamentals{% endblock %}
+
+{% block nav_search %}
+<!-- On the home page, the Hero Search Bar is the primary focal point; header search is hidden for a clean, distraction-free aesthetic -->
+<div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/60 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300 text-xs font-medium shadow-2xs">
+  <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+  <span class="font-mono text-[11px] font-semibold">SEC EDGAR Primary Source</span>
+</div>
+{% endblock %}
 
 {% block content %}
-<div class="space-y-10">
+<div class="space-y-12">
   <!-- Hero Section -->
-  <div class="relative overflow-hidden rounded-3xl bg-gradient-to-b from-indigo-50/70 via-white to-transparent dark:from-indigo-950/20 dark:via-gray-900/30 dark:to-transparent border border-slate-200/80 dark:border-gray-800/80 p-8 sm:p-12 text-center shadow-xs">
-    <div class="max-w-2xl mx-auto space-y-4">
-      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 text-xs font-semibold tracking-wide">
-        <span class="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
-        SEC EDGAR Fundamentals & Valuation
+  <div class="relative overflow-hidden rounded-3xl bg-gradient-to-b from-indigo-50/80 via-white to-slate-50 dark:from-indigo-950/20 dark:via-gray-900/40 dark:to-gray-950 border border-slate-200/90 dark:border-gray-800/80 p-8 sm:p-14 text-center shadow-xs">
+    <!-- Ambient subtle background glow -->
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[220px] bg-gradient-to-b from-indigo-500/10 via-purple-500/5 to-transparent blur-3xl pointer-events-none -z-0"></div>
+
+    <div class="relative z-10 max-w-3xl mx-auto space-y-5">
+      <!-- Tag Pill -->
+      <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-600 dark:text-indigo-400 text-xs font-semibold tracking-wide shadow-2xs">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span>SEC EDGAR Real-Time Intelligence • GAAP 10-Q & 10-K Fundamentals</span>
       </div>
-      <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-tight">
-        Financial Intelligence, <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Demystified</span>
+
+      <!-- Headline -->
+      <h1 class="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.12]">
+        Financial Intelligence,<br class="hidden sm:inline" />
+        <span class="bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 dark:from-indigo-400 dark:via-indigo-300 dark:to-purple-400 bg-clip-text text-transparent">Direct from Primary Sources</span>
       </h1>
-      <p class="text-slate-600 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl mx-auto">
-        Search any US public company for normalized 10-Q/10-K financial statements, peer benchmarking, valuation signals, and primary source filing archives.
+
+      <!-- Subtitle -->
+      <p class="text-slate-600 dark:text-gray-400 text-sm sm:text-base leading-relaxed max-w-xl mx-auto font-normal">
+        Normalized SEC 10-Q & 10-K financial statements, automated valuation signals, intra-period time slicing, and 1-click spreadsheet exports.
       </p>
 
-      <!-- Prominent Search Bar -->
-      <div class="pt-2 max-w-lg mx-auto">
+      <!-- Centerpiece Command Search Bar -->
+      <div class="pt-3 max-w-2xl mx-auto w-full">
         <form action="" method="get" id="ticker-form"
               onsubmit="var v=document.getElementById('ticker-input').value.trim();if(v)window.location='/company/'+encodeURIComponent(v.toUpperCase());return false;"
-              class="relative flex items-center shadow-lg shadow-indigo-500/5 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700/80 p-1.5 focus-within:ring-2 focus-within:ring-indigo-500/50 transition">
-          <div class="pl-3.5 pr-2 text-slate-400 dark:text-gray-500">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              class="group relative flex items-center w-full rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/90 dark:border-gray-700/80 p-2 shadow-xl shadow-indigo-500/5 hover:border-indigo-400 dark:hover:border-indigo-500/60 focus-within:ring-2 focus-within:ring-indigo-500/40 focus-within:border-indigo-500 transition-all">
+          <div class="pl-3.5 pr-2.5 text-slate-400 dark:text-gray-500 flex items-center shrink-0">
+            <svg class="w-5 h-5 group-focus-within:text-indigo-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
             </svg>
           </div>
-          <input data-search-combobox id="ticker-input" type="text" placeholder="Search ticker or company (e.g. AAPL, NVDA, Microsoft)..."
+          <input data-search-combobox id="ticker-input" type="text"
+                 placeholder="Search ticker or company (e.g. NVDA, AAPL, Microsoft)..."
                  aria-label="Search ticker or company"
-                 class="w-full bg-transparent border-0 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 text-sm focus:outline-none uppercase pr-16 py-2 font-medium"
+                 class="w-full bg-transparent border-0 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 text-sm sm:text-base focus:outline-none py-2 px-1 font-medium tracking-normal"
                  autofocus />
-          <kbd class="pointer-events-none absolute right-24 top-1/2 -translate-y-1/2 rounded border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500">⌘K</kbd>
-          <button type="submit"
-                  class="rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 text-xs font-semibold transition shrink-0 shadow-sm cursor-pointer">
-            Explore
-          </button>
+          <div class="flex items-center gap-2 pr-1 shrink-0">
+            <kbd class="hidden sm:inline-flex items-center rounded-lg border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-800 px-2 py-1 text-[11px] font-mono text-slate-400 dark:text-gray-400 shadow-2xs">⌘K</kbd>
+            <button type="submit"
+                    class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-4 py-2 text-xs sm:text-sm font-semibold transition-all shadow-md shadow-indigo-600/25 cursor-pointer">
+              <span>Explore</span>
+              <span class="text-xs">→</span>
+            </button>
+          </div>
         </form>
 
-        <!-- Quick Trending Pills -->
-        <div class="pt-3 flex items-center justify-center gap-2 flex-wrap text-xs text-slate-500 dark:text-gray-400">
+        <!-- Popular Market Benchmarks Pills -->
+        <div class="pt-4 flex items-center justify-center gap-2 flex-wrap text-xs text-slate-500 dark:text-gray-400">
           <span class="font-semibold text-[11px] uppercase tracking-wider text-slate-400 dark:text-gray-500">Popular:</span>
-          {% for t in ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN"] %}
+          {% for t, name in [("NVDA", "NVIDIA"), ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("GOOGL", "Alphabet"), ("AMZN", "Amazon"), ("TSLA", "Tesla")] %}
           <a href="/company/{{ t }}"
-             class="px-2.5 py-1 rounded-lg bg-white/80 dark:bg-gray-800/80 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-600 dark:hover:text-indigo-400 text-slate-700 dark:text-gray-300 font-mono font-bold text-[11px] border border-slate-200/80 dark:border-gray-700/80 transition shadow-xs">
-            {{ t }}
+             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-gray-800/90 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-600 dark:hover:text-indigo-400 text-slate-700 dark:text-gray-300 font-medium text-xs border border-slate-200/90 dark:border-gray-700/80 transition shadow-2xs hover:shadow-xs group">
+            <span class="font-mono font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">{{ t }}</span>
+            <span class="text-[10px] text-slate-400 dark:text-gray-500 font-normal">· {{ name }}</span>
           </a>
           {% endfor %}
         </div>
@@ -52,7 +74,74 @@
     </div>
   </div>
 
-  <!-- Pinned Companies Dashboard -->
+  <!-- Pinned Watchlist & Market Benchmarks Dashboard -->
   {% include "partials/watchlist.html" %}
+
+  <!-- Feature Highlights Bento Grid -->
+  <div class="pt-4 space-y-6">
+    <div class="text-center max-w-xl mx-auto space-y-2">
+      <h2 class="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+        Engineered for Rigorous Fundamental Research
+      </h2>
+      <p class="text-xs sm:text-sm text-slate-500 dark:text-gray-400">
+        Zero third-party approximations. Pure SEC EDGAR XBRL facts engineered for precision.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <!-- Card 1 -->
+      <div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-6 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-800/60 transition group space-y-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
+          📊
+        </div>
+        <h3 class="text-sm font-bold text-slate-900 dark:text-white">Normalized SEC XBRL</h3>
+        <p class="text-xs text-slate-600 dark:text-gray-400 leading-relaxed">
+          ASC 606 revenue recognition, un-cumulated cash flows, and balance sheet identity derivation (<code class="text-[11px] bg-slate-100 dark:bg-gray-800 px-1 py-0.5 rounded font-mono">Assets = Liab + Equity</code>) directly from official filings.
+        </p>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-6 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-800/60 transition group space-y-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
+          ⚖️
+        </div>
+        <h3 class="text-sm font-bold text-slate-900 dark:text-white">Rules-Based Valuation</h3>
+        <p class="text-xs text-slate-600 dark:text-gray-400 leading-relaxed">
+          Transparent PEG heuristics and margin-of-safety price targets, cross-checked against TTM Free Cash Flow yield with full historical signal flip tracking.
+        </p>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-6 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-800/60 transition group space-y-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg font-bold">
+          ⇄
+        </div>
+        <h3 class="text-sm font-bold text-slate-900 dark:text-white">Time Slicer & Peer Compare</h3>
+        <p class="text-xs text-slate-600 dark:text-gray-400 leading-relaxed">
+          Multi-quarter range windowing, head-to-head peer comparisons with proportion gauges, and 1-click TSV table exports ready for Excel & Google Sheets.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Keyboard Hints Bar -->
+  <div class="pt-4 border-t border-slate-200/80 dark:border-gray-800/80 flex items-center justify-center gap-6 text-xs text-slate-400 dark:text-gray-500 font-medium">
+    <div class="flex items-center gap-1.5">
+      <kbd class="font-mono bg-white dark:bg-gray-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-gray-800 text-[10px] shadow-2xs">⌘K</kbd>
+      <span>Quick Search</span>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <kbd class="font-mono bg-white dark:bg-gray-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-gray-800 text-[10px] shadow-2xs">T</kbd>
+      <span>Toggle Theme</span>
+    </div>
+    <div class="flex items-center gap-1.5">
+      <kbd class="font-mono bg-white dark:bg-gray-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-gray-800 text-[10px] shadow-2xs">?</kbd>
+      <span>Shortcuts Dialog</span>
+    </div>
+    <div class="hidden sm:flex items-center gap-1.5">
+      <kbd class="font-mono bg-white dark:bg-gray-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-gray-800 text-[10px] shadow-2xs">G then H</kbd>
+      <span>Go Home</span>
+    </div>
+  </div>
 </div>
 {% endblock %}
