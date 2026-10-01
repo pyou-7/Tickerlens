@@ -86,6 +86,8 @@ When you open a company page, you land on the Overview by default. Contents:
 3. **Side-by-side compare** — view two specific periods in parallel; supports presets (YoY, QoQ, 5-year-ago) and free-form *(all three presets shipped 2026-09-29 — 5-year-ago falls back to the oldest available quarter given the 3-year history depth)*
 4. **Cross-company compare (added 2026-09-30)** — `GET /company/{ticker}/vs/{other}`: latest reported quarter side by side (revenue, net income, EPS diluted, FCF, each with YoY badge; share price, market cap, valuation signal, implied upside). Entries: "⇄ Compare" peer-ticker form on the Overview page and a swap form on the vs page. Either side is fetched on first visit when not stored; 404 when unloadable; a note shows when the two latest quarters don't align (different fiscal calendars).
 
+**Mobile UX (shipped 2026-09-30):** below `md` the detail-view slicer panel docks to the bottom as a slide-up sheet — compact floating "Period" button opens it, selectors + Quarterly/Yearly toggle + chart-range window live inside, an Apply bar dismisses it (the form already submits on change via HTMX). Escape key and backdrop tap also dismiss. The closed state is pure CSS (`translateY(105%)` under a 767px media query) so there is no flash before Alpine loads; desktop layout untouched.
+
 **Fiscal year handling:** Years use the company's actual fiscal year (e.g., "FY2025 (ended Sept 2025)").
 
 **Mobile UX:** Compact "Period" button → bottom sheet slides up with selectors + mode toggle + Apply button.
@@ -190,6 +192,8 @@ Single Quarter, Single Year, Range, and Compare ZIP structures are unchanged fro
 | IPO with limited history | Show whatever exists, banner "Listed since [date]" |
 | Ticker change (FB → META) | CIK-based canonical key, ticker is a display label |
 | Unknown ticker (typo or retired) | Friendly 404 page suggests up to 5 close matches via the §4.10 search ranker — never a dead end (shipped 2026-09-30) |
+| Berkshire-style tickers (BRK.B / BRK/A) | `cik_for_ticker` falls back to the hyphenated SEC form (BRK-B); search ranker normalizes `./` → `-` for ticker comparisons (shipped 2026-09-30) |
+| Foreign private issuer (IFRS filer, e.g. TSM) | Clean `UnsupportedFilerError` ("no US-GAAP facts … Tickerlens supports US-GAAP filers only") instead of bare `KeyError: 'us-gaap'`; IFRS support stays out of scope (shipped 2026-09-30) |
 | Multiple share classes (GOOGL/GOOG) | Separate entries; "Also trades as" link in header (shipped 2026-09-30 — `sibling_tickers()` scans cached SEC tickers for the same CIK) |
 | Filing amendment (10-K/A) | Show latest; clickable "Amended on [date]" → diff view |
 | Acquisition | Banner + locked read-only historical data |

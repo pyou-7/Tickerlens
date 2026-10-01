@@ -486,3 +486,17 @@ Format:
 **Alternatives considered:** Showing dollar prices (rejected: percentage changes communicate relative daily momentum better and take up less horizontal space).
 
 
+## 2026-09-30 — Stock-split EPS rescaling (defect-hunt round 15)
+
+**What:** `_detect_split_events()` / `_merge_duplicate_events()` / `_split_adjust_facts()` in `data/xbrl.py` rescale pre-split per-share facts to the latest filing's share basis before series construction; duplicate observations of one split (10-K + 10-Q restatements) merge so facts rescale exactly once; ambiguous facts (never restated, e.g. NFLX's Q3-2025) are classified by neighbor-consistency against certain-basis quarters.
+**Why:** NFLX's 10-for-1 split left mixed-basis EPS — restated 0.72 beside pre-split 5.4 — producing a bogus −87% trend and a −13.58 derived Q4 from mixed NI/EPS pairs in the share-implied derivation. Detection needs 2 corroborating (start,end) durations at a split ratio (3% tolerance) so a lone accounting correction can't trigger it; the split date is never estimated, only relative order (filed-before vs filed-after the restating filing) plus neighbor checks.
+
+## 2026-09-30 — Mobile bottom-sheet period selector (PRD §4.2)
+
+**What:** Below `md`, the detail-view slicer panel becomes a fixed bottom sheet (compact "Period" button opens, Apply/Escape/backdrop dismiss); the closed state is pure CSS (`translateY(105%)` under a 767px media query), Alpine only toggles `.open`.
+**Why:** PRD §4.2 specified the bottom sheet but it was never built; the CSS-first closed state avoids a flash of the open sheet on mobile before Alpine initializes, and keeps desktop markup identical (one shared form, no duplicated inputs to drift).
+
+## 2026-09-30 — Berkshire ticker normalization + IFRS filer error (defect-hunt round 15b)
+
+**What:** `cik_for_ticker` falls back to hyphenated SEC forms (`BRK.B`→`BRK-B`); search normalizes `./`→`-` for ticker comparisons only; `_chain_candidates` raises `UnsupportedFilerError` naming actual taxonomies when `us-gaap` is absent (TSM → ifrs-full).
+**Why:** `BRK.B` 404'd despite being trivially resolvable — the most common ticker-format mismatch on the web. Foreign private issuers died with bare `KeyError: 'us-gaap'`; IFRS tag-mapping is out of scope (US public companies per PRD), so a clear "not supported" beats a cryptic key.
