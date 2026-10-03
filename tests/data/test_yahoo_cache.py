@@ -167,3 +167,22 @@ def test_warm_change_pct_cache_never_raises() -> None:
         yahoo_mod.warm_change_pct_cache(["NVDA"])  # must not raise
     finally:
         yahoo_mod.threading.Thread = orig
+
+
+def test_fetch_info_timeout_never_hangs(monkeypatch) -> None:
+    import time as _time
+
+    class _Slow:
+        @property
+        def info(self):  # noqa: D102
+            _time.sleep(5)
+            return {}
+
+    monkeypatch.setattr(yahoo.yf, "Ticker", lambda ticker: _Slow())
+    monkeypatch.setattr(yahoo, "_YAHOO_TIMEOUT_SECONDS", 0.05)
+    start = _time.monotonic()
+    with pytest.raises(TimeoutError):
+        yahoo._fetch_info("AAPL")
+    assert _time.monotonic() - start < 2
+    # …and the public day-change entry point still never raises on a stall.
+    assert get_day_change_pct("AAPL") is None
