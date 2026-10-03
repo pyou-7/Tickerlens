@@ -894,8 +894,9 @@ def test_record_valuation_snapshot_writes_todays_signal(session: Session) -> Non
     assert snap.method == "peg"
     assert snap.as_of == dt.date.today()
     assert snap.price == pytest.approx(100.0)
-    assert snap.target_price == pytest.approx(750.0)
-    assert snap.upside_pct == pytest.approx(650.0)
+    # Batch 12 rate guardrail: 40x P/E -> 37.0x at the 4.5% default 10y yield.
+    assert snap.target_price == pytest.approx(740.7, abs=0.1)
+    assert snap.upside_pct == pytest.approx(640.7, abs=0.1)
     rows = session.execute(select(ValuationHistory)).scalars().all()
     assert len(rows) == 1
 
@@ -914,7 +915,8 @@ def test_record_valuation_snapshot_upserts_same_day(session: Session) -> None:
     rows = session.execute(select(ValuationHistory)).scalars().all()
     assert len(rows) == 1
     assert snap.price == pytest.approx(200.0)
-    assert snap.upside_pct == pytest.approx(275.0)
+    # Batch 12 rate guardrail: target 740.74 vs 200 price.
+    assert snap.upside_pct == pytest.approx(270.4, abs=0.1)
 
 
 def test_get_signal_change_detects_flip(session: Session) -> None:

@@ -15,6 +15,14 @@ Format:
 
 ---
 
+## 2026-10-03 — Rate-aware valuation guardrail (batch 12)
+
+**What:** `compute_valuation()` accepts `ten_year_yield_pct` (default 4.5% benchmark); fair P/E is capped at `100 / (yield × 0.6)` so the implied earnings yield stays ≥60% of the 10-year Treasury. Binding cap adds a reasoning note and caps confidence at Medium, mirroring the existing guardrail contract. PEG path only; sales fallback untouched.
+**Why:** The PEG model was rate-blind: at a 5.3% 10-year (24-year high), a 40x fair P/E implies a 2.5% earnings yield — less than half risk-free — yet could still print Strong Buy. The cap only bites in high-rate regimes (at 2% yields the 83x cap sits above the 40x clamp, guardrail dormant).
+**Alternatives considered:** Full parity with risk-free (rejected: growth equities deserve latitude vs risk-free; would kill all growth multiples); DCF with discount rate (rejected: v1 stays an explainable heuristic per PRD §4.11); live yield feed (deferred: parameter is wired, service layer still passes default).
+
+---
+
 ## 2026-05-27 — Personal-use scope only
 
 **What:** Productization scope removed; Tickerlens is a single-user research tool for the founder.

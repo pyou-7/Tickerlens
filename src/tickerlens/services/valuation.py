@@ -32,6 +32,15 @@ _MAX_PE = 40.0
 _MIN_PS = 1.0
 _MAX_PS = 10.0
 
+# Rate-aware guardrail (batch 12): the PEG multiple is blind to the discount
+# rate. A 40x fair P/E implies a 2.5% earnings yield — indefensible when the
+# 10-year Treasury pays 5%+. Cap fair P/E so the implied earnings yield stays
+# at least _YIELD_COVERAGE of the 10-year yield. Growth equities earn
+# latitude vs risk-free (they grow), so coverage is < 1; at low yields the
+# 40x clamp binds first and this guardrail sleeps.
+_TEN_YEAR_YIELD_DEFAULT_PCT = 4.5
+_YIELD_COVERAGE = 0.6
+
 _STRONG_BUY_UP = 30.0
 _BUY_UP = 10.0
 _SELL_DOWN = -10.0
@@ -79,6 +88,23 @@ _FCF_YIELD_HURDLE_PCT = 4.0
 
 _BULLISH_SIGNALS = {"Strong Buy", "Buy"}
 _BEARISH_SIGNALS = {"Strong Sell", "Sell"}
+
+
+def _rate_guardrail_note(
+    ten_year_yield_pct: float,
+    max_pe_by_yield: float,
+) -> str:
+    """Explain a binding rate guardrail (batch 12).
+
+    Mirrors the _guardrail_note contract: the target is driven by the rate
+    environment rather than the company's data, so confidence is capped.
+    """
+    return (
+        f"Note: the 10-year Treasury is at {ten_year_yield_pct:.1f}% — fair P/E "
+        f"capped at {max_pe_by_yield:.1f}× so the implied earnings yield stays "
+        f"competitive with risk-free rates; the target is driven by the rate "
+        f"environment, so confidence is capped at Medium."
+    )
 
 
 def _fcf_cross_check_note(
@@ -173,6 +199,7 @@ def compute_valuation(
     growth_is_fallback: bool = False,
     ttm_free_cash_flow: float | None = None,
     market_cap: float | None = None,
+    ten_year_yield_pct: float | None = None,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
@@ -180,7 +207,9 @@ def compute_valuation(
     without a database. ``growth_is_fallback`` marks that the growth input
     came from a quarterly YoY / net-income proxy rather than TTM-over-TTM.
     ``ttm_free_cash_flow`` / ``market_cap`` feed the FCF-yield cross-check
-    footnote only; they never change the signal.
+    footnote only; they never change the signal. ``ten_year_yield_pct`` is
+    the 10-year Treasury yield in percent (batch 12 rate guardrail); ``None``
+    uses the module default benchmark.
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -211,6 +240,16 @@ def compute_valuation(
         growth = _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
         raw_pe = PEG_TARGET * growth
         fair_pe = _clamp(raw_pe, _MIN_PE, _MAX_PE)
+        # Rate guardrail (batch 12): don't bless a 2.5% earnings yield when
+        # risk-free pays double. Binds only in high-rate regimes.
+        yld = ten_year_yield_pct
+        if yld is None or yld <= 0:
+            yld = _TEN_YEAR_YIELD_DEFAULT_PCT
+        max_pe_by_yield = 100.0 / (yld * _YIELD_COVERAGE)
+        rate_note: str | None = None
+        if fair_pe > max_pe_by_yield:
+            fair_pe = max_pe_by_yield
+            rate_note = _rate_guardrail_note(yld, max_pe_by_yield)
         target = ttm_eps_diluted * fair_pe
         current_pe = current_price / ttm_eps_diluted
         upside = (target - current_price) / current_price * 100.0
@@ -221,6 +260,8 @@ def compute_valuation(
         )
         if guardrail_note is not None:
             confidence = "Medium"  # cap: the guardrail, not the data, drives the target
+        if rate_note is not None:
+            confidence = "Medium"  # cap: the rate environment, not the data, drives the target
         reasoning = [
             f"TTM diluted EPS ${ttm_eps_diluted:.2f}, growing {eps_growth_pct:.1f}% year over year.",
             f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
@@ -230,6 +271,8 @@ def compute_valuation(
         ]
         if guardrail_note is not None:
             reasoning.append(guardrail_note)
+        if rate_note is not None:
+            reasoning.append(rate_note)
         return ValuationSignal(
             ticker=ticker,
             current_price=current_price,

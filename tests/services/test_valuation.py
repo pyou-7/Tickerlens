@@ -54,10 +54,50 @@ def test_peg_buy_threshold():
 
 
 def test_growth_clamped():
-    # 100% growth is clamped to 40% -> fair P/E clamped to 40x -> target 200
-    v = _base(eps_growth_pct=100.0)
+    # 100% growth is clamped to 40% -> fair P/E clamped to 40x -> target 200.
+    # Pin a low 10y yield so the batch-12 rate guardrail stays dormant here.
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
     assert v.fair_multiple == pytest.approx(40.0)
     assert v.target_price == pytest.approx(200.0)
+
+
+def test_rate_guardrail_binds_at_high_yield():
+    # 30% growth -> raw 45x -> clamped 40x; 10y at 5.3% caps at
+    # 100 / (5.3 * 0.6) ~= 31.4x. Confidence capped, note added.
+    v = _base(eps_growth_pct=30.0, ten_year_yield_pct=5.3)
+    assert v.fair_multiple == pytest.approx(100.0 / (5.3 * 0.6), abs=0.05)
+    assert v.confidence == "Medium"
+    assert any("10-year Treasury" in p for p in v.reasoning)
+
+
+def test_rate_guardrail_dormant_at_low_yield():
+    # 10y at 2% -> cap at 83x; the 40x clamp binds first, no rate note.
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v.fair_multiple == pytest.approx(40.0)
+    assert not any("10-year Treasury" in p for p in v.reasoning)
+
+
+def test_rate_guardrail_default_yield():
+    # None -> 4.5% default benchmark -> cap at ~37.0x.
+    v = _base(eps_growth_pct=100.0)
+    assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
+    assert any("10-year Treasury" in p for p in v.reasoning)
+
+
+def test_rate_guardrail_ignores_nonsense_yield():
+    # Zero/negative yields fall back to the default benchmark, never crash.
+    for bad in (0.0, -2.0):
+        v = _base(eps_growth_pct=100.0, ten_year_yield_pct=bad)
+        assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
+
+
+def test_rate_guardrail_can_temper_signal():
+    # 5.0 EPS, 30% growth, price 140: no guardrail -> 200 target (+42.9%,
+    # Strong Buy); 5.3% yield -> ~157 target (+12%, Buy).
+    v = _base(current_price=140.0, eps_growth_pct=30.0, ten_year_yield_pct=5.3)
+    assert v.signal == "Buy"
+    v_noguard = _base(current_price=140.0, eps_growth_pct=30.0, ten_year_yield_pct=2.0)
+    assert v_noguard.signal == "Strong Buy"
     # near-zero growth is clamped to 2% -> fair P/E clamped to 8x floor
     v = _base(eps_growth_pct=0.5)
     assert v.fair_multiple == pytest.approx(8.0)
