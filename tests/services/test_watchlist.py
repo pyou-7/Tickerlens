@@ -175,9 +175,12 @@ def test_get_benchmarks_returns_stored_benchmarks(session: Session) -> None:
     assert "AAPL" in tickers
 
 
-def test_get_popular_stocks_returns_ten_most_traded(session: Session) -> None:
-    svc = _svc(session)
-    popular = svc.get_popular_stocks()
+def test_get_popular_stocks_returns_ten_most_traded(session: Session, monkeypatch) -> None:
+    from tickerlens.services import financials as fin_mod
+
+    # Keep the suite hermetic: no background Yahoo warmer in unit tests.
+    monkeypatch.setattr(fin_mod, "warm_change_pct_cache", lambda tickers: None)
+    popular = _svc(session).get_popular_stocks()
     assert len(popular) == 10
     tickers = [s.ticker for s in popular]
     assert tickers == ["NVDA", "TSLA", "AAPL", "AMD", "AMZN", "MSFT", "META", "GOOGL", "PLTR", "NFLX"]

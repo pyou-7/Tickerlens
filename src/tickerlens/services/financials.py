@@ -19,6 +19,7 @@ from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
 from tickerlens.data.yahoo import (
+    cached_quote,
     get_quote,
     peeked_day_change_pct,
     warm_change_pct_cache,
@@ -1014,10 +1015,12 @@ class FinancialsService:
         """Refresh Yahoo quotes for every watched company (PRD §4.6, slice 2).
 
         Quote-only (no Wikipedia / risk-factor / press-release work), so home
-        pins stay current without opening each company. Never wipes a stored
-        price on transient failure; records a valuation snapshot per company
-        so the signal-change pill can fire on quote-driven flips. Per-ticker
-        failures are counted, not raised. Returns {"updated": n, "failed": m}.
+        pins stay current without opening each company. Quotes go through the
+        5-minute TTL cache, so rapid repeat refreshes don't hammer Yahoo.
+        Never wipes a stored price on transient failure; records a valuation
+        snapshot per company so the signal-change pill can fire on
+        quote-driven flips. Per-ticker failures are counted, not raised.
+        Returns {"updated": n, "failed": m}.
         """
         db = session or self._session or get_session()
         try:
@@ -1036,7 +1039,7 @@ class FinancialsService:
                     failed += 1
                     continue
                 try:
-                    quote = get_quote(ticker)
+                    quote = cached_quote(ticker)
                     if quote.last_price is not None:
                         company.last_price = quote.last_price
                     if quote.market_cap is not None:

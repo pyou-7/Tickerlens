@@ -1014,7 +1014,7 @@ def test_refresh_watchlist_quotes_updates_price_never_wipes(session: Session, mo
         last_price = 400.0
         market_cap = 6e12
 
-    monkeypatch.setattr(fin_mod, "get_quote", lambda ticker: _Quote())
+    monkeypatch.setattr(fin_mod, "cached_quote", lambda ticker: _Quote())
     svc = _svc_with_mock(session)
     result = svc.refresh_watchlist_quotes()
 
@@ -1036,7 +1036,7 @@ def test_refresh_watchlist_quotes_counts_failures(session: Session, monkeypatch)
     def _boom(ticker: str):
         raise RuntimeError("yahoo down")
 
-    monkeypatch.setattr(fin_mod, "get_quote", _boom)
+    monkeypatch.setattr(fin_mod, "cached_quote", _boom)
     result = _svc_with_mock(session).refresh_watchlist_quotes()
 
     assert result == {"updated": 0, "failed": 1}

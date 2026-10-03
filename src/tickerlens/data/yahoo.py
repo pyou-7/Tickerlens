@@ -11,6 +11,28 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
+# yfinance sets no socket timeout of its own — a stalled Yahoo connection
+# would block the caller forever. All `.info` reads go through this wrapper.
+_YAHOO_TIMEOUT_SECONDS = 15.0
+_yahoo_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="yahoo-info"
+)
+
+
+def _fetch_info(ticker: str) -> dict:
+    """Read ``yf.Ticker(ticker).info`` with a hard timeout. Never hangs."""
+    try:
+        future = _yahoo_pool.submit(lambda: yf.Ticker(ticker).info)
+    except RuntimeError:
+        # Executor is shutting down (e.g. a background warmer outliving
+        # process teardown) — treat as a timeout; callers never raise.
+        raise TimeoutError(f"Yahoo Finance unavailable during shutdown ({ticker})") from None
+    try:
+        return future.result(timeout=_YAHOO_TIMEOUT_SECONDS)
+    except concurrent.futures.TimeoutError:
+        logger.warning("Yahoo Finance timed out for %s", ticker)
+        raise TimeoutError(f"Yahoo Finance timed out for {ticker}") from None
+
 
 @dataclass
 class QuoteSnapshot:
@@ -23,7 +45,7 @@ class QuoteSnapshot:
 def get_quote(ticker: str) -> QuoteSnapshot:
     """Fetch current price and market cap from Yahoo Finance."""
     try:
-        info = yf.Ticker(ticker).info
+        info = _fetch_info(ticker)
         price = info.get("currentPrice")
         if price is None:
             price = info.get("regularMarketPrice")
@@ -41,7 +63,7 @@ def get_quote(ticker: str) -> QuoteSnapshot:
 def get_day_change_pct(ticker: str) -> float | None:
     """Fetch the session day-change percent for a ticker. Never raises."""
     try:
-        change = yf.Ticker(ticker).info.get("regularMarketChangePercent")
+        change = _fetch_info(ticker).get("regularMarketChangePercent")
         return float(change) if change is not None else None
     except Exception:
         logger.warning("Yahoo Finance day-change failed for %s", ticker, exc_info=True)
