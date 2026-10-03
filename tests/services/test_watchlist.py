@@ -184,3 +184,42 @@ def test_get_popular_stocks_returns_ten_most_traded(session: Session) -> None:
     # Verify each has a valid change_pct
     for s in popular:
         assert isinstance(s.change_pct, float)
+
+
+def test_get_popular_stocks_uses_live_cached_change_pct(session: Session, monkeypatch) -> None:
+    from tickerlens.services import financials as fin_mod
+
+    live = {"NVDA": 7.25, "TSLA": -3.5, "AAPL": 0.0, "AMD": 1.0, "AMZN": 2.0,
+            "MSFT": -1.0, "META": 0.5, "GOOGL": 1.5, "PLTR": 5.0, "NFLX": -2.0}
+    monkeypatch.setattr(fin_mod, "peeked_day_change_pct", lambda ticker: live[ticker])
+    monkeypatch.setattr(fin_mod, "warm_change_pct_cache", lambda tickers: None)
+    popular = _svc(session).get_popular_stocks()
+    assert len(popular) == 10
+    # A 0.0 live value is real data — it must not be replaced by the fallback.
+    by_ticker = {s.ticker: s.change_pct for s in popular}
+    assert by_ticker["NVDA"] == 7.25
+    assert by_ticker["AAPL"] == 0.0
+
+
+def test_get_popular_stocks_falls_back_to_static_seed(session: Session, monkeypatch) -> None:
+    from tickerlens.services import financials as fin_mod
+
+    monkeypatch.setattr(fin_mod, "peeked_day_change_pct", lambda ticker: None)
+    monkeypatch.setattr(fin_mod, "warm_change_pct_cache", lambda tickers: None)
+    popular = _svc(session).get_popular_stocks()
+    by_ticker = {s.ticker: s.change_pct for s in popular}
+    assert by_ticker["NVDA"] == 3.1
+    assert by_ticker["NFLX"] == -0.6
+
+
+def test_get_popular_stocks_never_raises(session: Session, monkeypatch) -> None:
+    from tickerlens.services import financials as fin_mod
+
+    def _boom(ticker):
+        raise RuntimeError("yahoo down")
+
+    monkeypatch.setattr(fin_mod, "peeked_day_change_pct", _boom)
+    monkeypatch.setattr(fin_mod, "warm_change_pct_cache", _boom)
+    popular = _svc(session).get_popular_stocks()
+    assert len(popular) == 10
+    assert all(isinstance(s.change_pct, float) for s in popular)

@@ -18,7 +18,11 @@ from tickerlens.data.filings import (
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
-from tickerlens.data.yahoo import get_quote
+from tickerlens.data.yahoo import (
+    get_quote,
+    peeked_day_change_pct,
+    warm_change_pct_cache,
+)
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
@@ -912,21 +916,46 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    # Fallback day-change percents for the popular bar, used only when a live
+    # Yahoo quote is unavailable (network down, ticker delisted). These are a
+    # static seed — the live cached value wins whenever one exists — so the
+    # home page never blocks on, or blanks from, a transient quote failure.
+    _POPULAR_STOCKS_SEED: tuple[tuple[str, float], ...] = (
+        ("NVDA", 3.1),
+        ("TSLA", -1.8),
+        ("AAPL", 0.5),
+        ("AMD", 2.4),
+        ("AMZN", 1.2),
+        ("MSFT", 0.9),
+        ("META", 1.7),
+        ("GOOGL", 0.4),
+        ("PLTR", 4.2),
+        ("NFLX", -0.6),
+    )
+
     def get_popular_stocks(self) -> list[PopularStock]:
-        """The 10 most actively traded US public companies with price change %."""
-        most_traded = [
-            ("NVDA", 3.1),
-            ("TSLA", -1.8),
-            ("AAPL", 0.5),
-            ("AMD", 2.4),
-            ("AMZN", 1.2),
-            ("MSFT", 0.9),
-            ("META", 1.7),
-            ("GOOGL", 0.4),
-            ("PLTR", 4.2),
-            ("NFLX", -0.6),
-        ]
-        return [PopularStock(ticker=t, change_pct=pct) for t, pct in most_traded]
+        """The 10 most actively traded US public companies with price change %.
+
+        The change percent is the live session day-change from Yahoo Finance.
+        Values are served from a 5-minute TTL cache that refreshes in a
+        background thread — the home page never waits on the network — with
+        the static seed below as the fallback when no live value is cached
+        yet (or Yahoo is unreachable). This method never raises.
+        """
+        try:
+            tickers = [t for t, _ in self._POPULAR_STOCKS_SEED]
+            warm_change_pct_cache(tickers)
+            rows = []
+            for ticker, fallback in self._POPULAR_STOCKS_SEED:
+                live = peeked_day_change_pct(ticker)
+                rows.append(PopularStock(
+                    ticker=ticker,
+                    change_pct=live if live is not None else fallback,
+                ))
+            return rows
+        except Exception:
+            logger.warning("Popular stocks fell back to static seed", exc_info=True)
+            return [PopularStock(ticker=t, change_pct=p) for t, p in self._POPULAR_STOCKS_SEED]
 
     def _vs_company(self, ticker: str, db: Session) -> VsCompany:
         """Build one side of a cross-company comparison from stored data."""
