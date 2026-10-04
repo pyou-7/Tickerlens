@@ -29,23 +29,53 @@
   {%- else -%}
     <span class="text-slate-400 dark:text-gray-600 text-xs font-medium">—</span>
   {%- endif -%}
-{% endmacro %}
+{%- endmacro %}
+
+{% macro net_margin(net_inc, rev) -%}
+  {%- if net_inc is not none and rev is not none and rev != 0 -%}
+    {%- set margin = (net_inc / rev) * 100 -%}
+    <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md {{ 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' if margin >= 0 else 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800' }} tabular-nums">
+      Margin {{ "%.1f"|format(margin) }}%
+    </span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro fcf_margin(fcf, rev) -%}
+  {%- if fcf is not none and rev is not none and rev != 0 -%}
+    {%- set margin = (fcf / rev) * 100 -%}
+    <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md {{ 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800' if margin >= 0 else 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800' }} tabular-nums">
+      FCF {{ "%.1f"|format(margin) }}%
+    </span>
+  {%- endif -%}
+{%- endmacro %}
 
 {# kpi_card shows a single change badge that follows the `changeMode` toggle
    ("yoy" | "qoq") from the enclosing x-data scope. When a period has no QoQ
    (yearly view, or a quarter with no adjacent prior), only the YoY badge is
    rendered and the toggle is hidden by the caller. `caption` overrides the
    "YoY" label next to the badge (range mode passes "vs prior NQ"). #}
-{% macro kpi_card(label, value, yoy_pct, qoq_pct=none, caption="YoY") %}
-<div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 hover:shadow-md transition-all duration-150 flex flex-col justify-between">
+{% macro kpi_card(label, value, yoy_pct, qoq_pct=none, caption="YoY", sub_badge=none) %}
+<div class="group relative rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-200 flex flex-col justify-between">
   <div>
-    <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-1.5">{{ label }}</div>
+    <div class="flex items-center justify-between mb-1.5">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400">{{ label }}</div>
+      <button type="button" @click.stop="copyToClipboard('{{ value }}', 'Copied {{ label }}: {{ value }}')"
+              class="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer"
+              title="Copy value">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+      </button>
+    </div>
     <div class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums mb-1">{{ value }}</div>
   </div>
-  <div class="min-h-[1.25rem]">
-    <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-slate-500 dark:text-gray-400 text-xs font-normal ml-0.5">{{ caption }}</span>{% endif %}</span>
-    {% if qoq_pct is not none %}
-    <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-slate-500 dark:text-gray-400 text-xs font-normal ml-0.5">QoQ</span></span>
+  <div class="flex items-center justify-between flex-wrap gap-1.5 pt-2 border-t border-slate-100 dark:border-gray-800/60 min-h-[1.75rem]">
+    <div>
+      <span x-show="changeMode === 'yoy'">{{ change_badge(yoy_pct) }}{% if yoy_pct is not none %} <span class="text-slate-500 dark:text-gray-400 text-xs font-normal ml-0.5">{{ caption }}</span>{% endif %}</span>
+      {% if qoq_pct is not none %}
+      <span x-show="changeMode === 'qoq'" x-cloak>{{ change_badge(qoq_pct) }} <span class="text-slate-500 dark:text-gray-400 text-xs font-normal ml-0.5">QoQ</span></span>
+      {% endif %}
+    </div>
+    {% if sub_badge %}
+    <div>{{ sub_badge }}</div>
     {% endif %}
   </div>
 </div>
@@ -54,13 +84,13 @@
 {# range_grid renders the PRD §4.2 range-mode tables: one row per metric, one
    column per quarter in the narrowed chart window (values are raw — the
    window itself is the comparison, so there are no YoY/QoQ columns).
-   Horizontally scrollable so a wide window doesn't crush the layout. #}
+   Sticky first column ensures line item context is never lost during horizontal scroll. #}
 {% macro range_grid(rows, labels) %}
-<div class="overflow-x-auto">
+<div class="overflow-x-auto relative">
   <table class="w-full text-sm">
     <thead>
-      <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
-        <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
+      <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/40">
+        <th class="text-left py-2.5 pr-4 font-semibold sticky left-0 bg-slate-50/95 dark:bg-gray-950/95 backdrop-blur-xs z-10 pl-2">Metric</th>
         {% for label in labels %}
         <th class="text-right py-2.5 pr-4 font-semibold whitespace-nowrap">{{ label }}</th>
         {% endfor %}
@@ -68,8 +98,8 @@
     </thead>
     <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
       {% for row in rows %}
-      <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-        <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium whitespace-nowrap">{{ row.label }}</td>
+      <tr x-show="!filter || {{ row.label | lower | tojson }}.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+        <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium whitespace-nowrap sticky left-0 bg-white/95 dark:bg-gray-900/95 backdrop-blur-xs z-10 pl-2">{{ row.label }}</td>
         {% for v in row.values %}
         <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums whitespace-nowrap">{{ fmt_eps(v) if row.kind == "eps" else fmt_large(v) }}</td>
         {% endfor %}
@@ -80,12 +110,7 @@
 </div>
 {% endmacro %}
 
-<!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card.
-     changeMode resets to 'yoy' on each HTMX period swap (this partial is re-rendered),
-     which is the intended default when the selected period changes.
-     In range mode (narrowed chart window) the cards aggregate over the window
-     and the badges compare against the preceding equal-length window, so the
-     YoY/QoQ toggle is replaced by a "vs prior" caption. -->
+<!-- Hero KPI section — YoY/QoQ toggle drives the change badges in each card -->
 <div x-data="{ changeMode: 'yoy' }">
   <!-- Period label + change-mode toggle -->
   <div class="mb-4 flex items-center justify-between gap-4 flex-wrap">
@@ -117,15 +142,15 @@
     {% endif %}
   </div>
 
-  <!-- Hero KPI row -->
+  <!-- Hero KPI row with Margin and Conversion Context -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
     {% if ctx.range_kpi %}
     {% set rk = ctx.range_kpi %}
     {% set rcap = "vs prior " ~ rk.prior_quarters ~ "Q" %}
     {{ kpi_card("Revenue", fmt_large(rk.kpi.revenue), rk.change.revenue, caption=rcap) }}
-    {{ kpi_card("Net Income", fmt_large(rk.kpi.net_income), rk.change.net_income, caption=rcap) }}
+    {{ kpi_card("Net Income", fmt_large(rk.kpi.net_income), rk.change.net_income, caption=rcap, sub_badge=net_margin(rk.kpi.net_income, rk.kpi.revenue)) }}
     {{ kpi_card("EPS (diluted)", fmt_eps(rk.kpi.eps_diluted), rk.change.eps_diluted, caption=rcap) }}
-    {{ kpi_card("Free Cash Flow", fmt_large(rk.kpi.free_cash_flow), rk.change.free_cash_flow, caption=rcap) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(rk.kpi.free_cash_flow), rk.change.free_cash_flow, caption=rcap, sub_badge=fcf_margin(rk.kpi.free_cash_flow, rk.kpi.revenue)) }}
     {% else %}
     {{ kpi_card(
         "Revenue",
@@ -137,7 +162,8 @@
         "Net Income",
         fmt_large(ctx.current.kpi.net_income),
         ctx.current.yoy.net_income,
-        ctx.current.qoq.net_income if ctx.current.qoq else none
+        ctx.current.qoq.net_income if ctx.current.qoq else none,
+        sub_badge=net_margin(ctx.current.kpi.net_income, ctx.current.kpi.revenue)
     ) }}
     {{ kpi_card(
         "EPS (diluted)",
@@ -149,55 +175,98 @@
         "Free Cash Flow",
         fmt_large(ctx.current.kpi.free_cash_flow),
         ctx.current.yoy.free_cash_flow,
-        ctx.current.qoq.free_cash_flow if ctx.current.qoq else none
+        ctx.current.qoq.free_cash_flow if ctx.current.qoq else none,
+        sub_badge=fcf_margin(ctx.current.kpi.free_cash_flow, ctx.current.kpi.revenue)
     ) }}
     {% endif %}
   </div>
 </div>
 
-<!-- Trend chart -->
+<!-- Trend chart with multi-metric toggle -->
 <div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 mb-8 shadow-xs">
-  <div class="flex items-center justify-between mb-4">
-    <h2 class="text-xs uppercase tracking-widest font-semibold text-slate-500 dark:text-gray-400">Revenue &amp; EPS Trend</h2>
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+    <div class="flex items-center gap-2">
+      <h2 class="text-xs uppercase tracking-widest font-semibold text-slate-500 dark:text-gray-400">Revenue &amp; EPS Trend</h2>
+      <span class="text-[10px] text-slate-400 dark:text-gray-500 font-mono">({{ ctx.chart_labels | length }} quarters)</span>
+    </div>
+    <!-- Interactive metric toggle -->
+    <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-white/[0.08] bg-slate-100 dark:bg-gray-950 p-0.5 text-xs shadow-inner"
+         x-data="{ mode: window.currentChartMode || 'both' }">
+      <button type="button" @click="mode = 'both'; setChartMode('both')"
+              :class="mode === 'both' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+              class="px-2.5 py-1 rounded-lg transition font-medium cursor-pointer">Dual View</button>
+      <button type="button" @click="mode = 'rev'; setChartMode('rev')"
+              :class="mode === 'rev' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+              class="px-2.5 py-1 rounded-lg transition font-medium cursor-pointer">Revenue</button>
+      <button type="button" @click="mode = 'eps'; setChartMode('eps')"
+              :class="mode === 'eps' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+              class="px-2.5 py-1 rounded-lg transition font-medium cursor-pointer">EPS</button>
+    </div>
   </div>
   <div id="trend-chart" style="height: 280px;"></div>
 </div>
 
-<!-- Tabbed financial tables.
-     These always show both YoY and QoQ columns (when a prior quarter exists);
-     the YoY/QoQ toggle above applies to the hero KPI cards only. -->
+<!-- Tabbed financial tables with filter, sticky headers, and copy action -->
 <div
-  x-data="{ tab: 'income' }"
+  x-data="{ tab: 'income', filter: '' }"
   id="financial-statement-tabs"
+  :data-active-tab="tab"
   class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] overflow-hidden shadow-xs mb-8"
 >
-  <!-- Tab header with Copy Action -->
-  <div class="flex items-center justify-between border-b border-slate-200/80 dark:border-white/[0.08] px-3 bg-slate-50/50 dark:bg-gray-950/30 flex-wrap">
-    <div class="flex">
+  <!-- Tab header with Filter and Quick Copy Action -->
+  <div class="flex items-center justify-between border-b border-slate-200/80 dark:border-white/[0.08] px-3 bg-slate-50/50 dark:bg-gray-950/30 flex-wrap gap-2 py-1">
+    <div class="flex items-center">
       <button
+        type="button"
+        data-tab-btn="income"
         @click="tab = 'income'"
-        class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+        class="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs sm:text-sm font-semibold transition border-b-2 cursor-pointer"
         :class="tab === 'income' ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
-      >Income Statement</button>
+      >
+        <span>Income Statement</span>
+        <span class="hidden sm:inline-block text-[10px] font-mono px-1 py-0.2 rounded border border-slate-200 dark:border-gray-800 text-slate-400 opacity-60">1</span>
+      </button>
       <button
+        type="button"
+        data-tab-btn="cashflow"
         @click="tab = 'cashflow'"
-        class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+        class="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs sm:text-sm font-semibold transition border-b-2 cursor-pointer"
         :class="tab === 'cashflow' ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
-      >Cash Flow</button>
+      >
+        <span>Cash Flow</span>
+        <span class="hidden sm:inline-block text-[10px] font-mono px-1 py-0.2 rounded border border-slate-200 dark:border-gray-800 text-slate-400 opacity-60">2</span>
+      </button>
       <button
+        type="button"
+        data-tab-btn="balance"
         @click="tab = 'balance'"
-        class="px-5 py-3 text-sm font-semibold transition border-b-2 cursor-pointer"
+        class="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs sm:text-sm font-semibold transition border-b-2 cursor-pointer"
         :class="tab === 'balance' ? 'border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
-      >Balance Sheet</button>
+      >
+        <span>Balance Sheet</span>
+        <span class="hidden sm:inline-block text-[10px] font-mono px-1 py-0.2 rounded border border-slate-200 dark:border-gray-800 text-slate-400 opacity-60">3</span>
+      </button>
     </div>
 
-    <!-- Quick Copy Table Button -->
-    <button type="button" @click="copyActiveStatementTable(tab)"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition my-1.5 cursor-pointer"
-            title="Copy table to clipboard for Excel / Google Sheets">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-      <span>Copy Table (TSV)</span>
-    </button>
+    <div class="flex items-center gap-2 py-1">
+      <!-- Search filter input -->
+      <div class="relative flex items-center">
+        <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <input type="text" x-model="filter" placeholder="Filter metrics..."
+               class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-white/[0.08] text-xs pl-8 pr-6 py-1 text-slate-800 dark:text-gray-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36 sm:w-44 transition">
+        <button x-show="filter" @click="filter = ''" class="absolute right-2 text-slate-400 hover:text-slate-600 text-xs cursor-pointer">✕</button>
+      </div>
+
+      <!-- Quick Copy Table Button -->
+      <button type="button" @click="copyActiveStatementTable(tab)"
+              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition cursor-pointer"
+              title="Copy table to clipboard for Excel / Google Sheets (Hotkey: C)">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        <span class="hidden sm:inline">Copy Table (TSV)</span>
+        <span class="sm:hidden">Copy</span>
+        <span class="hidden sm:inline-block text-[10px] font-mono px-1 py-0.2 rounded border border-slate-200 dark:border-gray-800 text-slate-400 opacity-60">C</span>
+      </button>
+    </div>
   </div>
 
   <!-- Income Statement tab -->
@@ -206,44 +275,46 @@
     {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "income") | list, ctx.range_table.labels) }}
     <p class="text-xs text-slate-400 dark:text-gray-500 mt-4">Range view: {{ ctx.range_table.labels[0] }} → {{ ctx.range_table.labels[-1] }}. Widen the From/To selectors above to return to the single-period view.</p>
     {% else %}
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
-          <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
-          {% if ctx.current.qoq %}
-          <th class="text-right py-2.5 font-semibold">QoQ</th>
-          {% endif %}
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Revenue</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.revenue) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Net Income</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.net_income) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">EPS Basic</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">EPS Diluted</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
-        </tr>
-      </tbody>
-    </table>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+            <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
+            {% if ctx.current.qoq %}
+            <th class="text-right py-2.5 font-semibold">QoQ</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
+          <tr x-show="!filter || 'revenue'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-900 dark:text-white font-semibold">Revenue</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.revenue) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.revenue) }}</td>
+            {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.revenue) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'net income'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-900 dark:text-white font-semibold">Net Income</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.net_income) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.net_income) }}</td>
+            {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.net_income) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'eps basic'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">EPS Basic</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_basic) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_basic) }}</td>
+            {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_basic) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'eps diluted'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">EPS Diluted</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_eps(ctx.current.kpi.eps_diluted) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.eps_diluted) }}</td>
+            {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.eps_diluted) }}</td>{% endif %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
     {% endif %}
   </div>
 
@@ -252,26 +323,28 @@
     {% if ctx.range_table %}
     {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "cashflow") | list, ctx.range_table.labels) }}
     {% else %}
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
-          <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
-          {% if ctx.current.qoq %}
-          <th class="text-right py-2.5 font-semibold">QoQ</th>
-          {% endif %}
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Free Cash Flow</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
-          {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
-        </tr>
-      </tbody>
-    </table>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
+            <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
+            {% if ctx.current.qoq %}
+            <th class="text-right py-2.5 font-semibold">QoQ</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
+          <tr x-show="!filter || 'free cash flow fcf'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-900 dark:text-white font-semibold">Free Cash Flow</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(ctx.current.kpi.free_cash_flow) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(ctx.current.yoy.free_cash_flow) }}</td>
+            {% if ctx.current.qoq %}<td class="py-3 text-right">{{ change_badge(ctx.current.qoq.free_cash_flow) }}</td>{% endif %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
     {% endif %}
     <p class="text-xs text-slate-400 dark:text-gray-500 mt-4">FCF = Operating Cash Flow − Capital Expenditures</p>
   </div>
@@ -294,94 +367,119 @@
           and bs.total_equity is none and bs.cash_and_equivalents is none %}
       <p class="text-slate-500 dark:text-gray-400 text-sm py-6 text-center">Not available for this period.</p>
     {% else %}
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
-          <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
-          <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
-          {% if ctx.current.balance_sheet_qoq %}
-          <th class="text-right py-2.5 font-semibold">QoQ</th>
-          {% endif %}
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
-        {% set bs_yoy = ctx.current.balance_sheet_yoy %}
-        {% set bs_qoq = ctx.current.balance_sheet_qoq %}
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Assets</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_assets) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_assets) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Liabilities</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_liabilities) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_liabilities) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Equity</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_equity) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
-        </tr>
-        <tr class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
-          <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Cash &amp; Equivalents</td>
-          <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.cash_and_equivalents) }}</td>
-          <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
-          {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
-        </tr>
-      </tbody>
-    </table>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
+            <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
+            <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
+            {% if ctx.current.balance_sheet_qoq %}
+            <th class="text-right py-2.5 font-semibold">QoQ</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60">
+          {% set bs_yoy = ctx.current.balance_sheet_yoy %}
+          {% set bs_qoq = ctx.current.balance_sheet_qoq %}
+          <tr x-show="!filter || 'total assets'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-900 dark:text-white font-semibold">Total Assets</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(bs.total_assets) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_assets) }}</td>
+            {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_assets) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'total liabilities'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Liabilities</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_liabilities) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_liabilities) }}</td>
+            {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'total equity stockholders'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Equity</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_equity) }}</td>
+            {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_equity) }}</td>{% endif %}
+          </tr>
+          <tr x-show="!filter || 'cash equivalents'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-900 dark:text-white font-semibold">Cash &amp; Equivalents</td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-bold tabular-nums">{{ fmt_large(bs.cash_and_equivalents) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.cash_and_equivalents) }}</td>
+            {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.cash_and_equivalents) }}</td>{% endif %}
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <p class="text-xs text-slate-400 dark:text-gray-500 mt-4">Balance-sheet values are point-in-time, as of the period end date.</p>
     {% endif %}
     {% endif %}
   </div>
 </div>
 
-<!-- Collapsible disclosure sections (PRD 4.3 #6).
-     Each stays visible and shows "Not available for this period" when empty, so
-     the reader knows where to look. Risk Factors are populated from the latest
-     10-K; Press release highlights from the period's 8-K ex-99 exhibit;
-     Management guidance and Transcript excerpts await their content sources. -->
+<!-- Collapsible disclosure sections -->
 {% macro disclosure(title, body, source=none) %}
-<div x-data="{ open: false }" class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 overflow-hidden shadow-xs">
+<div x-data="{ open: false }"
+     @toggle-all-disclosures.window="open = $event.detail"
+     x-show="!disclosureFilter || {{ (title ~ ' ' ~ (body or '')) | lower | tojson }}.includes(disclosureFilter.toLowerCase().trim())"
+     class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] overflow-hidden shadow-xs hover:border-slate-300 dark:hover:border-gray-700 transition">
   <button type="button" @click="open = !open" :aria-expanded="open"
-          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-slate-50 dark:hover:bg-gray-800/40 transition cursor-pointer">
-    <span class="text-sm font-semibold text-slate-800 dark:text-gray-200">{{ title }}</span>
-    <div class="flex items-center gap-2">
+          class="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-gray-800/40 transition cursor-pointer">
+    <div class="flex items-center gap-2.5">
+      <span class="w-2 h-2 rounded-full {{ 'bg-emerald-500' if body else 'bg-slate-300 dark:bg-gray-700' }}"></span>
+      <span class="text-sm font-semibold text-slate-800 dark:text-gray-200">{{ title }}</span>
+    </div>
+    <div class="flex items-center gap-2.5">
       {% if body %}
-      <span class="text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">Available</span>
+        {% set words = (body | length / 5) | round | int %}
+        <span class="text-[11px] font-mono font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-0.5 rounded-lg border border-emerald-200 dark:border-emerald-800">
+          Available · {{ words }} words
+        </span>
       {% else %}
-      <span class="text-[10px] text-slate-400 dark:text-gray-500">None</span>
+        <span class="text-[11px] text-slate-400 dark:text-gray-500 bg-slate-50 dark:bg-gray-800/50 px-2 py-0.5 rounded-md">None</span>
       {% endif %}
-      <svg class="w-4 h-4 text-slate-400 dark:text-gray-500 transition-transform" :class="open && 'rotate-180'"
+      <svg class="w-4 h-4 text-slate-400 dark:text-gray-500 transition-transform duration-200" :class="open && 'rotate-180'"
            fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
       </svg>
     </div>
   </button>
-  <div x-show="open" x-cloak class="px-5 pb-4 border-t border-slate-100 dark:border-gray-800/60 pt-3">
+  <div x-show="open" x-cloak class="px-5 pb-5 border-t border-slate-100 dark:border-gray-800/60 pt-4 bg-slate-50/30 dark:bg-gray-950/30">
     {% if body %}
-      <div class="flex justify-end mb-2">
+      <div class="flex justify-between items-center mb-3">
+        {% if source %}<span class="text-xs text-slate-500 dark:text-gray-400 font-mono">Source: <span class="text-indigo-600 dark:text-indigo-400">{{ source }}</span></span>{% else %}<span></span>{% endif %}
         <button type="button" @click="copyToClipboard({{ body | tojson }}, 'Disclosure text copied!')"
-                class="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer">
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs cursor-pointer transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
           Copy Text
         </button>
       </div>
-      <div class="text-sm text-slate-600 dark:text-gray-400 leading-relaxed max-h-96 overflow-y-auto whitespace-pre-line">{{ body }}</div>
-      {% if source %}<p class="text-xs text-slate-400 dark:text-gray-500 mt-3 font-mono">Source: {{ source }}</p>{% endif %}
+      <div class="text-sm text-slate-700 dark:text-gray-300 leading-relaxed max-h-[28rem] overflow-y-auto whitespace-pre-line font-sans p-4 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/60 dark:border-white/[0.05] shadow-inner select-text">
+        {{ body }}
+      </div>
     {% else %}
-      <p class="text-sm text-slate-400 dark:text-gray-500 italic">Not available for this period.</p>
+      <p class="text-sm text-slate-400 dark:text-gray-500 italic py-2">Not available for this period.</p>
     {% endif %}
   </div>
 </div>
 {% endmacro %}
 
-<div class="mt-8 space-y-3">
-  <h2 class="text-xs uppercase tracking-widest font-semibold text-slate-500 dark:text-gray-400 mb-2">Disclosures</h2>
+<div x-data="{ allOpen: false, disclosureFilter: '' }" class="mt-8 space-y-3">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div>
+      <h2 class="text-xs uppercase tracking-widest font-semibold text-slate-500 dark:text-gray-400">Disclosures &amp; SEC Exhibits</h2>
+      <p class="text-[11px] text-slate-400 dark:text-gray-500">Official excerpts from SEC Form 10-K, 10-Q, and 8-K filings</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="relative">
+        <input type="text" x-model="disclosureFilter" placeholder="Filter disclosures..."
+               class="rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-white/[0.08] text-xs pl-2.5 pr-6 py-1 text-slate-800 dark:text-gray-200 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36 sm:w-48 transition">
+        <button x-show="disclosureFilter" @click="disclosureFilter = ''" class="absolute right-2 top-1 text-slate-400 text-xs cursor-pointer">✕</button>
+      </div>
+      <button type="button" @click="allOpen = !allOpen; $dispatch('toggle-all-disclosures', allOpen)"
+              class="px-2.5 py-1 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition cursor-pointer">
+        <span x-text="allOpen ? 'Collapse All' : 'Expand All'">Expand All</span>
+      </button>
+    </div>
+  </div>
   {{ disclosure("Press release highlights", ctx.press_release_highlights, ctx.press_release_source) }}
   {{ disclosure("Management guidance", none) }}
   {{ disclosure("Transcript excerpts", none) }}
@@ -397,27 +495,37 @@
 }
 </script>
 
-<!-- Sticky per-period CSV download (PRD §4.3 #7). Lives inside the HTMX-swapped
-     region so its href always matches the currently selected period. The
-     full-history ZIP (PRD §4.8, first slice) needs no params — plain link. -->
-<div class="sticky bottom-6 mt-8 flex justify-end gap-3 pointer-events-none z-30 print:hidden">
-  <a href="/company/{{ ctx.ticker }}/download/history.zip"
-     download
-     class="pointer-events-auto inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-gray-800 px-4 py-2.5 font-semibold text-slate-700 dark:text-gray-200 text-xs shadow-lg shadow-slate-900/10 dark:shadow-black/50 transition">
-    <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-    Full history (ZIP)
-  </a>
-  <a href="/company/{{ ctx.ticker }}/detail/download?granularity={{ ctx.granularity }}&quarter={{ ctx.selected_quarter | urlencode }}&year={{ ctx.selected_year }}"
-     download
-     class="pointer-events-auto inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 font-semibold text-white text-xs shadow-lg shadow-indigo-600/25 transition">
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-    Download {{ ctx.current.label }} CSV
-  </a>
-  <button
-    type="button"
-    onclick="window.print()"
-    class="pointer-events-auto inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-gray-800 px-4 py-2.5 font-semibold text-slate-700 dark:text-gray-200 text-xs shadow-lg shadow-slate-900/10 dark:shadow-black/50 transition cursor-pointer">
-    <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
-    Print PDF
-  </button>
+<!-- Sticky per-period CSV download with floating dock styling -->
+<div class="sticky bottom-6 mt-8 flex items-center justify-between gap-3 pointer-events-none z-30 print:hidden">
+  <div class="pointer-events-auto hidden sm:flex items-center gap-2 rounded-2xl bg-white/90 dark:bg-[#0e1017]/90 backdrop-blur-md border border-slate-200/80 dark:border-white/[0.08] px-3.5 py-2 text-xs text-slate-600 dark:text-gray-400 shadow-lg">
+    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+    <span class="font-semibold text-slate-900 dark:text-white">{{ ctx.current.label }}</span>
+    <span class="text-slate-300 dark:text-gray-700">|</span>
+    <span>{{ ctx.name }} ({{ ctx.ticker }})</span>
+  </div>
+
+  <div class="pointer-events-auto flex items-center gap-2 rounded-2xl bg-white/90 dark:bg-[#0e1017]/90 backdrop-blur-md border border-slate-200/80 dark:border-white/[0.08] p-1.5 shadow-2xl shadow-slate-900/10 dark:shadow-black/60">
+    <a href="/company/{{ ctx.ticker }}/download/history.zip"
+       download
+       class="inline-flex items-center gap-1.5 rounded-xl border border-transparent hover:border-slate-200 dark:hover:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-800 px-3 py-2 font-semibold text-slate-700 dark:text-gray-300 text-xs transition"
+       title="Download all stored quarterly statements in a single ZIP">
+      <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      <span class="hidden md:inline">Full history</span> (ZIP)
+    </a>
+    <a href="/company/{{ ctx.ticker }}/detail/download?granularity={{ ctx.granularity }}&quarter={{ ctx.selected_quarter | urlencode }}&year={{ ctx.selected_year }}"
+       download
+       class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-3.5 py-2 font-semibold text-white text-xs shadow-md shadow-indigo-600/20 transition"
+       title="Export currently selected period financials as CSV">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      <span>Download {{ ctx.current.label }} CSV</span>
+    </a>
+    <button
+      type="button"
+      onclick="window.print()"
+      class="inline-flex items-center gap-1.5 rounded-xl border border-transparent hover:border-slate-200 dark:hover:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-800 px-3 py-2 font-semibold text-slate-700 dark:text-gray-300 text-xs transition cursor-pointer"
+      title="Print or save as PDF">
+      <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+      <span class="hidden md:inline">Print</span> PDF
+    </button>
+  </div>
 </div>
