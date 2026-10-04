@@ -291,30 +291,33 @@
     var revenueB = revenue.map(function(v) { return v === null ? null : v / 1e9; });
 
     var isDark = document.documentElement.classList.contains('dark');
-    var darkBg  = isDark ? '#030712' : '#ffffff';
-    var gridCol = isDark ? '#1f2937' : '#f1f5f9';
-    var textCol = isDark ? '#9ca3af' : '#475569';
+    var darkBg  = isDark ? '#0e1017' : '#ffffff';
+    var gridCol = isDark ? 'rgba(255, 255, 255, 0.07)' : '#f1f5f9';
+    var textCol = isDark ? '#94a3b8' : '#475569';
 
     var traceRevenue = {
       x: labels, y: revenueB, name: 'Revenue ($B)',
       type: 'scatter', mode: 'lines+markers',
-      line: { color: '#6366f1', width: 2.5 },
+      line: { color: '#6366f1', width: 2.5, shape: 'spline' },
       marker: { size: 6, color: '#6366f1' },
       connectgaps: false, yaxis: 'y',
+      hovertemplate: '$%{y:.2f}B',
     };
     var traceEPS = {
       x: labels, y: eps, name: 'EPS Diluted ($)',
       type: 'scatter', mode: 'lines+markers',
-      line: { color: '#10b981', width: 2.5 },
+      line: { color: '#10b981', width: 2.5, shape: 'spline' },
       marker: { size: 6, color: '#10b981' },
       connectgaps: false, yaxis: 'y2',
+      hovertemplate: '$%{y:.2f}',
     };
     var layout = {
       paper_bgcolor: darkBg, plot_bgcolor: darkBg,
-      margin: { t: 20, r: 60, b: 60, l: 60 },
+      margin: { t: 25, r: 60, b: 60, l: 60 },
+      hovermode: 'x unified',
       font: { color: textCol, size: 11, family: 'Inter, system-ui, sans-serif' },
       legend: { orientation: 'h', x: 0, y: -0.28, font: { color: textCol } },
-      xaxis: { tickangle: -35, gridcolor: gridCol, linecolor: gridCol, tickfont: { size: 10 } },
+      xaxis: { tickangle: -30, gridcolor: gridCol, linecolor: gridCol, tickfont: { size: 10 } },
       yaxis: {
         title: { text: 'Revenue ($B)', font: { color: '#6366f1', size: 11 } },
         gridcolor: gridCol, linecolor: gridCol,
@@ -341,6 +344,23 @@
 
   // Re-render chart on theme toggle
   window.addEventListener('theme-changed', renderTrendChart);
+
+  // Copy active financial statement table to clipboard
+  window.copyActiveStatementTable = function(tabName) {
+    var container = document.getElementById('financial-statement-tabs');
+    if (!container) return;
+    var activeDiv = container.querySelector('[data-tab-pane="' + tabName + '"]');
+    var table = activeDiv ? activeDiv.querySelector('table') : null;
+    if (!table) return;
+    var tsv = '';
+    for (var i = 0; i < table.rows.length; i++) {
+      var cells = Array.from(table.rows[i].cells).map(function(c) {
+        return c.innerText.trim().replace(/\n/g, ' ');
+      });
+      tsv += cells.join('\t') + '\n';
+    }
+    window.copyToClipboard(tsv, 'Financial statement copied! Ready to paste into Excel/Sheets.');
+  };
 </script>
 
 {% endblock %}

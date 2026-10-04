@@ -24,7 +24,7 @@
 
 {# kpi_card: label, value string, yoy pct (float or none), explainer tooltip #}
 {% macro kpi_card(label, value, yoy_pct, explainer=none) %}
-<div class="group relative rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-900/60 transition flex flex-col justify-between">
+<div class="group relative rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 hover:shadow-md transition-all duration-150 flex flex-col justify-between">
   <div>
     <div class="flex items-center justify-between mb-1.5">
       <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400">{{ label }}</span>
@@ -37,12 +37,14 @@
   <div class="mt-2.5 min-h-[1.25rem]">
     {%- if yoy_pct is not none -%}
       {%- if yoy_pct >= 0 -%}
-        <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 tabular-nums">
-          ▲ +{{ "%.1f"|format(yoy_pct) }}% YoY
+        <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 tabular-nums">
+          <span>▲</span>
+          <span>+{{ "%.1f"|format(yoy_pct) }}% YoY</span>
         </span>
       {%- else -%}
-        <span class="inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 tabular-nums">
-          ▼ {{ "%.1f"|format(yoy_pct) }}% YoY
+        <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/80 tabular-nums">
+          <span>▼</span>
+          <span>{{ "%.1f"|format(yoy_pct) }}% YoY</span>
         </span>
       {%- endif -%}
     {%- endif -%}
@@ -53,13 +55,13 @@
 {% block content %}
 
 <!-- Company header -->
-<div class="flex flex-col md:flex-row items-start justify-between gap-6 mb-8 pb-6 border-b border-slate-200/80 dark:border-gray-800/80">
+<div class="flex flex-col md:flex-row items-start justify-between gap-6 mb-8 pb-6 border-b border-slate-200/80 dark:border-white/[0.08]">
   <div class="space-y-2 max-w-2xl">
     <div class="flex items-center gap-3 flex-wrap">
       <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ overview.name }}</h1>
       {% if overview.ticker %}
         <div class="flex items-center gap-1.5">
-          <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-1 shadow-xs">
+          <span class="rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-1 shadow-xs">
             {{ overview.ticker }}
           </span>
           <!-- Quick Copy Ticker -->
@@ -76,6 +78,15 @@
           </button>
         </div>
       {% endif %}
+      {% if overview.cik %}
+        <a href="https://www.sec.gov/edgar/browse/?CIK={{ overview.cik }}" target="_blank" rel="noopener noreferrer"
+           class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-gray-800/80 border border-slate-200/80 dark:border-white/[0.08] text-xs font-mono text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
+           title="View primary filings on SEC EDGAR (CIK: {{ overview.cik }})">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+          <span>CIK {{ overview.cik }}</span>
+          <span class="text-[10px] opacity-70">↗</span>
+        </a>
+      {% endif %}
       {% if also_trades_as %}
         <span class="text-xs text-slate-500 dark:text-gray-400 flex items-center gap-1">
           Also trades as
@@ -85,7 +96,7 @@
         </span>
       {% endif %}
       {% if overview.sector %}
-        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-gray-700/60 px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">
+        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-white/[0.08] px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">
           {{ overview.sector }}
         </span>
       {% endif %}
@@ -110,7 +121,7 @@
     <form method="post" action="/company/{{ overview.ticker }}/refresh" class="shrink-0">
       <button type="submit"
               title="Refresh company fundamentals and Yahoo price quote"
-              class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
+              class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
         <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
@@ -121,9 +132,9 @@
     <form @submit.prevent="if ($event.target.peer.value.trim()) location = '/company/{{ overview.ticker }}/vs/' + $event.target.peer.value.trim().toUpperCase()"
           class="flex gap-1.5" x-data>
       <input type="text" name="peer" maxlength="10" placeholder="Compare vs… (ticker)" aria-label="Compare with ticker"
-             class="w-36 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-900 dark:text-white text-xs px-3 py-2 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner font-semibold" />
+             class="w-36 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-white text-xs px-3 py-2 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner font-semibold" />
       <button type="submit"
-              class="rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
+              class="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
         ⇄ Compare
       </button>
     </form>
@@ -141,7 +152,7 @@
 
 <!-- Description -->
 {% if overview.description %}
-<div class="rounded-2xl bg-white dark:bg-gray-900/60 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs mb-8 max-w-4xl">
+<div class="rounded-2xl bg-white dark:bg-gray-900/60 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs mb-8 max-w-4xl">
   <h2 class="text-xs uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500 mb-2">Company Overview</h2>
   <p class="text-slate-700 dark:text-gray-300 text-sm leading-relaxed">{{ overview.description }}</p>
 </div>
@@ -185,7 +196,7 @@
 {% if valuation %}
 <div class="mb-10">
   <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Valuation Signal & Price Target</h2>
-  <div class="rounded-3xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-6 sm:p-7 shadow-xs max-w-4xl space-y-5">
+  <div class="rounded-3xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-6 sm:p-7 shadow-xs max-w-4xl space-y-5">
     <div class="flex items-center gap-3 flex-wrap">
       {% set sig = valuation.signal %}
       {% if sig == "Strong Buy" %}
@@ -231,10 +242,10 @@
       {% endif %}
     </div>
 
-    <!-- Interactive Visual Valuation Spectrum & Methodology Accordion -->
-    <div class="space-y-2 pt-2" x-data="{ openExplainer: false }">
+    <!-- Interactive Continuous Visual Valuation Spectrum & Methodology Accordion -->
+    <div class="space-y-3 pt-2" x-data="{ openExplainer: false }">
       <div class="flex items-center justify-between text-xs text-slate-500 dark:text-gray-400">
-        <span class="font-semibold text-[11px] uppercase tracking-wider text-slate-400 dark:text-gray-500">Valuation Meter</span>
+        <span class="font-semibold text-[11px] uppercase tracking-wider text-slate-400 dark:text-gray-500">Valuation Spectrum Meter</span>
         <button type="button" @click="openExplainer = !openExplainer"
                 class="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer text-xs">
           <span>Methodology Breakdown</span>
@@ -242,25 +253,23 @@
         </button>
       </div>
 
-      <!-- Meter Progress Bar -->
-      <div class="h-2.5 w-full bg-slate-100 dark:bg-gray-800 rounded-full overflow-hidden p-0.5 flex items-center border border-slate-200/80 dark:border-gray-700/80">
+      <!-- Continuous Spectrum Bar with Pointer -->
+      <div class="relative pt-2 pb-1">
+        <div class="h-3 w-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500 shadow-inner"></div>
+        <!-- Pointer Needle -->
         {% set upside = valuation.upside_pct or 0 %}
-        {% if upside >= 25 %}
-          <div class="h-full rounded-full bg-emerald-500 shadow-sm transition-all duration-500" style="width: 90%;"></div>
-        {% elif upside >= 10 %}
-          <div class="h-full rounded-full bg-green-500 shadow-sm transition-all duration-500" style="width: 75%;"></div>
-        {% elif upside >= -5 %}
-          <div class="h-full rounded-full bg-amber-500 shadow-sm transition-all duration-500" style="width: 50%;"></div>
-        {% elif upside >= -20 %}
-          <div class="h-full rounded-full bg-orange-500 shadow-sm transition-all duration-500" style="width: 35%;"></div>
-        {% else %}
-          <div class="h-full rounded-full bg-rose-500 shadow-sm transition-all duration-500" style="width: 20%;"></div>
-        {% endif %}
+        {# Normalize upside % into 0-100% position on the visual gradient: -30% => 10%, 0% => 50%, +30% => 90% #}
+        {% set pointer_pos = (50 + (upside * 1.33)) %}
+        {% if pointer_pos < 6 %}{% set pointer_pos = 6 %}{% elif pointer_pos > 94 %}{% set pointer_pos = 94 %}{% endif %}
+        <div class="absolute top-0 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-all duration-300" style="left: {{ "%.1f"|format(pointer_pos) }}%;">
+          <div class="w-3.5 h-3.5 rounded-full bg-white dark:bg-gray-950 border-2 border-indigo-600 dark:border-indigo-400 shadow-md"></div>
+          <div class="w-0.5 h-3 bg-indigo-600 dark:bg-indigo-400"></div>
+        </div>
       </div>
       <div class="flex items-center justify-between text-[10px] text-slate-400 dark:text-gray-500 uppercase tracking-wider font-semibold">
-        <span>Overvalued</span>
-        <span>Fair Value</span>
-        <span>Undervalued</span>
+        <span>Overvalued (&lt;-20%)</span>
+        <span>Fair Value (-5% to +10%)</span>
+        <span>Undervalued (&gt;+20%)</span>
       </div>
 
       <!-- Methodology Explainer Accordion -->

@@ -37,7 +37,7 @@
    rendered and the toggle is hidden by the caller. `caption` overrides the
    "YoY" label next to the badge (range mode passes "vs prior NQ"). #}
 {% macro kpi_card(label, value, yoy_pct, qoq_pct=none, caption="YoY") %}
-<div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs hover:border-indigo-300 dark:hover:border-indigo-900/60 transition flex flex-col justify-between">
+<div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 hover:shadow-md transition-all duration-150 flex flex-col justify-between">
   <div>
     <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-1.5">{{ label }}</div>
     <div class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums mb-1">{{ value }}</div>
@@ -156,7 +156,7 @@
 </div>
 
 <!-- Trend chart -->
-<div class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 mb-8 shadow-xs">
+<div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 mb-8 shadow-xs">
   <div class="flex items-center justify-between mb-4">
     <h2 class="text-xs uppercase tracking-widest font-semibold text-slate-500 dark:text-gray-400">Revenue &amp; EPS Trend</h2>
   </div>
@@ -167,24 +167,12 @@
      These always show both YoY and QoQ columns (when a prior quarter exists);
      the YoY/QoQ toggle above applies to the hero KPI cards only. -->
 <div
-  x-data="{
-    tab: 'income',
-    copyActiveTable() {
-      const activeDiv = this.$el.querySelector(`[x-show*=\"tab === '${this.tab}'\"]`);
-      const table = activeDiv ? activeDiv.querySelector('table') : null;
-      if (!table) return;
-      let tsv = '';
-      for (const row of table.rows) {
-        const cells = Array.from(row.cells).map(c => c.innerText.trim().replace(/\n/g, ' '));
-        tsv += cells.join('\t') + '\n';
-      }
-      window.copyToClipboard(tsv, 'Financial statement copied! Ready to paste into Excel/Sheets.');
-    }
-  }"
-  class="rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 overflow-hidden shadow-xs"
+  x-data="{ tab: 'income' }"
+  id="financial-statement-tabs"
+  class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] overflow-hidden shadow-xs mb-8"
 >
   <!-- Tab header with Copy Action -->
-  <div class="flex items-center justify-between border-b border-slate-200/80 dark:border-gray-800 px-3 bg-slate-50/50 dark:bg-gray-950/30 flex-wrap">
+  <div class="flex items-center justify-between border-b border-slate-200/80 dark:border-white/[0.08] px-3 bg-slate-50/50 dark:bg-gray-950/30 flex-wrap">
     <div class="flex">
       <button
         @click="tab = 'income'"
@@ -204,8 +192,8 @@
     </div>
 
     <!-- Quick Copy Table Button -->
-    <button type="button" @click="copyActiveTable()"
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition my-1.5 cursor-pointer"
+    <button type="button" @click="copyActiveStatementTable(tab)"
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition my-1.5 cursor-pointer"
             title="Copy table to clipboard for Excel / Google Sheets">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
       <span>Copy Table (TSV)</span>
@@ -213,7 +201,7 @@
   </div>
 
   <!-- Income Statement tab -->
-  <div x-show="tab === 'income'" class="p-5">
+  <div x-show="tab === 'income'" data-tab-pane="income" class="p-5">
     {% if ctx.range_table %}
     {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "income") | list, ctx.range_table.labels) }}
     <p class="text-xs text-slate-400 dark:text-gray-500 mt-4">Range view: {{ ctx.range_table.labels[0] }} → {{ ctx.range_table.labels[-1] }}. Widen the From/To selectors above to return to the single-period view.</p>
@@ -260,13 +248,13 @@
   </div>
 
   <!-- Cash Flow tab -->
-  <div x-show="tab === 'cashflow'" class="p-5">
+  <div x-show="tab === 'cashflow'" data-tab-pane="cashflow" class="p-5">
     {% if ctx.range_table %}
     {{ range_grid(ctx.range_table.rows | selectattr("section", "equalto", "cashflow") | list, ctx.range_table.labels) }}
     {% else %}
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
           <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
           <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
           <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>
@@ -289,7 +277,7 @@
   </div>
 
   <!-- Balance Sheet tab -->
-  <div x-show="tab === 'balance'" class="p-5">
+  <div x-show="tab === 'balance'" data-tab-pane="balance" class="p-5">
     {% if ctx.range_table %}
       {% set bal_rows = ctx.range_table.rows | selectattr("section", "equalto", "balance") | list %}
       {% set ns = namespace(has_data=false) %}
@@ -308,7 +296,7 @@
     {% else %}
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-gray-800">
+        <tr class="text-slate-500 dark:text-gray-400 text-[11px] uppercase tracking-wider border-b border-slate-200 dark:border-white/[0.08]">
           <th class="text-left py-2.5 pr-4 font-semibold">Metric</th>
           <th class="text-right py-2.5 pr-4 font-semibold">{{ ctx.current.label }}</th>
           <th class="text-right py-2.5 pr-4 font-semibold">YoY</th>

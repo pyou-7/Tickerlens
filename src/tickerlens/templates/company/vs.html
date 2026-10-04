@@ -76,7 +76,7 @@
 </div>
 
 <!-- Header -->
-<div class="mb-8 pb-6 border-b border-slate-200/80 dark:border-gray-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
+<div class="mb-8 pb-6 border-b border-slate-200/80 dark:border-white/[0.08] flex flex-col md:flex-row md:items-center justify-between gap-4">
   <div>
     <div class="flex items-center gap-3 mb-1.5 flex-wrap">
       <div class="flex items-center gap-2">
@@ -98,14 +98,14 @@
 
   <!-- Direct Swap Link Button -->
   <a href="/company/{{ vs.b.ticker }}/vs/{{ vs.a.ticker }}"
-     class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition shrink-0 cursor-pointer">
+     class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs transition shrink-0 cursor-pointer">
     <span>⇄</span>
     <span>Swap Order ({{ vs.b.ticker }} vs {{ vs.a.ticker }})</span>
   </a>
 </div>
 
 <!-- Swap/Change Companies Toolbar -->
-<div class="mb-8 rounded-2xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 p-5 shadow-xs" x-data="{ a: '{{ vs.a.ticker }}', b: '{{ vs.b.ticker }}' }">
+<div class="mb-8 rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs" x-data="{ a: '{{ vs.a.ticker }}', b: '{{ vs.b.ticker }}' }">
   <form @submit.prevent="if (a.trim() && b.trim()) location = '/company/' + a.trim().toUpperCase() + '/vs/' + b.trim().toUpperCase()"
         class="flex items-center gap-2.5 flex-wrap">
     <span class="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 mr-1">Compare</span>
