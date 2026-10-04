@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
 from tickerlens.data.filings import (
+    extract_management_guidance,
     extract_press_release_highlights,
     extract_risk_factors,
+    extract_transcript_excerpts,
     filing_doc_url,
     latest_annual_filing,
 )
@@ -285,6 +287,12 @@ class DetailContext(BaseModel):
     # Press-release highlights for the *selected* period (None = not available)
     press_release_highlights: str | None = None
     press_release_source: str | None = None
+    # Management guidance for the *selected* period (None = not available)
+    management_guidance: str | None = None
+    management_guidance_source: str | None = None
+    # Transcript excerpts / prepared remarks for the *selected* period (None = not available)
+    transcript_excerpts: str | None = None
+    transcript_source: str | None = None
 
 
 class MetricDelta(BaseModel):
@@ -496,17 +504,30 @@ class FinancialsService:
             period = by_period_end.get(row.period_end)
             if period is None:
                 continue
-            text, source = self._fetch_press_release_highlights(cik, period)
-            if text is not None:
-                row.press_release_highlights = text
-                row.press_release_source = source
+            hl, hl_src, gd, gd_src, ex, ex_src = self._fetch_press_release_disclosures(cik, period)
+            if hl is not None:
+                row.press_release_highlights = hl
+                row.press_release_source = hl_src
+            if gd is not None:
+                row.management_guidance = gd
+                row.management_guidance_source = gd_src
+            if ex is not None:
+                row.transcript_excerpts = ex
+                row.transcript_source = ex_src
 
     def _fetch_press_release_highlights(
         self, cik: str, period: EarningsPeriod
     ) -> tuple[str | None, str | None]:
-        """Fetch an 8-K ex-99 exhibit and extract highlights. Returns (text, source).
+        """Fetch an 8-K ex-99 exhibit and extract highlights. Returns (text, source)."""
+        hl, hl_src, _, _, _, _ = self._fetch_press_release_disclosures(cik, period)
+        return hl, hl_src
 
-        Best-effort: any network or parse failure yields (None, None) and is
+    def _fetch_press_release_disclosures(
+        self, cik: str, period: EarningsPeriod
+    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
+        """Fetch an 8-K ex-99 exhibit and extract highlights, guidance, and transcript excerpts.
+
+        Best-effort: any network or parse failure yields (None, None, ...) and is
         logged, never raised — enrichment must not fail on missing narrative.
         """
         try:
@@ -517,18 +538,21 @@ class FinancialsService:
                 logger.info(
                     "No ex-99 exhibit for CIK %s period %s", cik, period.quarter_label
                 )
-                return None, None
+                return None, None, None, None, None, None
             html = self.edgar_client.fetch_text(url)
-            text = extract_press_release_highlights(html)
-            if text is None:
-                return None, None
-            return text, f"Earnings release {period.quarter_label}"
+            hl = extract_press_release_highlights(html)
+            hl_src = f"Earnings release {period.quarter_label}" if hl else None
+            gd = extract_management_guidance(html)
+            gd_src = f"8-K guidance, {period.quarter_label}" if gd else None
+            ex = extract_transcript_excerpts(html)
+            ex_src = f"8-K remarks, {period.quarter_label}" if ex else None
+            return hl, hl_src, gd, gd_src, ex, ex_src
         except Exception:
             logger.warning(
                 "Press-release extraction failed for CIK %s period %s",
                 cik, period.quarter_label, exc_info=True,
             )
-            return None, None
+            return None, None, None, None, None, None
 
     def get_overview(self, ticker: str, session: Session | None = None) -> CompanyOverview:
         """Return everything needed to render the Overview page."""
@@ -1193,6 +1217,10 @@ class FinancialsService:
                 risk_factors_source=company.risk_factors_source,
                 press_release_highlights=pr_row.press_release_highlights if pr_row else None,
                 press_release_source=pr_row.press_release_source if pr_row else None,
+                management_guidance=pr_row.management_guidance if pr_row else None,
+                management_guidance_source=pr_row.management_guidance_source if pr_row else None,
+                transcript_excerpts=pr_row.transcript_excerpts if pr_row else None,
+                transcript_source=pr_row.transcript_source if pr_row else None,
             )
         finally:
             if session is None and self._session is None:

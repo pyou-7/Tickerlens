@@ -29,6 +29,10 @@ class QuarterlyFinancial(Base):
     # Owned by enrich_company (best-effort); never wiped on transient failure.
     press_release_highlights: Mapped[str | None] = mapped_column(Text)
     press_release_source: Mapped[str | None] = mapped_column(String(64))  # e.g. "Earnings release Q4 FY2025"
+    management_guidance: Mapped[str | None] = mapped_column(Text)
+    management_guidance_source: Mapped[str | None] = mapped_column(String(64))
+    transcript_excerpts: Mapped[str | None] = mapped_column(Text)
+    transcript_source: Mapped[str | None] = mapped_column(String(64))
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow
     )

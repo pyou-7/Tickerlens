@@ -481,8 +481,8 @@
     </div>
   </div>
   {{ disclosure("Press release highlights", ctx.press_release_highlights, ctx.press_release_source) }}
-  {{ disclosure("Management guidance", none) }}
-  {{ disclosure("Transcript excerpts", none) }}
+  {{ disclosure("Management guidance", ctx.management_guidance, ctx.management_guidance_source) }}
+  {{ disclosure("Transcript excerpts", ctx.transcript_excerpts, ctx.transcript_source) }}
   {{ disclosure("Risk factors", ctx.risk_factors, ctx.risk_factors_source) }}
 </div>
 

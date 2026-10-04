@@ -77,6 +77,28 @@ _ADMIN_LINE_RE = re.compile(
 # An explicit "Highlights" / "Financial Highlights" section heading.
 _HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
 
+# Guidance and Outlook section headings in earnings releases
+_GUIDANCE_HEADING_RE = re.compile(
+    r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
+    r"(?:first|second|third|fourth|q[1-4]|fiscal|\d{4})\s+(?:quarter|year|\d{4})?\s*(?:financial\s+)?(?:guidance|outlook)|"
+    r"cfo\s+outlook(?: commentary)?|outlook\s+summary|guidance\s+summary|outlook|guidance)\b",
+    re.IGNORECASE,
+)
+
+# Markers where financial statements tables or webcast details begin in an earnings release
+_FINANCIAL_TABLE_START_RE = re.compile(
+    r"^(condensed\s+consolidated|consolidated\s+statements|unaudited\s+condensed|"
+    r"reconciliation\s+of|gaap\s+to\s+non-gaap|non-gaap\s+financial|conference\s+call|webcast|"
+    r"earnings\s+webcast|quarterly\s+highlights|product\s+releases)\b",
+    re.IGNORECASE,
+)
+
+# Executive quote extraction pattern
+_QUOTE_RE = re.compile(
+    r"([“\"][^”\"]{40,800}[”\"][^.\n]*?(?:said|commented|noted)[^.\n]*?\.)",
+    re.DOTALL,
+)
+
 
 def latest_annual_filing(submissions: dict[str, Any]) -> AnnualFiling | None:
     """Return the most recently filed 10-K from an SEC submissions payload."""
@@ -222,6 +244,74 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
             return collected
         return None  # heading found but section too thin — don't try later headings
     return None
+
+
+def extract_management_guidance(
+    document_html: str, max_chars: int = 4000
+) -> str | None:
+    """Best-effort extract forward-looking management guidance from an earnings release.
+
+    Locates sections headed by "Business Outlook", "Financial Guidance", "Outlook", etc.
+    and collects the targets and commentary before condensed statements or boilerplate begin.
+    Returns None if no distinct guidance section is found.
+    """
+    text = _html_to_text(document_html)
+    if len(text) < 200:
+        return None
+
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    for i, ln in enumerate(lines):
+        if _GUIDANCE_HEADING_RE.match(ln) and len(ln) <= 90:
+            collected = [ln]
+            for follow in lines[i + 1 :]:
+                if _ADMIN_LINE_RE.match(follow):
+                    continue
+                if _BOILERPLATE_RE.match(follow) or _FINANCIAL_TABLE_START_RE.match(follow):
+                    break
+                if follow.isupper() and len(follow) <= 80 and not any(
+                    w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
+                ):
+                    break
+                collected.append(follow)
+                if len(collected) >= 30:
+                    break
+
+            res = "\n\n".join(collected)
+            if len(res) >= 100:
+                if len(res) > max_chars:
+                    res = res[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+                return res
+    return None
+
+
+def extract_transcript_excerpts(
+    document_html: str, max_chars: int = 4000
+) -> str | None:
+    """Best-effort extract executive prepared remarks / earnings call quotes.
+
+    In official 8-K earnings releases, the CEO and CFO's prepared remarks are
+    quoted verbatim. This extracts those executive quotes and remarks with
+    speaker attribution for the earnings call disclosure.
+    """
+    text = _html_to_text(document_html)
+    if len(text) < 200:
+        return None
+
+    quote_matches = _QUOTE_RE.findall(text)
+    if not quote_matches:
+        return None
+
+    formatted = []
+    for q in quote_matches[:3]:
+        cleaned = " ".join(q.split())
+        formatted.append(f"• {cleaned}")
+
+    result = "\n\n".join(formatted)
+    if len(result) < 100:
+        return None
+    if len(result) > max_chars:
+        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return result
 
 
 def _html_to_text(document_html: str) -> str:

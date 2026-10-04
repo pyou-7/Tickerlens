@@ -726,6 +726,10 @@ def test_get_detail_returns_highlights_for_selected_quarter(session: Session) ->
               fiscal_period="Q4", revenue=50_200)
     q4.press_release_highlights = "Q4 highlights"
     q4.press_release_source = "Earnings release Q4 FY2025"
+    q3.management_guidance = "Q3 guidance targets"
+    q3.management_guidance_source = "8-K guidance, Q3 FY2025"
+    q3.transcript_excerpts = "• Executive remarks from CEO"
+    q3.transcript_source = "8-K remarks, Q3 FY2025"
     session.add_all([q3, q4])
     session.commit()
 
@@ -736,6 +740,10 @@ def test_get_detail_returns_highlights_for_selected_quarter(session: Session) ->
     ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
     assert ctx.press_release_highlights == "Q3 highlights"
     assert ctx.press_release_source == "Earnings release Q3 FY2025"
+    assert ctx.management_guidance == "Q3 guidance targets"
+    assert ctx.management_guidance_source == "8-K guidance, Q3 FY2025"
+    assert ctx.transcript_excerpts == "• Executive remarks from CEO"
+    assert ctx.transcript_source == "8-K remarks, Q3 FY2025"
 
     ctx_latest = svc.get_detail("AAPL")  # defaults to latest = Q4
     assert ctx_latest.press_release_highlights == "Q4 highlights"

@@ -237,3 +237,68 @@ def test_extract_pr_highlights_truncates_to_max_chars() -> None:
     assert result is not None
     assert len(result) <= 1001  # 1000 + ellipsis, minus the trailing partial word
     assert result.endswith("…")
+
+
+# ── extract_management_guidance & extract_transcript_excerpts ─────────────────
+
+from tickerlens.data.filings import (
+    extract_management_guidance,
+    extract_transcript_excerpts,
+)
+
+
+def test_extract_management_guidance_finds_section() -> None:
+    html = """<html><body>
+    <h1>Acme Corp Q3 Results</h1>
+    <p>Acme Corp today reported revenue of $10 billion, up 15 percent year over year.</p>
+    <h2>Business Outlook</h2>
+    <p>Acme's outlook for the fourth quarter of fiscal 2026 is as follows:</p>
+    <p>• Revenue is expected to be between $11.5 billion and $12.0 billion.</p>
+    <p>• GAAP gross margin is expected to be approximately 45.0%.</p>
+    <p>• Diluted earnings per share is expected to be $0.85 to $0.90.</p>
+    <h2>Condensed Consolidated Statements of Operations</h2>
+    <p>Revenue: $10,000</p>
+    <h2>About Acme Corp</h2>
+    </body></html>"""
+    guidance = extract_management_guidance(html)
+    assert guidance is not None
+    assert "Business Outlook" in guidance
+    assert "$11.5 billion" in guidance
+    assert "gross margin" in guidance.lower()
+    assert "Condensed Consolidated" not in guidance
+
+
+def test_extract_management_guidance_returns_none_when_absent() -> None:
+    html = """<html><body>
+    <h1>Acme Corp Q3 Results</h1>
+    <p>Acme Corp today reported revenue of $10 billion, up 15 percent year over year.</p>
+    <p>The company continues to execute well across all segments.</p>
+    <h2>About Acme Corp</h2>
+    <p>Widgets worldwide.</p>
+    </body></html>"""
+    assert extract_management_guidance(html) is None
+
+
+def test_extract_transcript_excerpts_finds_quotes() -> None:
+    html = """<html><body>
+    <h1>Acme Corp Q3 Results</h1>
+    <p>“Our AI business is growing at unprecedented rates, driving strong customer adoption worldwide,” said Jane Doe, Chief Executive Officer.</p>
+    <p>“We generated record free cash flow of $4.5 billion this quarter, demonstrating strong operating discipline,” noted John Smith, Chief Financial Officer.</p>
+    <h2>Financial Highlights</h2>
+    <p>Revenue up 20%.</p>
+    </body></html>"""
+    excerpts = extract_transcript_excerpts(html)
+    assert excerpts is not None
+    assert "Jane Doe" in excerpts
+    assert "John Smith" in excerpts
+    assert "Our AI business is growing" in excerpts
+    assert "•" in excerpts
+
+
+def test_extract_transcript_excerpts_returns_none_when_no_quotes() -> None:
+    html = """<html><body>
+    <h1>Acme Corp Q3 Results</h1>
+    <p>Acme Corp today reported revenue of $10 billion, up 15 percent year over year.</p>
+    <p>The company continues to execute well across all segments.</p>
+    </body></html>"""
+    assert extract_transcript_excerpts(html) is None
