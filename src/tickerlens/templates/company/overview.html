@@ -469,6 +469,15 @@
 {% endif %}
 
 
+<!-- Latest News (lazy-loaded so a slow feed never blocks the page) -->
+<div class="mb-10">
+  <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Latest News</h2>
+  <div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] px-5 py-2 shadow-xs max-w-4xl"
+       hx-get="/company/{{ overview.ticker }}/news" hx-trigger="load" hx-swap="innerHTML">
+    <p class="text-sm text-slate-400 dark:text-gray-500 py-4 animate-pulse">Loading headlines…</p>
+  </div>
+</div>
+
 <!-- Action to View Detail -->
 <div class="pt-2">
   <a href="/company/{{ overview.ticker }}/detail"

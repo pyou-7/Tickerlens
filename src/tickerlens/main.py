@@ -8,14 +8,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from tickerlens.models.database import create_tables
+from tickerlens.models.database import create_tables, ensure_schema
 from tickerlens.routes import company
 from tickerlens.services.search import get_search_entries, search_companies
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # Idempotent: creates any missing tables (e.g. after a model is added).
+    # Idempotent: creates any missing tables (e.g. after a model is added)
+    # and adds any missing columns (e.g. after a feature extends a table).
     create_tables()
+    ensure_schema()
     yield
 
 

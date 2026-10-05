@@ -16,6 +16,7 @@ from tickerlens.services.financials import (
     build_period_csv,
     download_filename,
 )
+from tickerlens.services.news import get_company_news
 from tickerlens.services.search import get_search_entries, search_companies
 
 router = APIRouter()
@@ -507,6 +508,22 @@ def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
             "ai_analysis": _svc.get_ai_analysis(ticker),
             "as_of_date": now_utc,
         },
+    )
+
+
+@router.get("/company/{ticker}/news", response_class=HTMLResponse)
+def company_news(request: Request, ticker: str) -> HTMLResponse:
+    """Latest headlines for a company (Google News RSS). HTMX-lazy partial.
+
+    Fetched after the overview page renders so a slow news feed never
+    blocks the page; returns an empty-state message (never an error) when
+    the feed is unreachable.
+    """
+    ticker = ticker.upper()
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/news.html",
+        context={"ticker": ticker, "news": get_company_news(ticker)},
     )
 
 
