@@ -712,3 +712,100 @@ def test_company_vs_404_when_peer_unloadable(client: TestClient, monkeypatch) ->
 
     resp = client.get("/company/AAPL/vs/ZZZZ")
     assert resp.status_code == 404
+
+
+def test_earnings_calendar_route(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.data.calendar import EarningsEvent
+
+    mock_svc = MagicMock()
+    mock_svc.get_upcoming_earnings.return_value = [
+        EarningsEvent(
+            ticker="NVDA",
+            company_name="NVIDIA Corp",
+            earnings_date="2026-11-17",
+            days_until=44,
+            eps_estimate_avg=2.47,
+            revenue_estimate_avg=108995000000.0,
+            dividend_date="2026-09-30",
+            ex_dividend_date="2026-09-09",
+            is_watchlist=True,
+        )
+    ]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/calendar")
+    assert resp.status_code == 200
+    assert "Earnings Calendar" in resp.text
+    assert "NVDA" in resp.text
+    assert "2026-11-17" in resp.text
+    assert "$2.47" in resp.text
+    assert "$109.00B" in resp.text
+
+    # Watchlist filter
+    resp_watch = client.get("/calendar?filter=watchlist")
+    assert resp_watch.status_code == 200
+    mock_svc.get_upcoming_earnings.assert_called_with(watchlist_only=True)
+
+
+def test_company_tearsheet_route(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyOverview, DetailContext, PeriodData, KPISnapshot, KPIChange
+    from tickerlens.services.valuation import ValuationSignal
+    from tickerlens.models.quarterly_financial import QuarterlyFinancial
+    import datetime as dt
+
+    mock_svc = MagicMock()
+    mock_svc.get_overview.return_value = CompanyOverview(
+        cik="0000320193",
+        name="Apple Inc.",
+        ticker="AAPL",
+        description="Consumer electronics",
+        sector="Technology",
+        last_price=341.0,
+        market_cap=5000000000000.0,
+        latest_label="Q3 FY2025",
+        latest_period_end=dt.date(2025, 9, 28),
+        latest_kpi=KPISnapshot(revenue=94930.0, net_income=23630.0, eps_diluted=1.55, free_cash_flow=26800.0),
+        yoy=KPIChange(revenue=5.0, net_income=7.0, eps_diluted=6.0, free_cash_flow=8.0),
+        ttm_kpi=KPISnapshot(revenue=380000.0, net_income=100000.0, eps_diluted=6.20, free_cash_flow=110000.0),
+        ttm_quarters=4,
+    )
+    mock_svc.get_detail.return_value = _detail_ctx()
+    mock_svc.get_valuation.return_value = ValuationSignal(
+        ticker="AAPL",
+        current_price=341.0,
+        target_price=380.0,
+        upside_pct=15.0,
+        signal="Buy",
+        confidence="high",
+        method="peg",
+        fair_multiple=25.0,
+        current_multiple=22.0,
+        growth_pct=16.0,
+        reasoning=["Strong growth"],
+    )
+    mock_svc.get_stored_quarters.return_value = [
+        QuarterlyFinancial(
+            cik="0000320193",
+            period_end=dt.date(2025, 9, 28),
+            fiscal_year=2025,
+            fiscal_period="Q3",
+            revenue=94930.0,
+            net_income=23630.0,
+            eps_diluted=1.55,
+            free_cash_flow=26800.0,
+            total_assets=365000.0,
+            total_liabilities=200000.0,
+            total_equity=165000.0,
+            cash_and_equivalents=30000.0,
+        )
+    ]
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/tearsheet")
+    assert resp.status_code == 200
+    assert "INSTITUTIONAL TEARSHEET" in resp.text
+    assert "Apple Inc." in resp.text or "AAPL" in resp.text
+    assert "Q3 FY2025" in resp.text
+

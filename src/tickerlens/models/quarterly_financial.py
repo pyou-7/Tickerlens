@@ -38,3 +38,7 @@ class QuarterlyFinancial(Base):
     )
 
     company: Mapped["Company"] = relationship(back_populates="financials")  # noqa: F821
+
+    @property
+    def quarter_label(self) -> str:
+        return f"{self.fiscal_period} FY{self.fiscal_year}"

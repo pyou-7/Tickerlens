@@ -1033,6 +1033,112 @@ class FinancialsService:
         except Exception:
             return []
 
+    def get_peers(self, ticker: str, session: Session | None = None, limit: int = 5) -> list[PeerItem]:
+        """Return top industry/sector peers for a given company (PRD §4.2 Peer Intelligence).
+
+        Best-effort — never raises. Combines curated sector leaders and same-SIC
+        stored companies.
+        """
+        from tickerlens.services.peers import PeerItem, get_peers_for_company
+
+        db = session or self._session or get_session()
+        try:
+            try:
+                cik = _resolve_cik(self.edgar_client, ticker)
+                company = db.get(Company, cik)
+                sic = company.sic if company else None
+            except Exception:
+                sic = None
+            return get_peers_for_company(ticker, sic=sic, session=db, limit=limit)
+        except Exception:
+            return get_peers_for_company(ticker, limit=limit)
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_upcoming_earnings(
+        self,
+        watchlist_only: bool = False,
+        session: Session | None = None,
+    ) -> list[EarningsEvent]:
+        """Return upcoming earnings and catalyst dates for tracked companies (PRD §4.5)."""
+        from tickerlens.data.calendar import default_calendar_cache, EarningsEvent
+        from tickerlens.models.watchlist import WatchlistEntry
+
+        db = session or self._session or get_session()
+        try:
+            watched_ciks = set(db.scalars(select(WatchlistEntry.cik)).all())
+            query = select(Company)
+            if watchlist_only:
+                if not watched_ciks:
+                    return []
+                query = query.where(Company.cik.in_(watched_ciks))
+            companies = db.scalars(query).all()
+
+            events: list[EarningsEvent] = []
+            for c in companies:
+                if not c.ticker:
+                    continue
+                ev = default_calendar_cache.get(c.ticker, company_name=c.name)
+                is_watch = c.cik in watched_ciks
+                events.append(
+                    EarningsEvent(
+                        ticker=ev.ticker,
+                        company_name=c.name,
+                        earnings_date=ev.earnings_date,
+                        days_until=ev.days_until,
+                        eps_estimate_avg=ev.eps_estimate_avg,
+                        revenue_estimate_avg=ev.revenue_estimate_avg,
+                        dividend_date=ev.dividend_date,
+                        ex_dividend_date=ev.ex_dividend_date,
+                        is_watchlist=is_watch,
+                    )
+                )
+
+            events.sort(key=lambda x: (x.earnings_date is None, x.earnings_date or "", x.ticker))
+            return events
+        except Exception:
+            logger.warning("Failed to retrieve earnings calendar", exc_info=True)
+            return []
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_stored_quarters(
+        self, ticker: str, session: Session | None = None
+    ) -> list[QuarterlyFinancial]:
+        """Return all stored quarterly financial records for a ticker in chronological order."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            return list(
+                db.scalars(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.asc())
+                ).all()
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_ai_analysis(
+        self, ticker: str, session: Session | None = None
+    ) -> AIAnalysis:
+        """Return comprehensive AI fundamental research briefing (PRD §4.4)."""
+        from tickerlens.services.ai_analysis import AIAnalysis, generate_ai_analysis
+
+        overview = self.get_overview(ticker, session=session)
+        val = self.get_valuation(ticker, session=session)
+        try:
+            detail = self.get_detail(ticker, session=session)
+        except Exception:
+            detail = None
+        rows = self.get_stored_quarters(ticker, session=session)
+        return generate_ai_analysis(
+            overview=overview, detail=detail, valuation=val, rows=rows
+        )
+
     def refresh_watchlist_quotes(
         self, session: Session | None = None
     ) -> dict[str, int]:

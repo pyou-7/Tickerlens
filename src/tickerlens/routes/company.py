@@ -32,6 +32,24 @@ def home(request: Request) -> HTMLResponse:
             "watchlist": _svc.get_watchlist(),
             "benchmarks": _svc.get_benchmarks(),
             "popular_stocks": _svc.get_popular_stocks(),
+            "upcoming_earnings": _svc.get_upcoming_earnings()[:4],
+        },
+    )
+
+
+@router.get("/calendar", response_class=HTMLResponse)
+def earnings_calendar(
+    request: Request,
+    filter: Literal["all", "watchlist"] = "all",
+) -> HTMLResponse:
+    """Earnings calendar view of upcoming reporting dates (PRD §4.5)."""
+    events = _svc.get_upcoming_earnings(watchlist_only=(filter == "watchlist"))
+    return templates.TemplateResponse(
+        request=request,
+        name="calendar.html",
+        context={
+            "events": events,
+            "filter": filter,
         },
     )
 
@@ -60,6 +78,8 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "note": _svc.get_watchlist_note(ticker),
             "tags": _svc.get_watchlist_tags(ticker),
             "also_trades_as": _svc.get_sibling_tickers(ticker),
+            "peers": _svc.get_peers(ticker),
+            "ai_analysis": _svc.get_ai_analysis(ticker),
         },
     )
 
@@ -225,7 +245,11 @@ def company_detail(
     return templates.TemplateResponse(
         request=request,
         name="company/detail.html",
-        context={"ctx": ctx, "also_trades_as": _svc.get_sibling_tickers(ticker)},
+        context={
+            "ctx": ctx,
+            "also_trades_as": _svc.get_sibling_tickers(ticker),
+            "peers": _svc.get_peers(ticker),
+        },
     )
 
 
@@ -450,6 +474,42 @@ def download_year_zip(
     )
 
 
+@router.get("/company/{ticker}/tearsheet", response_class=HTMLResponse)
+def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
+    """Printable institutional research tearsheet / PDF export (PRD §4.8, §5.5)."""
+    import datetime as dt
+
+    ticker = ticker.upper()
+    try:
+        overview = _svc.get_overview(ticker)
+        detail = _svc.get_detail(ticker)
+        val = _svc.get_valuation(ticker)
+    except CompanyNotFoundError:
+        try:
+            _svc.fetch_and_persist(ticker, periods=8)
+            _svc.enrich_company(ticker)
+            overview = _svc.get_overview(ticker)
+            detail = _svc.get_detail(ticker)
+            val = _svc.get_valuation(ticker)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"Could not load {ticker}: {exc}") from exc
+
+    now_utc = dt.datetime.now(dt.timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
+
+    return templates.TemplateResponse(
+        request=request,
+        name="company/tearsheet.html",
+        context={
+            "overview": overview,
+            "detail": detail,
+            "valuation": val,
+            "rows": _svc.get_stored_quarters(ticker),
+            "ai_analysis": _svc.get_ai_analysis(ticker),
+            "as_of_date": now_utc,
+        },
+    )
+
+
 @router.get("/api/search")
 def api_search(q: str = "") -> dict:
     """Autocomplete suggestions for the search combobox (PRD §4.10).
@@ -482,5 +542,7 @@ def refresh_company(request: Request, ticker: str) -> HTMLResponse:
             "note": _svc.get_watchlist_note(ticker),
             "tags": _svc.get_watchlist_tags(ticker),
             "also_trades_as": _svc.get_sibling_tickers(ticker),
+            "peers": _svc.get_peers(ticker),
+            "ai_analysis": _svc.get_ai_analysis(ticker),
         },
     )
