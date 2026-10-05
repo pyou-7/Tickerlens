@@ -10,6 +10,8 @@ from typing import Callable
 
 import yfinance as yf
 
+from tickerlens.data.yahoo import yahoo_symbol
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 10.0
@@ -47,7 +49,7 @@ def _safe_date_str(d: object) -> str | None:
 
 def fetch_earnings_calendar(ticker: str, company_name: str | None = None) -> EarningsEvent:
     """Fetch upcoming earnings and dividend dates for a ticker. Never raises."""
-    ticker_clean = ticker.upper().strip()
+    ticker_clean = yahoo_symbol(ticker)
 
     def _call() -> dict:
         t = yf.Ticker(ticker_clean)

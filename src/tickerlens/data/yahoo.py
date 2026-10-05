@@ -19,10 +19,21 @@ _yahoo_pool = concurrent.futures.ThreadPoolExecutor(
 )
 
 
+def yahoo_symbol(ticker: str) -> str:
+    """Normalize a display ticker to Yahoo Finance's symbol format.
+
+    Yahoo uses hyphens where exchanges/SEC use dots (``BRK.B`` → ``BRK-B``);
+    passing the dotted form makes yfinance return an empty ``info`` dict,
+    which blanks price and market cap downstream.
+    """
+    return ticker.upper().strip().replace(".", "-")
+
+
 def _fetch_info(ticker: str) -> dict:
     """Read ``yf.Ticker(ticker).info`` with a hard timeout. Never hangs."""
+    symbol = yahoo_symbol(ticker)
     try:
-        future = _yahoo_pool.submit(lambda: yf.Ticker(ticker).info)
+        future = _yahoo_pool.submit(lambda: yf.Ticker(symbol).info)
     except RuntimeError:
         # Executor is shutting down (e.g. a background warmer outliving
         # process teardown) — treat as a timeout; callers never raise.

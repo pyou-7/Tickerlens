@@ -15,7 +15,7 @@ class AIAnalysis(BaseModel):
     ticker: str
     signal: Literal["Invest", "Swing", "Watch", "Avoid"]
     confidence: Literal["High", "Medium", "Low"]
-    cap_tier: str  # "Mega-Cap", "Large-Cap", "Mid-Cap", "Small-Cap"
+    cap_tier: str  # "Mega-Cap", "Large-Cap", "Mid-Cap", "Small-Cap", or "Unknown"
     sector: str | None
     composite_score: int  # 0 to 100
     growth_score: int     # 0 to 100
@@ -29,7 +29,9 @@ class AIAnalysis(BaseModel):
 
 def _determine_cap_tier(market_cap: float | None) -> tuple[str, str]:
     if not market_cap or market_cap <= 0:
-        return "Mid-Cap", "Growth-to-Profitability Transition"
+        # Unknown is unknown — never present a confident wrong tier
+        # (Berkshire once rendered "Mid-Cap" because its quote was missing).
+        return "Unknown", "Insufficient market data"
     if market_cap >= 200_000_000_000:
         return "Mega-Cap", "Capital Allocation & Moat Durability"
     if market_cap >= 10_000_000_000:

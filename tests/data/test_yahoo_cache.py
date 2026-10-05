@@ -186,3 +186,39 @@ def test_fetch_info_timeout_never_hangs(monkeypatch) -> None:
     assert _time.monotonic() - start < 2
     # …and the public day-change entry point still never raises on a stall.
     assert get_day_change_pct("AAPL") is None
+
+
+def test_yahoo_symbol_normalizes_dots_to_hyphens() -> None:
+    from tickerlens.data.yahoo import yahoo_symbol
+
+    assert yahoo_symbol("BRK.B") == "BRK-B"
+    assert yahoo_symbol("brk.b") == "BRK-B"
+    assert yahoo_symbol("AAPL") == "AAPL"
+    assert yahoo_symbol(" BRK-B ") == "BRK-B"
+
+
+def test_fetch_info_uses_yahoo_symbol(monkeypatch) -> None:
+    """BRK.B must query Yahoo as BRK-B, or yfinance returns an empty info dict."""
+    seen: list[str] = []
+
+    class _Ticker:
+        def __init__(self, symbol: str) -> None:
+            seen.append(symbol)
+
+        @property
+        def info(self) -> dict:
+            return {"currentPrice": 500.0, "marketCap": 1e12, "currency": "USD"}
+
+    monkeypatch.setattr(yahoo.yf, "Ticker", _Ticker)
+    quote = yahoo.get_quote("BRK.B")
+    assert seen == ["BRK-B"]
+    assert quote.last_price == 500.0
+    assert quote.market_cap == 1e12
+
+
+def test_determine_cap_tier_unknown_when_missing() -> None:
+    from tickerlens.services.ai_analysis import _determine_cap_tier
+
+    assert _determine_cap_tier(None)[0] == "Unknown"
+    assert _determine_cap_tier(0)[0] == "Unknown"
+    assert _determine_cap_tier(1_100_000_000_000)[0] == "Mega-Cap"

@@ -125,7 +125,8 @@ Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or n
 | 2026-05-27 | 3-year historical depth, 2 selectors (quarterly + yearly), 3 modes (single / range / compare) |
 | 2026-05-27 | CIK as canonical company key (not ticker) |
 | 2026-10-05 | Latest-news section on company overview (Google News RSS, 30-min TTL cache, HTMX lazy-load, never-raises) — Phase 6 news feed, per-company |
-| 2026-10-05 | Startup schema migration (`ensure_schema`): ALTERs in model columns missing from existing DBs — fixes 500s on company pages after Gemini's disclosure-columns commit shipped without a migration |
+| 2026-10-05 | Batch 15: Yahoo symbol normalization (`BRK.B`→`BRK-B` for quotes + earnings calendar), honest "Unknown" cap tier instead of default Mid-Cap, BRK.B $1.08T market-cap backfill |
+| 2026-10-05 | Startup schema migration (`ensure_schema`: ALTERs in model columns missing from existing DBs — fixes 500s on company pages after Gemini's disclosure-columns commit shipped without a migration |
 
 ---
 
