@@ -51,19 +51,72 @@ _CURATED_PEERS: dict[str, list[str]] = {
     "UBER": ["LYFT", "DASH", "ABNB", "GRUB"],
     "RBLX": ["U", "EA", "TTWO", "SONY"],
     "SOFI": ["UPST", "AFRM", "LC", "HOOD"],
+    # Energy / Industrials / Defense / Insurance / Telecom
+    "XOM": ["CVX", "COP", "EOG", "SLB", "SHEL"],
+    "CAT": ["DE", "AGCO", "TEX", "PCAR", "CMI"],
+    "LMT": ["RTX", "NOC", "GD", "BA", "HII"],
+    "BRK.B": ["AIG", "MET", "CB", "TRV", "PGR"],
+    "T": ["VZ", "TMUS", "CMCSA", "CHTR", "LUMN"],
+    # Media / Retail / Consumer staples
+    "DIS": ["NFLX", "WBD", "PARA", "CMCSA", "FOX"],
+    "NFLX": ["DIS", "WBD", "PARA", "ROKU", "AMZN"],
+    "HD": ["LOW", "WMT", "COST", "TGT", "BBY"],
+    "PG": ["CL", "KMB", "UL", "EL", "CHD"],
+    "NKE": ["DECK", "CROX", "SKX", "LULU", "WWW"],
+    "DPZ": ["PZZA", "QSR", "YUM", "MCD", "WEN"],
+    "PLUG": ["ENPH", "FSLR", "BE", "FCEL", "BLDP"],
 }
 
-# Industry fallbacks by SIC prefix
+# Industry fallbacks by SIC prefix. Longer (more specific) prefixes win —
+# get_peers_for_company matches the longest prefix first.
 _SIC_PREFIX_PEERS: dict[str, list[str]] = {
+    # Tech / Semis
     "367": ["NVDA", "AMD", "INTC", "MRVL", "AVGO"],  # Semiconductors
     "737": ["MSFT", "GOOGL", "META", "ORCL", "PLTR"],  # Software & Services
     "357": ["AAPL", "HPQ", "DELL", "HPE"],  # Computer hardware
+    "36": ["APH", "TEL", "JBL", "FLEX", "TDY"],  # Electronics (non-semis)
+    "738": ["V", "MA", "PYPL", "FIS", "GPN"],  # Business/payment services
+    "73": ["V", "PYPL", "UBER", "SHOP", "SQ"],  # Services (general)
+    # Financials / Insurance
     "60": ["JPM", "BAC", "WFC", "C"],  # Commercial banking
+    "61": ["SOFI", "SYF", "COF", "AXP", "DFS"],  # Credit institutions
     "62": ["GS", "MS", "GLXY", "COIN"],  # Security brokers
-    "283": ["LLY", "PFE", "JNJ", "ABBV"],  # Pharma
+    "63": ["BRK.B", "AIG", "MET", "CB", "TRV"],  # Insurance carriers
+    # Energy
+    "131": ["XOM", "CVX", "COP", "EOG", "OXY"],  # Crude petroleum & gas
+    "138": ["SLB", "HAL", "BKR", "NOV", "FTI"],  # Oil & gas field services
+    "291": ["MPC", "VLO", "PSX", "XOM", "CVX"],  # Petroleum refining
+    # Industrials / Defense
+    "353": ["CAT", "DE", "TEX", "AGCO", "PCAR"],  # Construction machinery
+    "35": ["CAT", "DE", "HON", "GE", "MMM"],  # Industrial machinery (general)
+    "372": ["BA", "LMT", "RTX", "NOC", "GD"],  # Aircraft & parts
+    "376": ["LMT", "RTX", "NOC", "GD", "HII"],  # Guided missiles / space
     "371": ["TSLA", "F", "GM", "RIVN"],  # Motor vehicles
+    # Healthcare
+    "283": ["LLY", "PFE", "JNJ", "ABBV"],  # Pharma
+    "284": ["PG", "CL", "KMB", "EL", "CHD"],  # Household/consumer products
+    "28": ["LIN", "SHW", "APD", "ECL", "DD"],  # Chemicals (general)
+    # Consumer / Retail
+    "208": ["KO", "PEP", "MNST", "KDP", "STZ"],  # Beverages
+    "20": ["KO", "PEP", "HSY", "GIS", "KHC"],  # Food (general)
+    "30": ["NKE", "DECK", "CROX", "SKX", "SHOO"],  # Rubber & plastics (footwear)
+    "52": ["HD", "LOW", "BLDR", "TT", "WSM"],  # Building materials retail
+    "53": ["WMT", "COST", "TGT", "DG", "DLTR"],  # General merchandise
+    "56": ["TJX", "ROST", "BURL", "GPS", "ANF"],  # Apparel retail
+    "59": ["AMZN", "BBY", "DKS", "TSCO", "ULTA"],  # Misc retail
     "596": ["AMZN", "EBAY", "ETSY"],  # Electronic shopping
+    # Telecom / Media / Transport / Wholesale
+    "48": ["T", "VZ", "TMUS", "CMCSA", "CHTR"],  # Telecom
+    "781": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Motion pictures
+    "784": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Video rental/entertainment
+    "799": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Amusement & recreation
+    "45": ["DAL", "UAL", "AAL", "LUV", "ALK"],  # Air transportation
+    "47": ["FDX", "UPS", "XPO", "JBHT", "CHRW"],  # Transport services
+    "50": ["GWW", "FAST", "WSO", "MSM", "POOL"],  # Durable wholesale
+    "51": ["SYY", "USFD", "PFGC", "CHEF", "UNFI"],  # Nondurable wholesale
+    # Utilities / REITs
     "491": ["NEE", "DUK", "SO"],  # Electric services
+    "49": ["NEE", "DUK", "SO", "D", "AEP"],  # Utilities (general)
     "679": ["AMT", "PLD", "CCI", "O"],  # REITs
 }
 
@@ -116,12 +169,12 @@ def get_peers_for_company(
             if c.ticker:
                 stored_peers_map[c.ticker.upper()] = c
 
-    # 3. SIC prefix fallback
+    # 3. SIC prefix fallback — longest (most specific) prefix wins
     if sic:
         sic_str = str(sic).strip()
-        for prefix, peers in _SIC_PREFIX_PEERS.items():
+        for prefix in sorted(_SIC_PREFIX_PEERS, key=len, reverse=True):
             if sic_str.startswith(prefix):
-                candidates.extend(peers)
+                candidates.extend(_SIC_PREFIX_PEERS[prefix])
                 break
 
     # Deduplicate while preserving order, exclude self
