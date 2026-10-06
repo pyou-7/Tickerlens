@@ -27,11 +27,13 @@ class AIAnalysis(BaseModel):
     executive_summary: str
 
 
-def _determine_cap_tier(market_cap: float | None) -> tuple[str, str]:
+def _determine_cap_tier(market_cap: float | None) -> tuple[str, str | None]:
     if not market_cap or market_cap <= 0:
         # Unknown is unknown — never present a confident wrong tier
         # (Berkshire once rendered "Mid-Cap" because its quote was missing).
-        return "Unknown", "Insufficient market data"
+        # Focus is None so copy sites render an honest "no tier assigned"
+        # phrasing instead of claiming to prioritize "insufficient market data".
+        return "Unknown", None
     if market_cap >= 200_000_000_000:
         return "Mega-Cap", "Capital Allocation & Moat Durability"
     if market_cap >= 10_000_000_000:
@@ -218,9 +220,17 @@ def generate_ai_analysis(
             f"Model price target of ${valuation.target_price:.2f} implies {upside:+.1f}% upside against current trading quote of ${overview.last_price or 0:.2f}."
         )
 
-    theses.append(
-        f"Positioned in the {tier_label} bracket with institutional emphasis on {tier_focus.lower()}."
-    )
+    if tier_focus is not None:
+        theses.append(
+            f"Positioned in the {tier_label} bracket with institutional emphasis on {tier_focus.lower()}."
+        )
+    else:
+        # No market cap → no honest tier emphasis; say so instead of
+        # claiming to prioritize "insufficient market data".
+        theses.append(
+            "Market capitalization data is unavailable, so no size-tier emphasis is assigned — "
+            "the score stands on fundamentals alone."
+        )
 
     # Flagged Risks
     rf = detail.risk_factors if detail else None
@@ -228,9 +238,16 @@ def generate_ai_analysis(
     risks = _extract_key_risks(rf, mg, overview.sector)
 
     # Executive Summary
+    # "a {tier}" is grammatical for every known tier (Mega-/Large-/Mid-/Small-Cap);
+    # Unknown never reaches the article branch — it gets the honest phrasing instead.
+    tier_clause = (
+        f"Evaluated as a {tier_label} filer prioritizing {tier_focus.lower()}."
+        if tier_focus is not None
+        else "No size tier is assigned — market capitalization data is insufficient."
+    )
     summary = (
         f"{overview.name} ({overview.ticker}) scores {composite_score}/100 in fundamental strength with an "
-        f"'{signal}' rating ({confidence} confidence). Evaluated as a {tier_label} filer prioritizing {tier_focus.lower()}."
+        f"'{signal}' rating ({confidence} confidence). {tier_clause}"
     )
 
     return AIAnalysis(
