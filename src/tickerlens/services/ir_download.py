@@ -157,11 +157,20 @@ def _assign_fy_and_quarter(filings: list[dict]) -> None:
         fy_groups.setdefault(f["fy"], []).append(f)
 
     for fy, group in fy_groups.items():
+        ordered = sorted(group, key=lambda x: x["report_date"])
+        # Index of the annual filing: quarters dated before it count BACK from
+        # Q4. A window that starts mid-cycle (e.g. NVDA's Q3 FY2025 10-Q, whose
+        # fy group opens with the 10-Q, not Q1) was previously mislabeled Q1.
+        k10 = next((i for i, f in enumerate(ordered) if f["form"] == "10-K"), None)
         q_count = 0
-        for f in sorted(group, key=lambda x: x["report_date"]):
+        for i, f in enumerate(ordered):
             if f["form"] == "10-K":
                 f["fp"] = "Q4"  # annual covers Q4
+            elif k10 is not None and i < k10:
+                f["fp"] = f"Q{4 - (k10 - i)}"
             else:
+                # No annual filing in this group (leading partial year of a new
+                # fy): quarters run forward from Q1 as before.
                 q_count += 1
                 f["fp"] = f"Q{q_count}"
 
@@ -172,17 +181,26 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
     """
     Find the earnings-release 8-K that corresponds to a 10-Q/10-K.
 
-    The 8-K is typically filed 1–14 days before the 10-Q/10-K (companies
-    announce results before the formal filing is ready).
+    The earnings release is furnished (Item 2.02) after the quarter ends and
+    before the 10-Q/10-K is filed — but the lag to the formal filing varies
+    (10-Ks routinely trail earnings by 4+ weeks, and some 10-Qs by 3+), so
+    anchoring on the filing date with a tight window systematically missed
+    annual periods. Anchor on the period end instead: candidates are Item
+    2.02 8-Ks filed after the report date and within 60 days; the one nearest
+    the formal filing date wins (a quarter has exactly one earnings release,
+    so ties are pathological).
     """
+    report = filing["report_date"]
     candidates = [
         er for er in er_8ks
-        if 0 <= (filing["filing_date"] - er["filing_date"]).days <= 21
+        if 0 <= (er["filing_date"] - report).days <= 60
     ]
     if not candidates:
         return None
-    # Take the closest one
-    return min(candidates, key=lambda er: abs((filing["filing_date"] - er["filing_date"]).days))
+    return min(
+        candidates,
+        key=lambda er: abs((filing["filing_date"] - er["filing_date"]).days),
+    )
 
 
 # ── ex-99 exhibit discovery ───────────────────────────────────────────────────
@@ -194,6 +212,10 @@ def _pick_release_doc(links: list[str]) -> str | None:
       1. ex99-style names (ex99, ex-99, ex991, EX-99.1) — AAPL/MSFT/PLUG style.
       2. Press-release naming: *pressrelease*, *earningsrelease*, *-pr/_pr
          suffixes, or a quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
+    Within a tier, a "supplement" exhibit (tables/appendix material, e.g.
+    JPMorgan's *erfex992supplement.htm) loses to the narrative release
+    (e.g. *exhibit991narrative.htm) — the supplement has no guidance section
+    or executive quotes to extract.
     Returns the bare filename, or None when nothing looks like a release.
     """
     candidates = [
@@ -205,19 +227,23 @@ def _pick_release_doc(links: list[str]) -> str | None:
         and not re.match(r"^R\d+\.htm[l]?$", lnk.split("/")[-1], re.IGNORECASE)
     ]
 
-    def _rank(name: str) -> int | None:
+    def _rank(name: str) -> tuple[int, int] | None:
         stem = re.sub(r"\.html?$", "", name, flags=re.IGNORECASE)
+        base: int | None = None
         if re.search(r"ex(hibit)?[^a-z0-9]?99", name, re.IGNORECASE):
-            return 0
-        if re.search(r"(press|earnings)[-_]?release", stem, re.IGNORECASE):
-            return 1
-        if re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
-            return 1
+            base = 0
+        elif re.search(r"(press|earnings)[-_]?release", stem, re.IGNORECASE):
+            base = 1
+        elif re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
+            base = 1
         # Quarter-style stem ending in "pr" with a digit (year/fy marker),
         # e.g. q2fy27pr — excludes lookalikes like proper.htm / super.htm.
-        if re.search(r"pr$", stem, re.IGNORECASE) and re.search(r"\d", stem):
-            return 2
-        return None
+        elif re.search(r"pr$", stem, re.IGNORECASE) and re.search(r"\d", stem):
+            base = 2
+        if base is None:
+            return None
+        penalty = 1 if "supplement" in stem.lower() else 0
+        return (base, penalty)
 
     ranked = [(rank, name) for name in candidates if (rank := _rank(name)) is not None]
     if not ranked:

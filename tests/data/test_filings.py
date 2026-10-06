@@ -302,3 +302,33 @@ def test_extract_transcript_excerpts_returns_none_when_no_quotes() -> None:
     <p>The company continues to execute well across all segments.</p>
     </body></html>"""
     assert extract_transcript_excerpts(html) is None
+
+
+def test_extract_transcript_excerpts_finds_speaker_first_quotes() -> None:
+    # JPMorgan-style attribution: "Jamie Dimon, Chairman and CEO, commented: "…"".
+    html = """<html><body>
+    <h1>JPMorgan Chase Q4 Results</h1>
+    <p>Jamie Dimon, Chairman and CEO, commented: “The Firm concluded the year with a strong
+    fourth quarter, generating net income of $14.7 billion on revenue of $45 billion.”</p>
+    <p>“Our fortress balance sheet allowed us to support clients through volatile markets,” said Jane Doe, Chief Financial Officer.</p>
+    </body></html>"""
+    excerpts = extract_transcript_excerpts(html)
+    assert excerpts is not None
+    assert "Jamie Dimon" in excerpts
+    assert "fortress balance sheet" in excerpts
+
+
+def test_extract_transcript_excerpts_finds_attribution_with_phrase_before_colon() -> None:
+    # "commented on the financial results:" — words between verb and colon.
+    html = """<html><body>
+    <h1>JPMorgan Chase Q2 Results</h1>
+    <p>JPMorgan Chase & Co. today reported second-quarter 2026 net income of $16.9 billion,
+    or $5.80 per share, on revenue of $46.2 billion, reflecting strong performance across
+    each of its business segments and continued balance sheet strength.</p>
+    <p>Jamie Dimon, Chairman and CEO, commented on the financial results: “The Firm reported
+    very strong results in the quarter, generating net income of $16.9 billion.”</p>
+    </body></html>"""
+    excerpts = extract_transcript_excerpts(html)
+    assert excerpts is not None
+    assert "Jamie Dimon" in excerpts
+    assert "very strong results" in excerpts

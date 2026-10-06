@@ -490,7 +490,13 @@ class FinancialsService:
             .scalars()
             .all()
         )
-        missing = [r for r in rows if r.press_release_highlights is None]
+        missing = [
+            r
+            for r in rows
+            if r.press_release_highlights is None
+            or r.management_guidance is None
+            or r.transcript_excerpts is None
+        ]
         if not missing:
             return
 
@@ -508,13 +514,15 @@ class FinancialsService:
             if period is None:
                 continue
             hl, hl_src, gd, gd_src, ex, ex_src = self._fetch_press_release_disclosures(cik, period)
-            if hl is not None:
+            # Never overwrite a previously-good value — only fill fields that
+            # are still missing (a transient failure never wipes good data).
+            if hl is not None and row.press_release_highlights is None:
                 row.press_release_highlights = hl
                 row.press_release_source = hl_src
-            if gd is not None:
+            if gd is not None and row.management_guidance is None:
                 row.management_guidance = gd
                 row.management_guidance_source = gd_src
-            if ex is not None:
+            if ex is not None and row.transcript_excerpts is None:
                 row.transcript_excerpts = ex
                 row.transcript_source = ex_src
 
@@ -1414,6 +1422,7 @@ class FinancialsService:
         """
         cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
+        owns_session = session is None and self._session is None
         try:
             company = db.get(Company, cik)
             if company is None:
@@ -1431,6 +1440,25 @@ class FinancialsService:
 
             if not all_rows:
                 raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+
+            # Self-healing disclosure backfill: companies first fetched before
+            # the 8-K disclosure feature shipped have NULL press-release
+            # highlights / guidance / transcript excerpts, so the detail page
+            # would render "Not available for this period" forever. Fill them
+            # lazily on first detail view — best-effort and never raising; the
+            # enrichment short-circuits once rows are filled and SEC responses
+            # are disk-cached, so repeat visits stay cheap.
+            if any(r.press_release_highlights is None for r in all_rows):
+                try:
+                    self._enrich_press_release_highlights(db, ticker, cik)
+                    if owns_session:
+                        db.commit()
+                except Exception:
+                    logger.warning(
+                        "Disclosure backfill failed for %s", ticker, exc_info=True
+                    )
+                    if owns_session:
+                        db.rollback()
 
             latest = all_rows[-1]
 

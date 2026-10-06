@@ -93,9 +93,15 @@ _FINANCIAL_TABLE_START_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Executive quote extraction pattern
+# Executive quote extraction pattern. Two common earnings-release formats:
+#   1. "Quote text…" said Jane Doe, Chief Executive Officer.   (quote first)
+#   2. Jane Doe, Chairman and CEO, commented: "Quote text…"   (speaker first)
 _QUOTE_RE = re.compile(
-    r"([“\"][^”\"]{40,800}[”\"][^.\n]*?(?:said|commented|noted)[^.\n]*?\.)",
+    r"(?:"
+    r"[“\"][^”\"]{40,800}[”\"][^.\n]*?(?:said|commented|noted)[^.\n]*?\."
+    r"|"
+    r"[A-Z][A-Za-z .,'-]{1,70}?\b(?:said|commented|noted)\b[^:\n]{0,40}:\s*[“\"][^”\"]{40,800}[”\"]"
+    r")",
     re.DOTALL,
 )
 

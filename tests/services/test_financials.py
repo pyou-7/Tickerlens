@@ -677,6 +677,10 @@ def test_enrich_company_does_not_overwrite_existing_highlights(session: Session)
                fiscal_period="Q3", revenue=40_100)
     row.press_release_highlights = "existing highlights"
     row.press_release_source = "Earnings release Q3 FY2025"
+    row.management_guidance = "existing guidance"
+    row.management_guidance_source = "8-K guidance, Q3 FY2025"
+    row.transcript_excerpts = "existing remarks"
+    row.transcript_source = "8-K remarks, Q3 FY2025"
     session.add(row)
     session.commit()
 
@@ -691,7 +695,35 @@ def test_enrich_company_does_not_overwrite_existing_highlights(session: Session)
 
     session.refresh(row)
     assert row.press_release_highlights == "existing highlights"
+    assert row.management_guidance == "existing guidance"
+    assert row.transcript_excerpts == "existing remarks"
     mock_edgar.fetch_text.assert_not_called()
+
+
+def test_enrich_company_refills_missing_guidance_without_overwriting(session: Session) -> None:
+    """A row with highlights but no guidance/transcript is revisited: the
+    missing fields are filled from the exhibit while existing values stay."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    row = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+               fiscal_period="Q3", revenue=40_100)
+    row.press_release_highlights = "existing highlights"
+    row.press_release_source = "Earnings release Q3 FY2025"
+    session.add(row)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))])
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc.enrich_company("AAPL", session=session)
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    session.refresh(row)
+    assert row.press_release_highlights == "existing highlights"
+    assert mock_edgar.fetch_text.called  # exhibit re-read for the missing fields
 
 
 def test_enrich_company_tolerates_no_matched_8k(session: Session) -> None:
@@ -769,6 +801,62 @@ def test_get_detail_yearly_uses_q4_highlights(session: Session) -> None:
     ctx = svc.get_detail("AAPL", granularity="yearly", selected_year=2025)
     assert ctx.press_release_highlights == "Q4 annual highlights"
     assert ctx.press_release_source == "Earnings release Q4 FY2025"
+
+
+def test_get_detail_backfills_missing_disclosures(session: Session) -> None:
+    """Companies fetched before the 8-K disclosure feature shipped have NULL
+    highlights; the first detail view must fill them lazily (self-healing)."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    session.add(q3)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, discover_mock = _enrich_mocks(
+        mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))]
+    )
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    assert discover_mock.called
+    assert ctx.press_release_highlights is not None
+    assert "Acme Corp Reports Third Quarter 2025 Results" in ctx.press_release_highlights
+    assert ctx.press_release_source == "Earnings release Q3 FY2025"
+    # The caller's session owns the transaction (as the route does) — commit
+    # and the backfilled values must persist.
+    session.commit()
+    session.refresh(q3)
+    assert q3.press_release_highlights == ctx.press_release_highlights
+
+
+def test_get_detail_backfill_never_raises_on_discovery_failure(session: Session) -> None:
+    """A transient SEC failure during the lazy backfill must not break the
+    detail page — disclosures stay unavailable and the page still renders."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    session.add(q3)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    with patch(
+        "tickerlens.services.financials.discover_earnings_filings",
+        side_effect=RuntimeError("SEC unreachable"),
+    ):
+        ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
+
+    assert ctx.press_release_highlights is None
+    assert ctx.current.kpi.revenue == pytest.approx(40_100)
 
 
 def test_enrich_company_keeps_price_on_quote_failure(session: Session) -> None:
