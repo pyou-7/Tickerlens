@@ -127,6 +127,7 @@ Do NOT build Range/Compare modes, search, watchlist, AI analysis, calendar, or n
 | 2026-10-05 | Latest-news section on company overview (Google News RSS, 30-min TTL cache, HTMX lazy-load, never-raises) — Phase 6 news feed, per-company |
 | 2026-10-05 | Batch 15: Yahoo symbol normalization (`BRK.B`→`BRK-B` for quotes + earnings calendar), honest "Unknown" cap tier instead of default Mid-Cap, BRK.B $1.08T market-cap backfill |
 | 2026-10-05 | Startup schema migration (`ensure_schema`: ALTERs in model columns missing from existing DBs — fixes 500s on company pages after Gemini's disclosure-columns commit shipped without a migration |
+| 2026-10-05 | Batch 16 (performance): fixed home-page hang on cold earnings-calendar cache — `get_upcoming_earnings()` fetched 52 Yahoo calendars sequentially (up to ~9 min); new non-blocking `get_cached_upcoming_earnings()` (peek-only + background warmer, mirrors batch-13 pattern); `/` now 0.19s cold, earnings strip self-populates; `/calendar` keeps blocking variant. 319 tests green, 7/7 live checks |
 
 ---
 

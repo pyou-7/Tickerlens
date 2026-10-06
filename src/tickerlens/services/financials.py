@@ -1056,49 +1056,141 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def _earnings_companies(
+        self,
+        watchlist_only: bool,
+        session: Session | None,
+    ) -> tuple[object, list, set]:
+        """Shared DB plumbing for the earnings-calendar readers.
+
+        Returns the open session handle, the companies to render, and the set
+        of watched CIKs. The caller owns closing the session.
+        """
+        from tickerlens.models.watchlist import WatchlistEntry
+
+        db = session or self._session or get_session()
+        watched_ciks = set(db.scalars(select(WatchlistEntry.cik)).all())
+        query = select(Company)
+        if watchlist_only:
+            if not watched_ciks:
+                return db, [], watched_ciks
+            query = query.where(Company.cik.in_(watched_ciks))
+        companies = db.scalars(query).all()
+        return db, list(companies), watched_ciks
+
+    @staticmethod
+    def _build_earnings_events(
+        companies: list,
+        watched_ciks: set,
+        fetch_event,
+    ) -> list[EarningsEvent]:
+        """Build sorted earnings events using ``fetch_event(ticker, name)``."""
+        from tickerlens.data.calendar import EarningsEvent
+
+        events: list[EarningsEvent] = []
+        for c in companies:
+            if not c.ticker:
+                continue
+            ev = fetch_event(c.ticker, c.name)
+            is_watch = c.cik in watched_ciks
+            events.append(
+                EarningsEvent(
+                    ticker=ev.ticker,
+                    company_name=c.name,
+                    earnings_date=ev.earnings_date,
+                    days_until=ev.days_until,
+                    eps_estimate_avg=ev.eps_estimate_avg,
+                    revenue_estimate_avg=ev.revenue_estimate_avg,
+                    dividend_date=ev.dividend_date,
+                    ex_dividend_date=ev.ex_dividend_date,
+                    is_watchlist=is_watch,
+                )
+            )
+
+        events.sort(key=lambda x: (x.earnings_date is None, x.earnings_date or "", x.ticker))
+        return events
+
     def get_upcoming_earnings(
         self,
         watchlist_only: bool = False,
         session: Session | None = None,
     ) -> list[EarningsEvent]:
-        """Return upcoming earnings and catalyst dates for tracked companies (PRD §4.5)."""
+        """Return upcoming earnings and catalyst dates for tracked companies (PRD §4.5).
+
+        Blocking: fetches cold tickers from Yahoo (each bounded by the
+        calendar module's 10s timeout). Use :meth:`get_cached_upcoming_earnings`
+        on page renders that must not wait on the network.
+        """
         from tickerlens.data.calendar import default_calendar_cache, EarningsEvent
-        from tickerlens.models.watchlist import WatchlistEntry
 
         db = session or self._session or get_session()
         try:
-            watched_ciks = set(db.scalars(select(WatchlistEntry.cik)).all())
-            query = select(Company)
-            if watchlist_only:
-                if not watched_ciks:
-                    return []
-                query = query.where(Company.cik.in_(watched_ciks))
-            companies = db.scalars(query).all()
-
-            events: list[EarningsEvent] = []
-            for c in companies:
-                if not c.ticker:
-                    continue
-                ev = default_calendar_cache.get(c.ticker, company_name=c.name)
-                is_watch = c.cik in watched_ciks
-                events.append(
-                    EarningsEvent(
-                        ticker=ev.ticker,
-                        company_name=c.name,
-                        earnings_date=ev.earnings_date,
-                        days_until=ev.days_until,
-                        eps_estimate_avg=ev.eps_estimate_avg,
-                        revenue_estimate_avg=ev.revenue_estimate_avg,
-                        dividend_date=ev.dividend_date,
-                        ex_dividend_date=ev.ex_dividend_date,
-                        is_watchlist=is_watch,
-                    )
-                )
-
-            events.sort(key=lambda x: (x.earnings_date is None, x.earnings_date or "", x.ticker))
-            return events
+            db, companies, watched_ciks = self._earnings_companies(
+                watchlist_only, db
+            )
+            return self._build_earnings_events(
+                companies,
+                watched_ciks,
+                lambda t, n: default_calendar_cache.get(t, n),
+            )
         except Exception:
             logger.warning("Failed to retrieve earnings calendar", exc_info=True)
+            return []
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_cached_upcoming_earnings(
+        self,
+        watchlist_only: bool = False,
+        session: Session | None = None,
+    ) -> list[EarningsEvent]:
+        """Non-blocking earnings calendar: cached events only, never fetches.
+
+        Cold tickers kick off a background warmer (see
+        ``data.calendar.warm_earnings_cache``) and render as date-less events
+        until the next render picks up live values. Home-page renders use this
+        so a cold calendar cache can never hang the page.
+        """
+        from tickerlens.data.calendar import (
+            EarningsEvent,
+            peeked_earnings_event,
+            warm_earnings_cache,
+        )
+
+        db = session or self._session or get_session()
+        try:
+            db, companies, watched_ciks = self._earnings_companies(
+                watchlist_only, db
+            )
+            cold = [
+                c.ticker
+                for c in companies
+                if c.ticker and peeked_earnings_event(c.ticker) is None
+            ]
+            if cold:
+                warm_earnings_cache(cold)
+
+            def _peek_or_empty(ticker: str, name: str | None) -> EarningsEvent:
+                ev = peeked_earnings_event(ticker)
+                if ev is not None:
+                    return ev
+                return EarningsEvent(
+                    ticker=ticker,
+                    company_name=name,
+                    earnings_date=None,
+                    days_until=None,
+                    eps_estimate_avg=None,
+                    revenue_estimate_avg=None,
+                    dividend_date=None,
+                    ex_dividend_date=None,
+                )
+
+            return self._build_earnings_events(
+                companies, watched_ciks, _peek_or_empty
+            )
+        except Exception:
+            logger.warning("Failed to retrieve cached earnings calendar", exc_info=True)
             return []
         finally:
             if session is None and self._session is None:

@@ -123,6 +123,78 @@ class CalendarCache:
             self._cache[ticker_up] = (now, event)
         return event
 
+    def peek(self, ticker: str) -> EarningsEvent | None:
+        """Return the fresh-cached event without fetching; None when cold/stale.
+
+        For render paths that must not block on the network — the caller can
+        kick off :func:`warm_earnings_cache` and serve whatever is cached in
+        the meantime.
+        """
+        with self._lock:
+            cached = self._cache.get(ticker.upper().strip())
+            if cached is None or (self._clock() - cached[0] >= self.ttl_seconds):
+                return None
+            return cached[1]
+
+    def event_fresh(self, ticker: str) -> bool:
+        """True when a fresh event exists for ``ticker`` (fetch would be a hit)."""
+        with self._lock:
+            cached = self._cache.get(ticker.upper().strip())
+            return cached is not None and (
+                self._clock() - cached[0] < self.ttl_seconds
+            )
+
 
 # Global default cache
 default_calendar_cache = CalendarCache()
+
+# Serializes background warmers so a burst of cold-cache renders spawns one
+# refresher thread, not one per request.
+_earn_warm_lock = threading.Lock()
+_earn_warming = False
+
+
+def peeked_earnings_event(ticker: str) -> EarningsEvent | None:
+    """Fresh-cached earnings event, or None without fetching. Never raises."""
+    try:
+        return default_calendar_cache.peek(ticker)
+    except Exception:
+        logger.warning("Earnings calendar peek failed for %s", ticker, exc_info=True)
+        return None
+
+
+def warm_earnings_cache(tickers: list[str]) -> None:
+    """Refresh earnings calendar events for ``tickers`` in a background thread.
+
+    Render paths call this, then serve whatever :func:`peeked_earnings_event`
+    has right now — the page never waits on Yahoo. The next render picks up
+    the live values. At most one warmer runs at a time; never raises.
+    """
+    global _earn_warming
+    try:
+        with _earn_warm_lock:
+            if _earn_warming:
+                return
+            cold = [t for t in tickers if not default_calendar_cache.event_fresh(t)]
+            if not cold:
+                return
+            _earn_warming = True
+
+        def _run() -> None:
+            global _earn_warming
+            try:
+                for t in cold:
+                    default_calendar_cache.get(t)
+            except Exception:
+                logger.warning(
+                    "Background earnings calendar warm failed", exc_info=True
+                )
+            finally:
+                with _earn_warm_lock:
+                    _earn_warming = False
+
+        threading.Thread(target=_run, daemon=True, name="earnings-warm").start()
+    except Exception:
+        logger.warning("Could not start earnings calendar warmer", exc_info=True)
+        with _earn_warm_lock:
+            _earn_warming = False

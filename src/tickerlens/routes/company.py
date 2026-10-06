@@ -33,7 +33,9 @@ def home(request: Request) -> HTMLResponse:
             "watchlist": _svc.get_watchlist(),
             "benchmarks": _svc.get_benchmarks(),
             "popular_stocks": _svc.get_popular_stocks(),
-            "upcoming_earnings": _svc.get_upcoming_earnings()[:4],
+            "upcoming_earnings": [
+                e for e in _svc.get_cached_upcoming_earnings() if e.earnings_date
+            ][:4],
         },
     )
 

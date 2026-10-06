@@ -1659,3 +1659,127 @@ def test_get_company_vs_same_ticker_twice(session: Session) -> None:
     vs = _svc_two_tickers(session).get_company_vs("AAPL", "AAPL")
     assert vs.a.ticker == vs.b.ticker == "AAPL"
     assert vs.a.kpi.revenue == vs.b.kpi.revenue
+
+
+# ── earnings calendar: non-blocking cached variant ────────────────────────────
+
+def _seed_earnings_companies(session: Session) -> None:
+    for cik, ticker, name in [
+        ("0000320193", "AAPL", "Apple Inc."),
+        ("0000789019", "MSFT", "Microsoft Corp"),
+    ]:
+        c = Company()
+        c.cik = cik
+        c.ticker = ticker
+        c.name = name
+        session.add(c)
+    session.commit()
+
+
+def _swap_calendar_cache(monkeypatch, cache) -> None:
+    import tickerlens.data.calendar as cal_mod
+
+    monkeypatch.setattr(cal_mod, "default_calendar_cache", cache)
+
+
+def test_get_cached_upcoming_earnings_never_fetches(session: Session, monkeypatch) -> None:
+    """Cold cache: no network call, empty events, warmer kicked off."""
+    from tickerlens.data.calendar import CalendarCache, EarningsEvent
+
+    _seed_earnings_companies(session)
+    calls: list[str] = []
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        calls.append(ticker)
+        raise AssertionError("network fetch must not happen on the cached path")
+
+    cache = CalendarCache(ttl_seconds=3600, fetch_fn=fetch)
+    _swap_calendar_cache(monkeypatch, cache)
+    warmed: list[list[str]] = []
+    monkeypatch.setattr(
+        "tickerlens.data.calendar.warm_earnings_cache",
+        lambda tickers: warmed.append(list(tickers)),
+    )
+
+    svc = FinancialsService(session=session)
+    events = svc.get_cached_upcoming_earnings()
+
+    assert calls == []  # nothing fetched
+    assert len(events) == 2
+    assert all(e.earnings_date is None for e in events)
+    assert {e.ticker for e in events} == {"AAPL", "MSFT"}
+    assert {e.company_name for e in events} == {"Apple Inc.", "Microsoft Corp"}
+    # Both tickers were cold, so the warmer was kicked off once with both.
+    assert warmed == [["AAPL", "MSFT"]] or warmed == [["MSFT", "AAPL"]]
+
+
+def test_get_cached_upcoming_earnings_serves_cached(session: Session, monkeypatch) -> None:
+    """Warm cache: returns live cached events without fetching, no warmer."""
+    from tickerlens.data.calendar import CalendarCache, EarningsEvent
+
+    _seed_earnings_companies(session)
+    calls: list[str] = []
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        calls.append(ticker)
+        return EarningsEvent(
+            ticker=ticker,
+            company_name=name,
+            earnings_date="2026-10-29",
+            days_until=24,
+            eps_estimate_avg=1.65,
+            revenue_estimate_avg=95000000000.0,
+            dividend_date=None,
+            ex_dividend_date=None,
+        )
+
+    cache = CalendarCache(ttl_seconds=3600, fetch_fn=fetch)
+    cache.get("AAPL")  # pre-warm only AAPL
+    assert calls == ["AAPL"]
+    _swap_calendar_cache(monkeypatch, cache)
+    warmed: list[list[str]] = []
+    monkeypatch.setattr(
+        "tickerlens.data.calendar.warm_earnings_cache",
+        lambda tickers: warmed.append(list(tickers)),
+    )
+
+    svc = FinancialsService(session=session)
+    events = svc.get_cached_upcoming_earnings()
+
+    assert calls == ["AAPL"]  # no new fetches
+    by_ticker = {e.ticker: e for e in events}
+    assert by_ticker["AAPL"].earnings_date == "2026-10-29"
+    assert by_ticker["MSFT"].earnings_date is None
+    # Dated events sort before date-less ones.
+    assert events[0].ticker == "AAPL"
+    # Only the cold ticker went to the warmer.
+    assert warmed == [["MSFT"]]
+
+
+def test_get_upcoming_earnings_still_fetches(session: Session, monkeypatch) -> None:
+    """Blocking variant unchanged: cold tickers are fetched synchronously."""
+    from tickerlens.data.calendar import CalendarCache, EarningsEvent
+
+    _seed_earnings_companies(session)
+    calls: list[str] = []
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        calls.append(ticker)
+        return EarningsEvent(
+            ticker=ticker,
+            company_name=name,
+            earnings_date="2026-10-29",
+            days_until=24,
+            eps_estimate_avg=None,
+            revenue_estimate_avg=None,
+            dividend_date=None,
+            ex_dividend_date=None,
+        )
+
+    _swap_calendar_cache(monkeypatch, CalendarCache(ttl_seconds=3600, fetch_fn=fetch))
+
+    svc = FinancialsService(session=session)
+    events = svc.get_upcoming_earnings()
+
+    assert sorted(calls) == ["AAPL", "MSFT"]
+    assert all(e.earnings_date == "2026-10-29" for e in events)

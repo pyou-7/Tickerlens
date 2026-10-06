@@ -52,3 +52,104 @@ def test_calendar_cache_hit() -> None:
     now = 1400.0
     res3 = cache.get("AAPL")
     assert mock_fetch.call_count == 2
+
+
+def _aapl_event() -> EarningsEvent:
+    return EarningsEvent(
+        ticker="AAPL",
+        company_name="Apple Inc.",
+        earnings_date="2026-11-01",
+        days_until=28,
+        eps_estimate_avg=1.65,
+        revenue_estimate_avg=95000000000.0,
+        dividend_date=None,
+        ex_dividend_date=None,
+    )
+
+
+def test_peek_returns_none_when_cold_and_never_fetches() -> None:
+    calls: list[str] = []
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        calls.append(ticker)
+        return _aapl_event()
+
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=fetch)
+    assert cache.peek("AAPL") is None
+    assert calls == []
+    assert not cache.event_fresh("AAPL")
+
+
+def test_peek_returns_cached_event_when_fresh() -> None:
+    calls: list[str] = []
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        calls.append(ticker)
+        return _aapl_event()
+
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=fetch)
+    cache.get("AAPL")
+    assert calls == ["AAPL"]
+    peeked = cache.peek("AAPL")
+    assert peeked is not None
+    assert peeked.earnings_date == "2026-11-01"
+    assert calls == ["AAPL"]  # peek never fetches
+    assert cache.event_fresh("AAPL")
+
+
+def test_peek_returns_none_when_stale() -> None:
+    now = [1000.0]
+
+    def fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        return _aapl_event()
+
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=fetch, clock=lambda: now[0])
+    cache.get("AAPL")
+    now[0] = 1400.0  # past the 300s TTL
+    assert cache.peek("AAPL") is None
+    assert not cache.event_fresh("AAPL")
+
+
+def test_warm_earnings_cache_populates_in_background() -> None:
+    import time as _time
+
+    from tickerlens.data import calendar as cal_mod
+
+    calls: list[str] = []
+    cache = CalendarCache(
+        ttl_seconds=3600,
+        fetch_fn=lambda t, n=None: (calls.append(t), _aapl_event())[1],
+    )
+    orig = cal_mod.default_calendar_cache
+    cal_mod.default_calendar_cache = cache
+    try:
+        assert cal_mod.peeked_earnings_event("AAPL") is None
+        cal_mod.warm_earnings_cache(["AAPL"])
+        deadline = _time.time() + 10
+        while cal_mod.peeked_earnings_event("AAPL") is None and _time.time() < deadline:
+            _time.sleep(0.05)
+        peeked = cal_mod.peeked_earnings_event("AAPL")
+        assert peeked is not None
+        assert peeked.earnings_date == "2026-11-01"
+        assert calls == ["AAPL"]
+        # A second call while warm does not spawn another fetch round.
+        before = len(calls)
+        cal_mod.warm_earnings_cache(["AAPL"])
+        _time.sleep(0.3)
+        assert len(calls) == before
+    finally:
+        cal_mod.default_calendar_cache = orig
+
+
+def test_warm_earnings_cache_never_raises() -> None:
+    from tickerlens.data import calendar as cal_mod
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("nope")
+
+    orig = cal_mod.threading.Thread
+    cal_mod.threading.Thread = boom  # type: ignore[assignment]
+    try:
+        cal_mod.warm_earnings_cache(["AAPL"])  # must not raise
+    finally:
+        cal_mod.threading.Thread = orig
