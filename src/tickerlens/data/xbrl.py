@@ -172,9 +172,17 @@ def extract_recent_quarterly_financials(
     """
 
     # Revenue is the canonical anchor — hard failure if missing.
-    revenue = quarterly_income_metric(
-        companyfacts, Metric.REVENUE, fiscal_year_end, sic=sic
-    )
+    try:
+        revenue = quarterly_income_metric(
+            companyfacts, Metric.REVENUE, fiscal_year_end, sic=sic
+        )
+    except KeyError:
+        # No usable revenue facts: the filer is outside Tickerlens' coverage
+        # (e.g. ASML reports in EUR and files Form 20-F — the USD-only unit
+        # filter and the 10-Q/10-K form filter reject every fact). Surface a
+        # plain-language reason instead of the bare KeyError so the company
+        # routes can render an honest "not covered" page.
+        raise UnsupportedFilerError(_revenue_unsupported_reason(companyfacts)) from None
 
     def _safe(fn: Callable, metric: Metric) -> list[PeriodMetric]:
         try:
@@ -280,6 +288,19 @@ def _fill_missing_eps_basic(
     return sorted(by_end.values(), key=lambda item: item.end)
 
 
+def _successor_label(fy: int, fp: str) -> tuple[int, str] | None:
+    """The (fy, fp) label the quarter after ``(fy, fp)`` should carry.
+
+    Returns None for non-quarterly period labels (e.g. "FY"), where no
+    sequence expectation exists.
+    """
+    order = {"Q1": "Q2", "Q2": "Q3", "Q3": "Q4", "Q4": "Q1"}
+    nxt = order.get(fp)
+    if nxt is None:
+        return None
+    return (fy + 1, nxt) if fp == "Q4" else (fy, nxt)
+
+
 def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:
     """Ensure (fy, fp) labels are unique across rows.
 
@@ -288,17 +309,58 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
     XOM's new-CIK history holds only the 2026 10-Q), the 2025 comparative
     column is tagged fy=2026 and collides with the real Q2 FY2026, duplicating
     selector options. A fiscal year has exactly one of each quarter, so when
-    two period ends share a label the earlier one is the mislabeled
-    comparative: walk its year back until the label is free. The later end
-    keeps its label because its original filing is the trustworthy source.
+    two period ends share a label one of them is mislabeled.
+
+    Which one is mislabeled is decided by sequence consistency, not recency:
+    a filer's *newest* filing can itself mislabel the current quarter's fy
+    (Oracle's Sep-2026 10-Q tags Q1 FY2027 as fy=2026; Salesforce's Jan 10-K
+    tags Q4 FY2026 as fy=2025), colliding with the correctly labeled year-ago
+    quarter. The old "later end keeps its label" rule then walked the *correct*
+    row back a year (ORCL's Q1 FY2026 rendered "FY2025 Q1"). Now, when two
+    ends collide, the earlier end keeps the label if its claim matches the
+    sequence expectation from its predecessor, and the later end is relabeled
+    to its own expectation. When there is no sequence context to arbitrate
+    (the earlier end is the first row, or a quarter is missing), the legacy
+    behavior applies: the later end keeps its label and the earlier walks
+    back. Rows without a collision are never touched.
     """
-    seen: set[tuple[int, str]] = set()
-    # Latest end first: its original filing is the trustworthy label source,
-    # so it claims the label and earlier (comparative) ends walk back.
-    for row in sorted(rows, key=lambda item: item.end, reverse=True):
-        while (row.fy, row.fp) in seen:
-            row.fy -= 1
-        seen.add((row.fy, row.fp))
+    holder: dict[tuple[int, str], QuarterlyFinancials] = {}
+    # id(row) -> the row's claim matched the sequence expectation derived
+    # from its predecessor's final label (a first row or a row after a gap
+    # has no expectation, so it is never "grounded").
+    grounded: dict[int, bool] = {}
+    prev: tuple[int, str] | None = None
+    for row in sorted(rows, key=lambda item: item.end):
+        expected = _successor_label(*prev) if prev is not None else None
+        claim = (row.fy, row.fp)
+        if claim in holder:
+            earlier = holder[claim]
+            if (
+                expected is not None
+                and expected != claim
+                and expected not in holder
+                and grounded.get(id(earlier), False)
+            ):
+                # The earlier end's label is sequence-consistent, so the
+                # later end's original filing mislabeled the year — relabel
+                # the later end to its expectation instead of corrupting the
+                # correct row.
+                row.fy, row.fp = expected
+                holder[expected] = row
+            else:
+                # Legacy: the earlier end is the mislabeled comparative
+                # column; it vacates the collided label (the later end keeps
+                # it) and walks its year back until the label is free.
+                del holder[claim]
+                earlier.fy -= 1
+                while (earlier.fy, earlier.fp) in holder:
+                    earlier.fy -= 1
+                holder[(earlier.fy, earlier.fp)] = earlier
+                holder[claim] = row
+        else:
+            holder[claim] = row
+        grounded[id(row)] = expected is not None and (row.fy, row.fp) == expected
+        prev = (row.fy, row.fp)
     return rows
 
 
@@ -737,6 +799,36 @@ class UnsupportedFilerError(Exception):
     to extract. Callers surface this as "not supported" instead of letting
     a bare ``KeyError: 'us-gaap'`` through.
     """
+
+
+def _revenue_unsupported_reason(companyfacts: dict[str, Any]) -> str:
+    """Plain-language reason why no revenue facts were usable.
+
+    Inspects the revenue concept chain for facts rejected by the USD-only
+    unit filter or the 10-Q/10-K form filter, so the message names the
+    actual blocker (currency, form, or both).
+    """
+    tags = CONCEPTS[Metric.REVENUE].tags
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    currencies: set[str] = set()
+    forms: set[str] = set()
+    for tag in tags:
+        for unit, facts in us_gaap.get(tag, {}).get("units", {}).items():
+            if facts:
+                currencies.add(unit)
+                forms.update(f.get("form") for f in facts if f.get("form"))
+    bits = []
+    non_usd = sorted(c for c in currencies if c != "USD")
+    if non_usd:
+        bits.append(f"reports in {', '.join(non_usd)}")
+    foreign_forms = sorted(f for f in forms if f not in {"10-Q", "10-K"})
+    if foreign_forms:
+        bits.append(f"files {', '.join(foreign_forms)} instead of 10-Q/10-K")
+    detail = "; ".join(bits) if bits else "has no usable revenue facts"
+    return (
+        f"This company {detail} — Tickerlens covers US-GAAP filers reporting "
+        "in USD with quarterly 10-Q/10-K filings."
+    )
 
 
 def _chain_candidates(

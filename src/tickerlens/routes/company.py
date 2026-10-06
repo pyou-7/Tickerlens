@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from tickerlens.data.xbrl import UnsupportedFilerError
 from tickerlens.services.financials import (
     CompanyNotFoundError,
     DetailContext,
@@ -71,6 +72,10 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             _svc.fetch_and_persist(ticker, periods=8)
             _svc.enrich_company(ticker)
             overview = _svc.get_overview(ticker)
+        except UnsupportedFilerError as exc:
+            # Non-USD reporters / 20-F filers: the message is already
+            # plain-language, so render it without the generic prefix.
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}: {exc}") from exc
 
@@ -313,6 +318,8 @@ def company_vs(request: Request, ticker: str, other: str) -> HTMLResponse:
             try:
                 _svc.fetch_and_persist(t, periods=8)
                 _svc.enrich_company(t)
+            except UnsupportedFilerError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
             except Exception as exc:
                 raise HTTPException(
                     status_code=404, detail=f"Could not fetch data for {t}: {exc}"
@@ -505,6 +512,8 @@ def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
             overview = _svc.get_overview(ticker)
             detail = _svc.get_detail(ticker)
             val = _svc.get_valuation(ticker)
+        except UnsupportedFilerError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not load {ticker}: {exc}") from exc
 

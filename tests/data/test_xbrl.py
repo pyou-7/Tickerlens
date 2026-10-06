@@ -583,6 +583,126 @@ def test_dedupe_period_labels_leaves_unique_labels_alone() -> None:
     assert [(r.fy, r.fp) for r in fixed] == [(2025, "Q1"), (2025, "Q2")]
 
 
+def test_dedupe_period_labels_newest_filing_mislabels_q1_year() -> None:
+    """Oracle's Sep-2026 10-Q tags Q1 FY2027 (end 2026-08-31) as fy=2026,
+    colliding with the correctly labeled Q1 FY2026 (end 2025-08-31). The old
+    "later end keeps its label" rule walked the correct row back, rendering
+    ORCL's Q1 FY2026 as "FY2025 Q1". Sequence arbitration keeps the earlier
+    (consistent) row and relabels the later end to its expectation."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2025, "Q4", dt.date(2025, 5, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 8, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 11, 30)),
+        _xbrl_row(2026, "Q3", dt.date(2026, 2, 28)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 5, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 8, 31)),  # mislabeled by newest 10-Q
+    ]
+    fixed = _dedupe_period_labels(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 8, 31)] == (2026, "Q1")
+    assert by_end[dt.date(2026, 8, 31)] == (2027, "Q1")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_dedupe_period_labels_newest_filing_mislabels_q4_year() -> None:
+    """Salesforce's Jan 10-K tags Q4 FY2026 (end 2026-01-31) as fy=2025,
+    colliding with the correctly labeled Q4 FY2025 (end 2025-01-31). The
+    old rule walked the correct row back two years ("FY2024 Q4")."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2026, 1, 31)),  # mislabeled by newest 10-K
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+    ]
+    fixed = _dedupe_period_labels(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 1, 31)] == (2025, "Q4")
+    assert by_end[dt.date(2026, 1, 31)] == (2026, "Q4")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_dedupe_period_labels_gap_is_not_repaired() -> None:
+    """A year-long coverage gap (XOM's sparse new-CIK history) is not a label
+    collision: rows without a collision are never touched, even when the
+    sequence expectation disagrees."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _dedupe_period_labels(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(2025, "Q2"), (2026, "Q2")]
+
+
+def test_dedupe_period_labels_collision_without_sequence_context_walks_earlier_back() -> None:
+    """With no predecessor to arbitrate (the earlier end is the first row),
+    the legacy rule applies: the later end keeps its label."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2026, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _dedupe_period_labels(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 6, 30)] == (2025, "Q2")
+    assert by_end[dt.date(2026, 6, 30)] == (2026, "Q2")
+
+
+def _eur_20f_companyfacts() -> dict:
+    # ASML: us-gaap revenue facts exist but only in EUR, filed on Form 20-F.
+    facts = [
+        {
+            "start": "2025-01-01",
+            "end": "2025-12-31",
+            "val": 32667300000,
+            "fy": 2025,
+            "fp": "FY",
+            "form": "20-F",
+            "filed": "2026-02-25",
+        }
+    ]
+    return {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"EUR": facts}
+                }
+            }
+        }
+    }
+
+
+def test_eur_20f_filer_raises_unsupported_with_plain_reason() -> None:
+    """A 20-F/EUR filer (ASML) previously died with a bare
+    KeyError: 'No XBRL facts found for metric revenue'. Now it raises
+    UnsupportedFilerError naming the blockers."""
+    try:
+        extract_recent_quarterly_financials(
+            _eur_20f_companyfacts(), fiscal_year_end="1231", periods=8
+        )
+    except UnsupportedFilerError as exc:
+        assert "EUR" in str(exc)
+        assert "20-F" in str(exc)
+    else:
+        raise AssertionError("expected UnsupportedFilerError")
+
+
+def test_unsupported_reason_falls_back_to_generic() -> None:
+    from tickerlens.data.xbrl import _revenue_unsupported_reason
+
+    msg = _revenue_unsupported_reason({"facts": {"us-gaap": {}}})
+    assert "no usable revenue facts" in msg
+    assert "USD" in msg
+
+
 def _bank_companyfacts(
     noninterest: list[dict] | None,
     interest_net: list[dict] | None,
