@@ -109,6 +109,12 @@ class QuoteCache:
     def _fresh(self, stored_at: float) -> bool:
         return self._clock() - stored_at < self.ttl_seconds
 
+    def quote_fresh(self, ticker: str) -> bool:
+        """True when a fresh quote entry exists (even if fields are None)."""
+        with self._lock:
+            hit = self._quotes.get(ticker.upper())
+            return hit is not None and self._fresh(hit[0])
+
     def change_pct_fresh(self, ticker: str) -> bool:
         """True when a fresh day-change entry exists (even if the value is None)."""
         with self._lock:
@@ -176,10 +182,22 @@ _quote_cache = QuoteCache()
 _warm_lock = threading.Lock()
 _warming = False
 
+_quote_warm_lock = threading.Lock()
+_quote_warming = False
+
 
 def cached_quote(ticker: str) -> QuoteSnapshot:
     """TTL-cached quote; never raises."""
     return _quote_cache.get_quote(ticker)
+
+
+def peeked_quote(ticker: str) -> QuoteSnapshot | None:
+    """Fresh-cached quote snapshot, or None without fetching. Never raises."""
+    try:
+        return _quote_cache.peek_quote(ticker)
+    except Exception:
+        logger.warning("Quote cache peek failed for %s", ticker, exc_info=True)
+        return None
 
 
 def cached_day_change_pct(ticker: str) -> float | None:
@@ -230,3 +248,33 @@ def warm_change_pct_cache(tickers: list[str]) -> None:
         logger.warning("Could not start quote cache warmer", exc_info=True)
         with _warm_lock:
             _warming = False
+
+
+def warm_quote_cache(tickers: list[str]) -> None:
+    """Refresh quotes for ``tickers`` in a background thread. Never raises."""
+    global _quote_warming
+    try:
+        with _quote_warm_lock:
+            if _quote_warming:
+                return
+            cold = [t for t in tickers if not _quote_cache.quote_fresh(t)]
+            if not cold:
+                return
+            _quote_warming = True
+
+        def _run() -> None:
+            global _quote_warming
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+                    list(pool.map(_quote_cache.get_quote, cold))
+            except Exception:
+                logger.warning("Background quote warm failed", exc_info=True)
+            finally:
+                with _quote_warm_lock:
+                    _quote_warming = False
+
+        threading.Thread(target=_run, daemon=True, name="yahoo-quote-warm").start()
+    except Exception:
+        logger.warning("Could not start quote cache warmer", exc_info=True)
+        with _quote_warm_lock:
+            _quote_warming = False

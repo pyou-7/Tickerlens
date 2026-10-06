@@ -222,3 +222,50 @@ def test_determine_cap_tier_unknown_when_missing() -> None:
     assert _determine_cap_tier(None)[0] == "Unknown"
     assert _determine_cap_tier(0)[0] == "Unknown"
     assert _determine_cap_tier(1_100_000_000_000)[0] == "Mega-Cap"
+
+
+def test_quote_fresh_and_peek_quote() -> None:
+    now = 1000.0
+    cache = yahoo.QuoteCache(
+        ttl_seconds=300,
+        fetch_quote=lambda t: yahoo.QuoteSnapshot(ticker=t, last_price=25.0, market_cap=5e9, currency="USD"),
+        clock=lambda: now,
+    )
+    assert not cache.quote_fresh("APLD")
+    assert cache.peek_quote("APLD") is None
+
+    # Fetch populates cache
+    quote = cache.get_quote("APLD")
+    assert quote.last_price == 25.0
+    assert cache.quote_fresh("APLD")
+    assert cache.peek_quote("APLD") is not None
+    assert cache.peek_quote("APLD").last_price == 25.0
+
+    # Advance time beyond TTL
+    now += 301.0
+    assert not cache.quote_fresh("APLD")
+    assert cache.peek_quote("APLD") is None
+
+
+def test_warm_quote_cache_background_thread(monkeypatch) -> None:
+    import time
+
+    called: list[str] = []
+
+    def mock_fetch(ticker: str) -> yahoo.QuoteSnapshot:
+        called.append(ticker)
+        return yahoo.QuoteSnapshot(ticker=ticker, last_price=123.0, market_cap=1e10, currency="USD")
+
+    monkeypatch.setattr(yahoo._quote_cache, "_fetch_quote", mock_fetch)
+    yahoo._quote_cache._quotes.clear()
+
+    yahoo.warm_quote_cache(["APLD", "GLXY"])
+
+    deadline = time.monotonic() + 2.0
+    while len(called) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert "APLD" in called
+    assert "GLXY" in called
+    assert yahoo._quote_cache.peek_quote("APLD") is not None
+

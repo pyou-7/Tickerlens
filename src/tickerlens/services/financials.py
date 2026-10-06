@@ -21,10 +21,13 @@ from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
 from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
 from tickerlens.data.yahoo import (
+    QuoteSnapshot,
     cached_quote,
     get_quote,
     peeked_day_change_pct,
+    peeked_quote,
     warm_change_pct_cache,
+    warm_quote_cache,
 )
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
@@ -583,14 +586,26 @@ class FinancialsService:
             ttm_kpi = _compute_ttm(ttm_rows)
             yoy = _compute_yoy(latest, list(rows))
 
+            live_quote = peeked_quote(company.ticker or ticker)
+            effective_price = (
+                live_quote.last_price
+                if (live_quote and live_quote.last_price is not None)
+                else company.last_price
+            )
+            effective_market_cap = (
+                live_quote.market_cap
+                if (live_quote and live_quote.market_cap is not None)
+                else company.market_cap
+            )
+
             return CompanyOverview(
                 cik=cik,
                 name=company.name,
                 ticker=company.ticker,
                 description=company.description,
                 sector=sector_for_sic(company.sic),
-                last_price=company.last_price,
-                market_cap=company.market_cap,
+                last_price=effective_price,
+                market_cap=effective_market_cap,
                 latest_label=f"{latest.fiscal_period} FY{latest.fiscal_year}",
                 latest_period_end=latest.period_end,
                 latest_kpi=latest_kpi,
@@ -647,13 +662,25 @@ class FinancialsService:
             if prior_ttm is not None:
                 revenue_growth_pct = _pct_change(ttm.revenue, prior_ttm.revenue)
 
+            live_quote = peeked_quote(company.ticker or ticker)
+            effective_price = (
+                live_quote.last_price
+                if (live_quote and live_quote.last_price is not None)
+                else company.last_price
+            )
+            effective_market_cap = (
+                live_quote.market_cap
+                if (live_quote and live_quote.market_cap is not None)
+                else company.market_cap
+            )
+
             shares_outstanding: float | None = None
-            if company.market_cap and company.last_price:
-                shares_outstanding = company.market_cap / company.last_price
+            if effective_market_cap and effective_price:
+                shares_outstanding = effective_market_cap / effective_price
 
             return compute_valuation(
                 ticker=ticker.upper(),
-                current_price=company.last_price,
+                current_price=effective_price,
                 ttm_eps_diluted=ttm.eps_diluted,
                 eps_growth_pct=growth_pct,
                 ttm_revenue=ttm.revenue,
@@ -662,7 +689,7 @@ class FinancialsService:
                 ttm_quarters=min(4, len(rows)),
                 growth_is_fallback=growth_is_fallback,
                 ttm_free_cash_flow=ttm.free_cash_flow,
-                market_cap=company.market_cap,
+                market_cap=effective_market_cap,
             )
         finally:
             if session is None and self._session is None:
@@ -885,13 +912,24 @@ class FinancialsService:
                     signal = self.get_valuation(company.ticker or entry.cik, session=db).signal
                 except CompanyNotFoundError:
                     signal = None
+                live_quote = peeked_quote(company.ticker) if company.ticker else None
+                effective_price = (
+                    live_quote.last_price
+                    if (live_quote and live_quote.last_price is not None)
+                    else company.last_price
+                )
+                effective_market_cap = (
+                    live_quote.market_cap
+                    if (live_quote and live_quote.market_cap is not None)
+                    else company.market_cap
+                )
                 result.append(
                     WatchlistRow(
                         cik=entry.cik,
                         ticker=company.ticker,
                         name=company.name,
-                        last_price=company.last_price,
-                        market_cap=company.market_cap,
+                        last_price=effective_price,
+                        market_cap=effective_market_cap,
                         signal=signal,
                         note=entry.note,
                         tags=_split_tags(entry.tags),
@@ -924,13 +962,24 @@ class FinancialsService:
                         signal = val.signal
                     except Exception:
                         signal = None
+                    live_quote = peeked_quote(c.ticker)
+                    effective_price = (
+                        live_quote.last_price
+                        if (live_quote and live_quote.last_price is not None)
+                        else c.last_price
+                    )
+                    effective_market_cap = (
+                        live_quote.market_cap
+                        if (live_quote and live_quote.market_cap is not None)
+                        else c.market_cap
+                    )
                     result.append(
                         WatchlistRow(
                             cik=c.cik,
                             ticker=c.ticker,
                             name=c.name,
-                            last_price=c.last_price,
-                            market_cap=c.market_cap,
+                            last_price=effective_price,
+                            market_cap=effective_market_cap,
                             signal=signal,
                             note=None,
                             tags=[],
@@ -1277,6 +1326,60 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+    def refresh_company_quote(
+        self, ticker: str, session: Session | None = None
+    ) -> QuoteSnapshot:
+        """Fetch the latest cached Yahoo quote for ticker and update the DB if changed.
+
+        Reads through the thread-safe QuoteCache (5-min TTL) and persists
+        last_price and market_cap to Company. Never raises on failure;
+        preserves existing DB values if quote fetch returns None or fails.
+        """
+        try:
+            cik = _resolve_cik(self.edgar_client, ticker)
+        except Exception:
+            return QuoteSnapshot(ticker=ticker, last_price=None, market_cap=None, currency=None)
+
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                return QuoteSnapshot(ticker=ticker, last_price=None, market_cap=None, currency=None)
+            quote = cached_quote(company.ticker or ticker)
+            if quote.last_price is not None:
+                company.last_price = quote.last_price
+            if quote.market_cap is not None:
+                company.market_cap = quote.market_cap
+            db.commit()
+            return quote
+        except Exception:
+            logger.warning("Quote refresh failed for %s", ticker, exc_info=True)
+            return QuoteSnapshot(ticker=ticker, last_price=None, market_cap=None, currency=None)
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def warm_tracked_quotes(self, session: Session | None = None) -> None:
+        """Warm quote cache for benchmarks and watchlist in a background thread."""
+        db = session or self._session or get_session()
+        try:
+            benchmark_tickers = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "TSLA"]
+            watchlist_tickers = [
+                row[0]
+                for row in db.execute(
+                    select(Company.ticker)
+                    .join(WatchlistEntry, WatchlistEntry.cik == Company.cik)
+                    .where(Company.ticker.is_not(None))
+                ).all()
+            ]
+            all_tickers = list(dict.fromkeys(benchmark_tickers + watchlist_tickers))
+            warm_quote_cache(all_tickers)
+        except Exception:
+            logger.warning("Could not warm tracked quotes", exc_info=True)
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
     def get_detail(
         self,
         ticker: str,
@@ -1390,13 +1493,25 @@ class FinancialsService:
                     None,
                 )
 
+            live_quote = peeked_quote(company.ticker or ticker)
+            effective_price = (
+                live_quote.last_price
+                if (live_quote and live_quote.last_price is not None)
+                else company.last_price
+            )
+            effective_market_cap = (
+                live_quote.market_cap
+                if (live_quote and live_quote.market_cap is not None)
+                else company.market_cap
+            )
+
             return DetailContext(
                 cik=cik,
                 name=company.name,
                 ticker=company.ticker,
                 sector=sector_for_sic(company.sic),
-                last_price=company.last_price,
-                market_cap=company.market_cap,
+                last_price=effective_price,
+                market_cap=effective_market_cap,
                 granularity=granularity,
                 quarter_options=quarter_options,
                 year_options=year_options,
@@ -1475,13 +1590,25 @@ class FinancialsService:
             ]
             year_options = sorted({r.fiscal_year for r in all_rows}, reverse=True)
 
+            live_quote = peeked_quote(company.ticker or ticker)
+            effective_price = (
+                live_quote.last_price
+                if (live_quote and live_quote.last_price is not None)
+                else company.last_price
+            )
+            effective_market_cap = (
+                live_quote.market_cap
+                if (live_quote and live_quote.market_cap is not None)
+                else company.market_cap
+            )
+
             common = dict(
                 cik=cik,
                 name=company.name,
                 ticker=company.ticker,
                 sector=sector_for_sic(company.sic),
-                last_price=company.last_price,
-                market_cap=company.market_cap,
+                last_price=effective_price,
+                market_cap=effective_market_cap,
                 quarter_options=quarter_options,
                 year_options=year_options,
             )

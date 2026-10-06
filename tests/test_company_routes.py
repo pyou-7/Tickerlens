@@ -809,3 +809,54 @@ def test_company_tearsheet_route(client: TestClient, monkeypatch) -> None:
     assert "Apple Inc." in resp.text or "AAPL" in resp.text
     assert "Q3 FY2025" in resp.text
 
+
+def test_overview_triggers_refresh_company_quote(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+    from tickerlens.services.financials import CompanyOverview, KPISnapshot, KPIChange
+    from tickerlens.services.valuation import ValuationSignal
+    import datetime as dt
+
+    mock_svc = MagicMock()
+    mock_svc.get_overview.return_value = CompanyOverview(
+        cik="0001144879",
+        name="Applied Digital Corp.",
+        ticker="APLD",
+        description="Data center infrastructure",
+        sector="Technology",
+        last_price=24.70,
+        market_cap=7389503488.0,
+        latest_label="Q3 FY2025",
+        latest_period_end=dt.date(2025, 2, 28),
+        latest_kpi=KPISnapshot(revenue=40.0, net_income=-10.0, eps_diluted=-0.08, free_cash_flow=-20.0),
+        yoy=KPIChange(revenue=10.0, net_income=None, eps_diluted=None, free_cash_flow=None),
+        ttm_kpi=KPISnapshot(revenue=150.0, net_income=-40.0, eps_diluted=-0.35, free_cash_flow=-80.0),
+        ttm_quarters=4,
+    )
+    mock_svc.get_valuation.return_value = ValuationSignal(
+        ticker="APLD",
+        current_price=24.70,
+        target_price=25.0,
+        upside_pct=1.2,
+        signal="Hold",
+        confidence="medium",
+        method="peg",
+        fair_multiple=20.0,
+        current_multiple=19.5,
+        growth_pct=10.0,
+        reasoning=["Fairly valued"],
+    )
+    mock_svc.get_signal_change.return_value = None
+    mock_svc.is_watching.return_value = False
+    mock_svc.get_watchlist_note.return_value = None
+    mock_svc.get_watchlist_tags.return_value = []
+    mock_svc.get_sibling_tickers.return_value = []
+    mock_svc.get_peers.return_value = []
+    mock_svc.get_ai_analysis.return_value = None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/APLD")
+    assert resp.status_code == 200
+    mock_svc.refresh_company_quote.assert_called_with("APLD")
+
+
+

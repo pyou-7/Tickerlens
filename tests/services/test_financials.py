@@ -1783,3 +1783,71 @@ def test_get_upcoming_earnings_still_fetches(session: Session, monkeypatch) -> N
 
     assert sorted(calls) == ["AAPL", "MSFT"]
     assert all(e.earnings_date == "2026-10-29" for e in events)
+
+
+def test_refresh_company_quote_updates_price_and_market_cap(session: Session, monkeypatch) -> None:
+    from tickerlens.data.yahoo import QuoteSnapshot
+    from tickerlens.services import financials as fin_mod
+
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.last_price = 100.0
+    company.market_cap = 1e12
+    session.add(company)
+    session.commit()
+
+    monkeypatch.setattr(
+        fin_mod,
+        "cached_quote",
+        lambda t: QuoteSnapshot(ticker=t, last_price=150.0, market_cap=2e12, currency="USD"),
+    )
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    quote = svc.refresh_company_quote("AAPL", session=session)
+    assert quote.last_price == 150.0
+
+    session.refresh(company)
+    assert company.last_price == 150.0
+    assert company.market_cap == 2e12
+
+
+def test_refresh_company_quote_preserves_price_on_failure(session: Session, monkeypatch) -> None:
+    from tickerlens.data.yahoo import QuoteSnapshot
+    from tickerlens.services import financials as fin_mod
+
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.last_price = 100.0
+    company.market_cap = 1e12
+    session.add(company)
+    session.commit()
+
+    monkeypatch.setattr(
+        fin_mod,
+        "cached_quote",
+        lambda t: QuoteSnapshot(ticker=t, last_price=None, market_cap=None, currency=None),
+    )
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    quote = svc.refresh_company_quote("AAPL", session=session)
+    assert quote.last_price is None
+
+    session.refresh(company)
+    assert company.last_price == 100.0
+    assert company.market_cap == 1e12
+
+
+def test_refresh_company_quote_unknown_ticker_never_raises(session: Session) -> None:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.side_effect = KeyError("not found")
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    quote = svc.refresh_company_quote("ZZZZ", session=session)
+    assert quote.last_price is None
+
