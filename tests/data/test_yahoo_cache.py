@@ -269,3 +269,42 @@ def test_warm_quote_cache_background_thread(monkeypatch) -> None:
     assert "GLXY" in called
     assert yahoo._quote_cache.peek_quote("APLD") is not None
 
+
+
+def test_quote_cache_keys_normalize_dotted_tickers() -> None:
+    """BRK.B and BRK-B are the same security: one cache entry, one Yahoo fetch."""
+    calls: list[str] = []
+    now = 1000.0
+
+    def fetch(ticker: str) -> QuoteSnapshot:
+        calls.append(ticker)
+        return QuoteSnapshot(ticker=ticker, last_price=400.0, market_cap=1e12, currency="USD")
+
+    cache = QuoteCache(ttl_seconds=300, fetch_quote=fetch, clock=lambda: now)
+
+    quote = cache.get_quote("BRK.B")
+    assert quote.last_price == 400.0
+    # Hyphen spelling hits the same entry — no second fetch.
+    assert cache.quote_fresh("BRK-B")
+    assert cache.peek_quote("brk-b") is not None
+    assert cache.peek_quote("BRK-B").last_price == 400.0
+    cache.get_quote("BRK-B")
+    assert len(calls) == 1
+
+
+def test_change_cache_keys_normalize_dotted_tickers() -> None:
+    """Day-change cache shares entries across dotted/hyphen spellings too."""
+    calls: list[str] = []
+    now = 1000.0
+
+    def fetch(ticker: str) -> float | None:
+        calls.append(ticker)
+        return 1.5
+
+    cache = QuoteCache(ttl_seconds=300, fetch_change_pct=fetch, clock=lambda: now)
+
+    assert cache.get_change_pct("BRK.B") == 1.5
+    assert cache.change_pct_fresh("BRK-B")
+    assert cache.peek_change_pct("BRK-B") == 1.5
+    cache.get_change_pct("BRK-B")
+    assert len(calls) == 1

@@ -1851,3 +1851,49 @@ def test_refresh_company_quote_unknown_ticker_never_raises(session: Session) -> 
     quote = svc.refresh_company_quote("ZZZZ", session=session)
     assert quote.last_price is None
 
+
+
+def test_refresh_company_quote_fast_path_skips_lookup_when_fresh(session: Session, monkeypatch) -> None:
+    """A fresh cached quote short-circuits: no EDGAR lookup, no DB session work."""
+    from tickerlens.data.yahoo import QuoteSnapshot
+    from tickerlens.services import financials as fin_mod
+
+    snap = QuoteSnapshot(ticker="AAPL", last_price=150.0, market_cap=2e12, currency="USD")
+    monkeypatch.setattr(fin_mod, "peeked_quote", lambda t: snap)
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.side_effect = AssertionError("must not resolve CIK on fast path")
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    assert svc.refresh_company_quote("AAPL") is snap
+    mock_edgar.cik_for_ticker.assert_not_called()
+
+
+def test_refresh_company_quote_skips_commit_when_unchanged(session: Session, monkeypatch) -> None:
+    """No write transaction when the cached quote matches the stored values."""
+    from tickerlens.data.yahoo import QuoteSnapshot
+    from tickerlens.services import financials as fin_mod
+
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.last_price = 150.0
+    company.market_cap = 2e12
+    session.add(company)
+    session.commit()
+
+    monkeypatch.setattr(fin_mod, "peeked_quote", lambda t: None)  # force slow path
+    monkeypatch.setattr(
+        fin_mod,
+        "cached_quote",
+        lambda t: QuoteSnapshot(ticker=t, last_price=150.0, market_cap=2e12, currency="USD"),
+    )
+    commits: list[int] = []
+    monkeypatch.setattr(session, "commit", lambda: commits.append(1))
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    quote = svc.refresh_company_quote("AAPL", session=session)
+    assert quote.last_price == 150.0
+    assert commits == []

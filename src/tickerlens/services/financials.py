@@ -1335,6 +1335,13 @@ class FinancialsService:
         last_price and market_cap to Company. Never raises on failure;
         preserves existing DB values if quote fetch returns None or fails.
         """
+        # Fast path: a fresh cached quote means nothing could have changed —
+        # every display path prefers the peeked quote over the DB value, so
+        # skip the EDGAR CIK lookup (disk JSON re-read + linear scan), the DB
+        # session, and the write transaction entirely.
+        fresh = peeked_quote(ticker)
+        if fresh is not None:
+            return fresh
         try:
             cik = _resolve_cik(self.edgar_client, ticker)
         except Exception:
@@ -1346,11 +1353,17 @@ class FinancialsService:
             if company is None:
                 return QuoteSnapshot(ticker=ticker, last_price=None, market_cap=None, currency=None)
             quote = cached_quote(company.ticker or ticker)
-            if quote.last_price is not None:
+            # Only take the write lock when a value actually changed — every
+            # page view used to commit a no-op transaction here.
+            changed = False
+            if quote.last_price is not None and quote.last_price != company.last_price:
                 company.last_price = quote.last_price
-            if quote.market_cap is not None:
+                changed = True
+            if quote.market_cap is not None and quote.market_cap != company.market_cap:
                 company.market_cap = quote.market_cap
-            db.commit()
+                changed = True
+            if changed:
+                db.commit()
             return quote
         except Exception:
             logger.warning("Quote refresh failed for %s", ticker, exc_info=True)

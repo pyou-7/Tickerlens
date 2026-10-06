@@ -29,6 +29,16 @@ def yahoo_symbol(ticker: str) -> str:
     return ticker.upper().strip().replace(".", "-")
 
 
+def _cache_key(ticker: str) -> str:
+    """Cache key for a ticker: Yahoo's symbol form.
+
+    ``BRK.B`` and ``BRK-B`` are the same security — keyed separately they'd
+    occupy two cache entries, trigger duplicate Yahoo fetches, and make
+    peeks miss depending on which spelling the caller used.
+    """
+    return yahoo_symbol(ticker)
+
+
 def _fetch_info(ticker: str) -> dict:
     """Read ``yf.Ticker(ticker).info`` with a hard timeout. Never hangs."""
     symbol = yahoo_symbol(ticker)
@@ -112,13 +122,13 @@ class QuoteCache:
     def quote_fresh(self, ticker: str) -> bool:
         """True when a fresh quote entry exists (even if fields are None)."""
         with self._lock:
-            hit = self._quotes.get(ticker.upper())
+            hit = self._quotes.get(_cache_key(ticker))
             return hit is not None and self._fresh(hit[0])
 
     def change_pct_fresh(self, ticker: str) -> bool:
         """True when a fresh day-change entry exists (even if the value is None)."""
         with self._lock:
-            hit = self._changes.get(ticker.upper())
+            hit = self._changes.get(_cache_key(ticker))
             return hit is not None and self._fresh(hit[0])
 
     def peek_change_pct(self, ticker: str) -> float | None:
@@ -129,17 +139,17 @@ class QuoteCache:
         in the meantime.
         """
         with self._lock:
-            hit = self._changes.get(ticker.upper())
+            hit = self._changes.get(_cache_key(ticker))
             return hit[1] if hit and self._fresh(hit[0]) else None
 
     def peek_quote(self, ticker: str) -> QuoteSnapshot | None:
         """Return the cached quote only if fresh; never fetches, never raises."""
         with self._lock:
-            hit = self._quotes.get(ticker.upper())
+            hit = self._quotes.get(_cache_key(ticker))
             return hit[1] if hit and self._fresh(hit[0]) else None
 
     def get_quote(self, ticker: str) -> QuoteSnapshot:
-        key = ticker.upper()
+        key = _cache_key(ticker)
         with self._lock:
             hit = self._quotes.get(key)
             if hit and self._fresh(hit[0]):
@@ -157,7 +167,7 @@ class QuoteCache:
                     ticker=ticker, last_price=None, market_cap=None, currency=None)
 
     def get_change_pct(self, ticker: str) -> float | None:
-        key = ticker.upper()
+        key = _cache_key(ticker)
         with self._lock:
             hit = self._changes.get(key)
             if hit and self._fresh(hit[0]):

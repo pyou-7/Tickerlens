@@ -61,6 +61,8 @@ def earnings_calendar(
 @router.get("/company/{ticker}", response_class=HTMLResponse)
 def company_overview(request: Request, ticker: str) -> HTMLResponse:
     ticker = ticker.upper()
+    # Refresh quote so prices never lag (never raises; no-op when cache fresh).
+    _svc.refresh_company_quote(ticker)
     try:
         overview = _svc.get_overview(ticker)
     except CompanyNotFoundError:
@@ -72,9 +74,6 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}: {exc}") from exc
 
-    # Refresh quote so prices never lag for existing companies
-    _svc.refresh_company_quote(ticker)
-    overview = _svc.get_overview(ticker)
     return templates.TemplateResponse(
         request=request,
         name="company/overview.html",
@@ -235,6 +234,8 @@ def company_detail(
     chart_to: str | None = None,
 ) -> HTMLResponse:
     ticker = ticker.upper()
+    # Refresh quote so prices never lag (never raises; no-op when cache fresh).
+    _svc.refresh_company_quote(ticker)
     try:
         ctx = _svc.get_detail(
             ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
@@ -251,11 +252,6 @@ def company_detail(
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    _svc.refresh_company_quote(ticker)
-    ctx = _svc.get_detail(
-        ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
-        chart_from=chart_from, chart_to=chart_to,
-    )
     return templates.TemplateResponse(
         request=request,
         name="company/detail.html",
@@ -496,6 +492,8 @@ def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
     import datetime as dt
 
     ticker = ticker.upper()
+    # Refresh quote so prices never lag (never raises; no-op when cache fresh).
+    _svc.refresh_company_quote(ticker)
     try:
         overview = _svc.get_overview(ticker)
         detail = _svc.get_detail(ticker)
@@ -509,11 +507,6 @@ def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
             val = _svc.get_valuation(ticker)
         except Exception as exc:
             raise HTTPException(status_code=404, detail=f"Could not load {ticker}: {exc}") from exc
-
-    _svc.refresh_company_quote(ticker)
-    overview = _svc.get_overview(ticker)
-    detail = _svc.get_detail(ticker)
-    val = _svc.get_valuation(ticker)
 
     now_utc = dt.datetime.now(dt.timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
 
