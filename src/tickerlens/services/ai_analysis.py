@@ -43,6 +43,54 @@ def _determine_cap_tier(market_cap: float | None) -> tuple[str, str | None]:
     return "Small-Cap", "Cash Runway & Balance Sheet Defense"
 
 
+def _solvency_score(assets_to_liabilities: float, sector: str | None) -> int:
+    """Balance-sheet score on the assets/liabilities ratio, sector-aware.
+
+    The industrial ladder below treats a ratio under 1.2x as weak — but for
+    deposit-/premium-funded financials a 1.05–1.15x ratio is the business
+    model, not distress (JPMorgan scored 40/100 "solvency" at 1.08x, dragging
+    every bank's composite down ~5 points and flipping MET's signal). REITs
+    are structurally levered too, though less extremely. Sector ladders keep
+    the same 40-point floor for genuinely thin balance sheets.
+    """
+    sec = (sector or "").lower()
+    if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
+        if assets_to_liabilities >= 1.15:
+            return 85
+        if assets_to_liabilities >= 1.08:
+            return 75
+        if assets_to_liabilities >= 1.03:
+            return 65
+        return 40
+    if "real estate" in sec:
+        if assets_to_liabilities >= 1.5:
+            return 85
+        if assets_to_liabilities >= 1.3:
+            return 75
+        if assets_to_liabilities >= 1.15:
+            return 65
+        return 40
+    if assets_to_liabilities >= 2.5:
+        return 90
+    if assets_to_liabilities >= 1.8:
+        return 80
+    if assets_to_liabilities >= 1.2:
+        return 65
+    return 40
+
+
+def _revenue_thesis_tail(sector: str | None) -> str:
+    """Sector-aware close for the revenue-growth thesis.
+
+    "Healthy demand across commercial segments" is wrong-register for banks,
+    insurers, and brokers, whose "revenue" is net interest / fee income.
+    """
+    sec = (sector or "").lower()
+    if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
+        return "reflecting balance-sheet growth and fee-income momentum."
+    return "reflecting healthy demand across commercial segments."
+
+
 def _extract_key_risks(
     risk_factors: str | None,
     guidance: str | None,
@@ -105,17 +153,21 @@ def generate_ai_analysis(
     ni_yoy = overview.yoy.net_income if overview.yoy and overview.yoy.net_income is not None else 0.0
     eps_yoy = overview.yoy.eps_diluted if overview.yoy and overview.yoy.eps_diluted is not None else 0.0
 
+    # Missing YoY (e.g. first-seeded tickers) is unknown, not flat — score it
+    # neutral 50 rather than the 55 the flat-growth ladder would award.
+    has_rev_yoy = overview.yoy is not None and overview.yoy.revenue is not None
     growth_score = 50
-    if rev_yoy >= 25.0:
-        growth_score = 95
-    elif rev_yoy >= 15.0:
-        growth_score = 85
-    elif rev_yoy >= 5.0:
-        growth_score = 70
-    elif rev_yoy >= 0.0:
-        growth_score = 55
-    else:
-        growth_score = max(20, int(50 + rev_yoy * 1.5))
+    if has_rev_yoy:
+        if rev_yoy >= 25.0:
+            growth_score = 95
+        elif rev_yoy >= 15.0:
+            growth_score = 85
+        elif rev_yoy >= 5.0:
+            growth_score = 70
+        elif rev_yoy >= 0.0:
+            growth_score = 55
+        else:
+            growth_score = max(20, int(50 + rev_yoy * 1.5))
 
     # 2. Profitability & Cash Generation
     ttm_rev = overview.ttm_kpi.revenue or 1.0
@@ -142,19 +194,15 @@ def generate_ai_analysis(
     elif fcf_conversion < 40.0 and ttm_ni > 0:
         profit_score = max(20, profit_score - 10)
 
-    # 3. Solvency & Balance Sheet
+    # 3. Solvency & Balance Sheet (sector-aware: banks/insurers/REITs are
+    # structurally levered; the industrial ladder misreads that as distress)
     solvency_score = 65
     latest_row = rows[-1] if rows else None
     if latest_row and latest_row.total_assets and latest_row.total_liabilities:
-        ratio = latest_row.total_assets / latest_row.total_liabilities
-        if ratio >= 2.5:
-            solvency_score = 90
-        elif ratio >= 1.8:
-            solvency_score = 80
-        elif ratio >= 1.2:
-            solvency_score = 65
-        else:
-            solvency_score = 40
+        solvency_score = _solvency_score(
+            latest_row.total_assets / latest_row.total_liabilities,
+            overview.sector,
+        )
 
     # 4. Valuation Alignment
     upside = valuation.upside_pct if valuation and valuation.upside_pct is not None else 0.0
@@ -200,7 +248,8 @@ def generate_ai_analysis(
     theses: list[str] = []
     if rev_yoy != 0:
         theses.append(
-            f"Top-line revenue grew {rev_yoy:+.1f}% YoY in {overview.latest_label}, reflecting healthy demand across commercial segments."
+            f"Top-line revenue grew {rev_yoy:+.1f}% YoY in {overview.latest_label}, "
+            f"{_revenue_thesis_tail(overview.sector)}"
         )
     if net_margin > 0:
         theses.append(
@@ -219,6 +268,21 @@ def generate_ai_analysis(
         theses.append(
             f"Model price target of ${valuation.target_price:.2f} implies {upside:+.1f}% upside against current trading quote of ${overview.last_price or 0:.2f}."
         )
+        # Reconcile with the valuation card: when the model rates the stock a
+        # Strong Sell but the fundamentals-driven signal is Watch or better,
+        # say so explicitly instead of silently contradicting the card on the
+        # same page (e.g. TSLA: Watch 66/100 next to Strong Sell −97.6%).
+        if (
+            valuation.signal == "Strong Sell"
+            and valuation.upside_pct is not None
+            and signal in ("Invest", "Swing", "Watch")
+        ):
+            theses.append(
+                f"Valuation check: the model rates {overview.ticker} a Strong Sell "
+                f"({valuation.upside_pct:+.1f}% implied downside to the "
+                f"${valuation.target_price:.2f} target) — the '{signal}' rating "
+                "above rests on fundamentals, not on price."
+            )
 
     if tier_focus is not None:
         theses.append(
@@ -261,7 +325,7 @@ def generate_ai_analysis(
         profitability_score=profit_score,
         solvency_score=solvency_score,
         valuation_score=val_score,
-        theses=theses[:5],
+        theses=theses[:6],
         risks=risks,
         executive_summary=summary,
     )
