@@ -251,3 +251,31 @@ def test_no_guardrail_keeps_high_confidence():
     v = _base()
     assert v.confidence == "High"
     assert not any(p.startswith("Note:") for p in v.reasoning)
+
+
+# ── Batch 27: honest floor-multiple copy for flat/declining earnings ─────────
+def test_negative_eps_growth_uses_honest_floor_copy():
+    # Mirror the UBER case: -23.6% growth slams into the 2% floor, so the 8x
+    # is a distressed-earnings floor, not a PEG implication — the card must
+    # not claim "a PEG of 1.5 on that growth implies…".
+    v = _base(eps_growth_pct=-23.6, ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.fair_multiple == pytest.approx(8.0)
+    assert v.confidence == "Medium"  # guardrail drove the target
+    assert not any("on that growth implies" in p for p in v.reasoning)
+    assert any("declining" in p and "8.0×" in p for p in v.reasoning)
+    assert any("hit the 2% floor" in p for p in v.reasoning)
+
+
+def test_flat_eps_growth_uses_honest_floor_copy():
+    # 0–2% growth gets no growth premium either; same honest framing.
+    v = _base(eps_growth_pct=1.7, ten_year_yield_pct=2.0)
+    assert v.fair_multiple == pytest.approx(8.0)
+    assert v.confidence == "Medium"
+    assert not any("on that growth implies" in p for p in v.reasoning)
+    assert any("essentially flat" in p for p in v.reasoning)
+
+
+def test_positive_growth_keeps_peg_copy():
+    v = _base(eps_growth_pct=20.0, ten_year_yield_pct=2.0)
+    assert any("A PEG of 1.5 on that growth implies" in p for p in v.reasoning)

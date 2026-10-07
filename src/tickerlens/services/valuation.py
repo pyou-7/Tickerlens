@@ -282,10 +282,33 @@ def compute_valuation(
             confidence = "Medium"  # cap: the guardrail, not the data, drives the target
         if rate_note is not None:
             confidence = "Medium"  # cap: the rate environment, not the data, drives the target
+        if eps_growth_pct < _MIN_GROWTH_PCT:
+            # Batch 27: PEG is undefined for flat/declining earnings — the
+            # fair P/E here is the distressed-earnings floor, not a PEG
+            # implication. Say so honestly instead of claiming "a PEG of 1.5
+            # on that growth implies…" (13 of 64 DB companies render this
+            # card with negative EPS growth).
+            if eps_growth_pct < 0:
+                multiple_line = (
+                    f"Earnings are declining ({eps_growth_pct:.1f}% YoY), so no "
+                    f"growth premium applies — valued at the {fair_pe:.1f}× floor "
+                    f"multiple for declining earnings "
+                    f"(current P/E is {current_pe:.1f}×)."
+                )
+            else:
+                multiple_line = (
+                    f"Earnings are essentially flat ({eps_growth_pct:+.1f}% YoY), so no "
+                    f"growth premium applies — valued at the {fair_pe:.1f}× floor "
+                    f"multiple (current P/E is {current_pe:.1f}×)."
+                )
+        else:
+            multiple_line = (
+                f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
+                f"(current P/E is {current_pe:.1f}×)."
+            )
         reasoning = [
             f"TTM diluted EPS ${ttm_eps_diluted:.2f}, growing {eps_growth_pct:.1f}% year over year.",
-            f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
-            f"(current P/E is {current_pe:.1f}×).",
+            multiple_line,
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
             f"({upside:+.1f}% implied upside).",
         ]
