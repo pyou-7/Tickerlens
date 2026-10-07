@@ -102,7 +102,7 @@ def parse_news_feed(xml_text: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
         try:
             raw_title = (entry.findtext("title") or "").strip()
             link = (entry.findtext("link") or "").strip()
-            if not raw_title or not link:
+            if not raw_title or not link or _is_quote_page_artifact(raw_title):
                 continue
             title, source = _strip_source_suffix(raw_title)
             src_el = entry.find("source")
@@ -121,13 +121,39 @@ def parse_news_feed(xml_text: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
     return items
 
 
-def _fetch_feed(ticker: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
-    query = urllib.parse.quote(f"{ticker} stock")
-    url = _GNEWS_URL.format(q=query)
+def _build_query(ticker: str, company_name: str | None = None) -> str:
+    """Search query for a company.
+
+    Prefer the company name (e.g. "AT&T Inc. stock") over the bare ticker:
+    single-letter tickers like T or F get junk under "<TICKER> stock" —
+    Japanese Tokyo-listed results (6098.T) and quote-page placeholders.
+    Falls back to the ticker when the name is unknown.
+    """
+    name = (company_name or "").strip()
+    if name:
+        return f"{name} stock"
+    return f"{ticker} stock"
+
+
+def _fetch_feed(query: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
+    url = _GNEWS_URL.format(q=urllib.parse.quote(query))
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=NEWS_FETCH_TIMEOUT) as resp:
         xml_text = resp.read().decode("utf-8", errors="replace")
     return parse_news_feed(xml_text, limit=limit)
+
+
+_QUOTE_PAGE_ARTIFACTS = (
+    "stock price, news, quote & history",  # Yahoo Finance quote pages
+    "stock quote price and forecast",  # CNN quote pages
+    "symbol__",  # unfilled Google News RSS template
+)
+
+
+def _is_quote_page_artifact(title: str) -> bool:
+    """Drop RSS entries that are quote pages, not news headlines."""
+    lowered = title.lower()
+    return any(marker in lowered for marker in _QUOTE_PAGE_ARTIFACTS)
 
 
 class NewsCache:
@@ -151,15 +177,22 @@ class NewsCache:
         self._lock = threading.Lock()
         self._items: dict[str, tuple[float, list[NewsItem]]] = {}
 
-    def get(self, ticker: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
+    def get(self, ticker: str, query: str | None = None, limit: int = NEWS_LIMIT) -> list[NewsItem]:
+        """Return cached headlines for ``ticker``.
+
+        Entries are keyed by the canonical ticker (case-insensitive); ``query``
+        is the search string handed to the fetch callable — the caller's
+        ``_build_query`` output when the company name is known, else the ticker.
+        """
         key = ticker.upper()
+        query = query or f"{key} stock"
         with self._lock:
             hit = self._items.get(key)
             if hit and self._clock() - hit[0] < self.ttl_seconds:
                 return hit[1][:limit]
             stale = hit[1] if hit else []
         try:
-            fresh = self._fetch(key, limit)
+            fresh = self._fetch(query, limit)
         except Exception:
             logger.warning("Google News fetch failed for %s", key, exc_info=True)
             return stale[:limit]
@@ -175,10 +208,17 @@ class NewsCache:
 _news_cache = NewsCache()
 
 
-def get_company_news(ticker: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
-    """Latest headlines for a ticker. Never raises — returns [] on failure."""
+def get_company_news(
+    ticker: str, limit: int = NEWS_LIMIT, company_name: str | None = None
+) -> list[NewsItem]:
+    """Latest headlines for a ticker. Never raises — returns [] on failure.
+
+    ``company_name`` (when known) drives a name-based search query, which
+    fixes junk results for ambiguous tickers (T, F) that a bare "<TICKER>
+    stock" query mis-resolves.
+    """
     try:
-        return _news_cache.get(ticker, limit)
+        return _news_cache.get(ticker, _build_query(ticker, company_name), limit)
     except Exception:
         logger.warning("News lookup failed for %s", ticker, exc_info=True)
         return []

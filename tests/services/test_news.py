@@ -9,6 +9,7 @@ import pytest
 from tickerlens.services.news import (
     NewsCache,
     NewsItem,
+    _build_query,
     get_company_news,
     parse_news_feed,
 )
@@ -70,34 +71,79 @@ def test_news_item_age_label() -> None:
     assert NewsItem(title="t", url="u", source="s").age_label == ""
 
 
-def _fake_fetch(ticker: str, limit: int) -> list[NewsItem]:
+def _fake_fetch(query: str, limit: int) -> list[NewsItem]:
     return [
-        NewsItem(title=f"{ticker} headline {i}", url=f"https://x/{i}", source="Test")
+        NewsItem(title=f"{query} headline {i}", url=f"https://x/{i}", source="Test")
         for i in range(limit)
     ]
+
+
+def test_build_query_prefers_company_name() -> None:
+    # single-letter tickers are ambiguous under a bare ticker query:
+    # "T stock" resolves to Japanese 6098.T and quote-page placeholders
+    assert _build_query("T", "AT&T Inc.") == "AT&T Inc. stock"
+    assert _build_query("F", "Ford Motor Company") == "Ford Motor Company stock"
+    assert _build_query("AAPL", None) == "AAPL stock"
+    assert _build_query("AAPL", "  ") == "AAPL stock"
+
+
+def test_parse_news_feed_drops_quote_page_artifacts() -> None:
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<item>
+  <title>Ford Motor Company (F) Stock Price, News, Quote &amp; History - Yahoo Finance</title>
+  <link>https://news.google.com/rss/articles/a</link>
+</item>
+<item>
+  <title>symbol__ Stock Quote Price and Forecast - CNN</title>
+  <link>https://news.google.com/rss/articles/b</link>
+</item>
+<item>
+  <title>Ford signs battery deal - Reuters</title>
+  <link>https://news.google.com/rss/articles/c</link>
+</item>
+</channel></rss>"""
+    items = parse_news_feed(rss)
+    assert [i.title for i in items] == ["Ford signs battery deal"]
+
+
+def test_news_cache_passes_query_to_fetch() -> None:
+    seen: list[str] = []
+
+    def spy_fetch(query: str, limit: int) -> list[NewsItem]:
+        seen.append(query)
+        return _fake_fetch(query, limit)
+
+    cache = NewsCache(ttl_seconds=60, fetch=spy_fetch)
+    items = cache.get("T", "AT&T Inc. stock")
+    assert seen == ["AT&T Inc. stock"]
+    assert items[0].title.startswith("AT&T Inc. stock")
+    # second call is served from cache — no refetch
+    cache.get("t", "AT&T Inc. stock")
+    assert seen == ["AT&T Inc. stock"]
 
 
 def test_news_cache_serves_from_cache_without_refetch() -> None:
     calls: list[str] = []
 
-    def counting_fetch(ticker: str, limit: int) -> list[NewsItem]:
-        calls.append(ticker)
-        return _fake_fetch(ticker, limit)
+    def counting_fetch(query: str, limit: int) -> list[NewsItem]:
+        calls.append(query)
+        return _fake_fetch(query, limit)
 
     cache = NewsCache(ttl_seconds=60, fetch=counting_fetch)
     first = cache.get("AAPL")
     second = cache.get("aapl")  # case-insensitive key
     assert first == second
-    assert calls == ["AAPL"]  # fetched exactly once
+    assert calls == ["AAPL stock"]  # fetched exactly once, default ticker query
 
 
 def test_news_cache_serves_stale_on_fetch_failure() -> None:
     state = {"fail": False}
 
-    def flaky_fetch(ticker: str, limit: int) -> list[NewsItem]:
+    def flaky_fetch(query: str, limit: int) -> list[NewsItem]:
         if state["fail"]:
             raise RuntimeError("network down")
-        return _fake_fetch(ticker, limit)
+        return _fake_fetch(query, limit)
 
     cache = NewsCache(ttl_seconds=0.01, fetch=flaky_fetch)
     good = cache.get("MSFT")
@@ -115,7 +161,7 @@ def test_get_company_news_never_raises() -> None:
     import tickerlens.services.news as news_mod
 
     class Boom(NewsCache):
-        def get(self, ticker: str, limit: int = 6):  # type: ignore[override]
+        def get(self, ticker: str, query: str | None = None, limit: int = 6):  # type: ignore[override]
             raise RuntimeError("boom")
 
     original = news_mod._news_cache

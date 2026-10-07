@@ -545,8 +545,21 @@ def company_news(request: Request, ticker: str) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="partials/news.html",
-        context={"ticker": ticker, "news": get_company_news(ticker)},
+        context={"ticker": ticker, "news": get_company_news(ticker, company_name=_stored_company_name(ticker))},
     )
+
+
+def _stored_company_name(ticker: str) -> str | None:
+    """Company name for the ticker from the local DB, or None. Never raises."""
+    try:
+        from tickerlens.models.company import Company
+        from tickerlens.models.database import get_session
+
+        with get_session() as db:
+            row = db.query(Company.name).filter(Company.ticker == ticker).first()
+            return row[0] if row else None
+    except Exception:
+        return None
 
 
 @router.get("/api/search")
