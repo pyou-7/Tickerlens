@@ -8,9 +8,14 @@ Primary method ("peg"): PEG-implied P/E for profitable companies.
     fair_pe = PEG_TARGET * eps_growth_pct   (growth clamped, P/E clamped)
     target  = ttm_diluted_eps * fair_pe
 
-Fallback ("sales"): for companies without positive earnings.
-    fair_ps = 0.5 * revenue_growth_pct      (growth clamped, P/S clamped)
-    target  = ttm_revenue * fair_ps / shares_outstanding
+Fallback ("sales"): for companies without usable earnings. The fair P/S is
+margin-anchored via the accounting identity P/S = P/E x net margin, using
+the same PEG-implied fair P/E curve as the primary method and the company's
+own TTM net margin (batch 26). A growth-implied P/S with no profitability
+anchor overvalues structurally low-margin businesses (e.g. Ford at 1.9x
+sales on 3.8% revenue growth while loss-making). When the TTM net margin is
+not positive there is nothing to anchor the multiple to, so the model
+returns Watch/unavailable instead of a fabricated target.
 
 Signal thresholds are on implied upside = (target - price) / price.
 """
@@ -29,7 +34,9 @@ _MAX_GROWTH_PCT = 40.0
 # Sanity clamps so the model never emits a 200x P/E or a distressed 3x.
 _MIN_PE = 8.0
 _MAX_PE = 40.0
-_MIN_PS = 1.0
+# Upper sanity bound on the margin-anchored fair P/S (batch 26). There is no
+# lower bound: the identity P/S = P/E x margin can legitimately be small for
+# thin-margin businesses, and a floor would inflate the target.
 _MAX_PS = 10.0
 
 # Rate-aware guardrail (batch 12): the PEG multiple is blind to the discount
@@ -80,6 +87,27 @@ def _signal_for_upside(upside_pct: float) -> str:
     if upside_pct >= _STRONG_SELL_DOWN:
         return "Sell"
     return "Strong Sell"
+
+
+def _fair_pe_for_growth(
+    growth_pct: float, ten_year_yield_pct: float | None
+) -> tuple[float, str | None]:
+    """PEG-implied fair P/E for a growth rate, with the batch-12 rate guardrail.
+
+    Shared by the primary (earnings) path and the sales fallback so both
+    value the same growth curve (batch 26).
+    """
+    growth = _clamp(growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
+    fair_pe = _clamp(PEG_TARGET * growth, _MIN_PE, _MAX_PE)
+    yld = ten_year_yield_pct
+    if yld is None or yld <= 0:
+        yld = _TEN_YEAR_YIELD_DEFAULT_PCT
+    max_pe_by_yield = 100.0 / (yld * _YIELD_COVERAGE)
+    rate_note: str | None = None
+    if fair_pe > max_pe_by_yield:
+        fair_pe = max_pe_by_yield
+        rate_note = _rate_guardrail_note(yld, max_pe_by_yield)
+    return fair_pe, rate_note
 
 
 # FCF-yield hurdle for the cross-check footnote: roughly the long-run
@@ -197,6 +225,7 @@ def compute_valuation(
     shares_outstanding: float | None,
     ttm_quarters: int = 4,
     growth_is_fallback: bool = False,
+    ttm_net_income: float | None = None,
     ttm_free_cash_flow: float | None = None,
     market_cap: float | None = None,
     ten_year_yield_pct: float | None = None,
@@ -206,10 +235,12 @@ def compute_valuation(
     Pure function — all inputs are plain numbers so the math is unit-testable
     without a database. ``growth_is_fallback`` marks that the growth input
     came from a quarterly YoY / net-income proxy rather than TTM-over-TTM.
-    ``ttm_free_cash_flow`` / ``market_cap`` feed the FCF-yield cross-check
-    footnote only; they never change the signal. ``ten_year_yield_pct`` is
-    the 10-year Treasury yield in percent (batch 12 rate guardrail); ``None``
-    uses the module default benchmark.
+    ``ttm_net_income`` anchors the sales fallback's fair P/S via the
+    identity P/S = P/E x net margin (batch 26); ``ttm_free_cash_flow`` /
+    ``market_cap`` feed the FCF-yield cross-check footnote only; they never
+    change the signal. ``ten_year_yield_pct`` is the 10-year Treasury yield
+    in percent (batch 12 rate guardrail); ``None`` uses the module default
+    benchmark.
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -237,19 +268,8 @@ def compute_valuation(
 
     # ── Primary: PEG-implied P/E ──────────────────────────────────────────
     if ttm_eps_diluted is not None and ttm_eps_diluted > 0 and eps_growth_pct is not None:
-        growth = _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
-        raw_pe = PEG_TARGET * growth
-        fair_pe = _clamp(raw_pe, _MIN_PE, _MAX_PE)
-        # Rate guardrail (batch 12): don't bless a 2.5% earnings yield when
-        # risk-free pays double. Binds only in high-rate regimes.
-        yld = ten_year_yield_pct
-        if yld is None or yld <= 0:
-            yld = _TEN_YEAR_YIELD_DEFAULT_PCT
-        max_pe_by_yield = 100.0 / (yld * _YIELD_COVERAGE)
-        rate_note: str | None = None
-        if fair_pe > max_pe_by_yield:
-            fair_pe = max_pe_by_yield
-            rate_note = _rate_guardrail_note(yld, max_pe_by_yield)
+        raw_pe = PEG_TARGET * _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
+        fair_pe, rate_note = _fair_pe_for_growth(eps_growth_pct, ten_year_yield_pct)
         target = ttm_eps_diluted * fair_pe
         current_pe = current_price / ttm_eps_diluted
         upside = (target - current_price) / current_price * 100.0
@@ -289,6 +309,12 @@ def compute_valuation(
         )
 
     # ── Fallback: sales-based target when earnings are unusable ────────────
+    # Margin-anchored (batch 26): fair P/S = fair P/E x TTM net margin, the
+    # accounting identity, using the same PEG-implied fair P/E curve as the
+    # primary path. Without a positive margin there is no profitability to
+    # anchor the sales multiple to — a target would be a guess, so the model
+    # returns Watch/unavailable instead of one (previously a margin-blind
+    # 0.5 x growth curve valued loss-making Ford at 1.9x sales: +641% upside).
     if (
         ttm_revenue is not None
         and ttm_revenue > 0
@@ -296,29 +322,57 @@ def compute_valuation(
         and shares_outstanding is not None
         and shares_outstanding > 0
     ):
-        growth = _clamp(revenue_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
-        raw_ps = 0.5 * growth
-        fair_ps = _clamp(raw_ps, _MIN_PS, _MAX_PS)
+        ttm_net_margin: float | None = None
+        if ttm_net_income is not None:
+            ttm_net_margin = ttm_net_income / ttm_revenue
+        if ttm_net_margin is None or ttm_net_margin <= 0:
+            return ValuationSignal(
+                ticker=ticker,
+                current_price=current_price,
+                target_price=None,
+                upside_pct=None,
+                signal="Watch",
+                confidence="Low",
+                method="unavailable",
+                fair_multiple=None,
+                current_multiple=None,
+                growth_pct=round(revenue_growth_pct, 1),
+                reasoning=[
+                    "No positive TTM earnings, and no positive TTM net margin "
+                    "to anchor a sales multiple — a target price would be a "
+                    "guess, not a model.",
+                    "Watch the fundamentals until the business earns.",
+                ],
+            )
+        fair_pe_curve, sales_rate_note = _fair_pe_for_growth(
+            revenue_growth_pct, ten_year_yield_pct
+        )
+        raw_ps = fair_pe_curve * ttm_net_margin
+        fair_ps = min(raw_ps, _MAX_PS)
         target = ttm_revenue * fair_ps / shares_outstanding
         current_ps = current_price * shares_outstanding / ttm_revenue
         upside = (target - current_price) / current_price * 100.0
         signal = _signal_for_upside(upside)
         guardrail_note = _guardrail_note(
             revenue_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT,
-            raw_ps, _MIN_PS, _MAX_PS, "P/S",
+            raw_ps, 0.0, _MAX_PS, "P/S",
         )
         sales_confidence = "Medium" if confidence == "High" else confidence
         if guardrail_note is not None:
             sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
+        if sales_rate_note is not None:
+            sales_confidence = "Medium"  # cap: the rate environment, not the data, drives the target
         reasoning = [
             "No positive TTM earnings — valuing on sales instead (less reliable).",
-            f"TTM revenue growing {revenue_growth_pct:.1f}% implies a fair P/S of {fair_ps:.1f}× "
-            f"(current P/S is {current_ps:.1f}×).",
+            f"TTM net margin {ttm_net_margin * 100:.1f}% × fair P/E {fair_pe_curve:.1f}× "
+            f"implies a fair P/S of {fair_ps:.1f}× (current P/S is {current_ps:.1f}×).",
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
             f"({upside:+.1f}% implied upside).",
         ]
         if guardrail_note is not None:
             reasoning.append(guardrail_note)
+        if sales_rate_note is not None:
+            reasoning.append(sales_rate_note)
         return ValuationSignal(
             ticker=ticker,
             current_price=current_price,

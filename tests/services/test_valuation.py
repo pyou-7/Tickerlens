@@ -104,12 +104,58 @@ def test_rate_guardrail_can_temper_signal():
 
 
 def test_sales_fallback_for_negative_earnings():
-    v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0)
+    # Loss-maker with no positive margin to anchor a sales multiple (the Ford
+    # case, batch 26): the old margin-blind 0.5 x growth curve emitted a
+    # +641% Strong Buy. Now the model refuses to fabricate a target.
+    v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0,
+              ttm_net_income=-100_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("anchor a sales multiple" in r for r in v.reasoning)
+
+
+def test_sales_fallback_zero_margin_is_watch():
+    v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0,
+              ttm_net_income=0.0)
+    assert v.signal == "Watch"
+    assert v.target_price is None
+
+
+def test_sales_fallback_margin_anchored():
+    # Negative EPS but a positive TTM net margin: fair P/S = fair P/E x
+    # margin (the accounting identity). 10% margin x 15x fair P/E (10%
+    # growth, PEG 1.5) = 1.5x P/S -> target = 1e9 * 1.5 / 1e7 = 150.
+    v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0,
+              ttm_net_income=100_000_000.0)
     assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(1.5)
+    assert v.target_price == pytest.approx(150.0)
     assert v.signal == "Strong Buy"
-    # fair P/S = 0.5 * 10% rev growth = 5x -> target = 1e9 * 5 / 1e7 = 500
-    assert v.target_price == pytest.approx(500.0)
-    assert any("sales" in r for r in v.reasoning)
+    assert any("10.0% × fair P/E 15.0×" in r for r in v.reasoning)
+
+
+def test_sales_fallback_turnaround_positive_eps_no_growth():
+    # Positive EPS with no computable growth (prior-year EPS was negative):
+    # the sales path still works, anchored on the positive margin.
+    v = _base(ttm_eps_diluted=2.0, eps_growth_pct=None, current_price=50.0,
+              ttm_net_income=100_000_000.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(1.5)
+    assert v.target_price == pytest.approx(150.0)
+
+
+def test_sales_fallback_ps_cap_and_rate_guardrail():
+    # 40% growth -> fair P/E 40x, rate-guarded to ~37.0x at the 4.5%
+    # benchmark; 60% margin -> raw P/S 22.2x, capped at 10x with a note.
+    v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0,
+              revenue_growth_pct=40.0, ttm_net_income=600_000_000.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(10.0)
+    assert v.confidence == "Medium"
+    assert any("fair P/S hit the 10× cap" in p for p in v.reasoning)
+    assert any("10-year Treasury" in p for p in v.reasoning)
 
 
 def test_missing_price_is_watch():

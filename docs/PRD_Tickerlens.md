@@ -243,8 +243,8 @@ The primary way to open a company. Modeled on the **combobox / command-palette p
 
 **Methodology (v1, rules-based, fully explainable):**
 - Primary (profitable companies): PEG-implied P/E. `fair P/E = 1.5 × TTM diluted-EPS growth %`, with growth clamped to [2%, 40%] and P/E clamped to [8×, 40×]. `target = TTM diluted EPS × fair P/E`. Growth is TTM-over-TTM EPS growth; falls back to latest-quarter EPS YoY, then TTM net-income growth.
-- Fallback (no positive earnings): sales-based. `fair P/S = 0.5 × TTM revenue growth %`, clamped to [1×, 10×]. `target = TTM revenue × fair P/S ÷ shares outstanding` (shares derived from market cap ÷ price).
-- No positive earnings *and* no usable revenue → no target; card shows "Watch — insufficient data" with the reason.
+- Fallback (no usable earnings): margin-anchored sales-based (batch 26). `fair P/S = fair P/E × TTM net margin` — the accounting identity P/S = P/E × margin — using the same PEG-implied fair P/E curve as the primary method (growth clamped [2%, 40%], P/E clamped [8×, 40×], rate guardrail, P/S sanity-capped at 10×). `target = TTM revenue × fair P/S ÷ shares outstanding` (shares derived from market cap ÷ price). A growth-implied P/S with no profitability anchor systematically overvalues low-margin businesses, so when TTM net margin is not positive the model emits no target rather than a fabricated one.
+- No positive earnings *and* no positive TTM net margin → no target; card shows "Watch — no profitability to anchor a sales multiple" with the reason.
 
 **Signal scale (on implied upside):**
 | Upside | Signal |
