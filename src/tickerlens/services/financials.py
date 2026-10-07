@@ -1136,6 +1136,15 @@ class FinancialsService:
         return db, list(companies), watched_ciks
 
     @staticmethod
+    def _earnings_sort_key(x: EarningsEvent) -> tuple:
+        """Order: upcoming soonest first, then reported (most recent first), then TBD."""
+        if x.days_until is None:
+            return (2, 0, x.ticker)
+        if x.days_until < 0:
+            return (1, -x.days_until, x.ticker)
+        return (0, x.days_until, x.ticker)
+
+    @staticmethod
     def _build_earnings_events(
         companies: list,
         watched_ciks: set,
@@ -1152,7 +1161,10 @@ class FinancialsService:
             is_watch = c.cik in watched_ciks
             events.append(
                 EarningsEvent(
-                    ticker=ev.ticker,
+                    # Display the DB's canonical ticker (e.g. "BRK.B"), not the
+                    # Yahoo-normalized fetch form ("BRK-B") — the calendar and
+                    # home strip showed BRK-B while every other page used BRK.B.
+                    ticker=c.ticker,
                     company_name=c.name,
                     earnings_date=ev.earnings_date,
                     days_until=ev.days_until,
@@ -1164,7 +1176,7 @@ class FinancialsService:
                 )
             )
 
-        events.sort(key=lambda x: (x.earnings_date is None, x.earnings_date or "", x.ticker))
+        events.sort(key=FinancialsService._earnings_sort_key)
         return events
 
     def get_upcoming_earnings(
@@ -1184,6 +1196,12 @@ class FinancialsService:
         try:
             db, companies, watched_ciks = self._earnings_companies(
                 watchlist_only, db
+            )
+            # Prefetch cold tickers concurrently so a cold calendar cache
+            # doesn't serialize 50+ bounded Yahoo fetches into a minutes-long
+            # render; warm tickers no-op here.
+            default_calendar_cache.prefetch(
+                [c.ticker for c in companies if c.ticker]
             )
             return self._build_earnings_events(
                 companies,

@@ -106,8 +106,19 @@ class CalendarCache:
         self._lock = threading.Lock()
         self._cache: dict[str, tuple[float, EarningsEvent]] = {}
 
+    @staticmethod
+    def _key(ticker: str) -> str:
+        """Cache key: Yahoo's symbol form.
+
+        ``BRK.B`` and ``BRK-B`` are the same security — keyed raw they'd
+        occupy two entries, trigger duplicate Yahoo fetches, and make peeks
+        miss depending on which spelling the caller used (batch-17 fixed the
+        same class of bug in ``QuoteCache``; this closes the calendar one).
+        """
+        return yahoo_symbol(ticker)
+
     def get(self, ticker: str, company_name: str | None = None) -> EarningsEvent:
-        ticker_up = ticker.upper().strip()
+        ticker_up = self._key(ticker)
         now = self._clock()
         with self._lock:
             cached = self._cache.get(ticker_up)
@@ -131,7 +142,7 @@ class CalendarCache:
         the meantime.
         """
         with self._lock:
-            cached = self._cache.get(ticker.upper().strip())
+            cached = self._cache.get(self._key(ticker))
             if cached is None or (self._clock() - cached[0] >= self.ttl_seconds):
                 return None
             return cached[1]
@@ -139,10 +150,32 @@ class CalendarCache:
     def event_fresh(self, ticker: str) -> bool:
         """True when a fresh event exists for ``ticker`` (fetch would be a hit)."""
         with self._lock:
-            cached = self._cache.get(ticker.upper().strip())
+            cached = self._cache.get(self._key(ticker))
             return cached is not None and (
                 self._clock() - cached[0] < self.ttl_seconds
             )
+
+
+    def prefetch(self, tickers: list[str], max_workers: int = 6) -> None:
+        """Fetch cold tickers concurrently, bounded; never raises.
+
+        The blocking ``get_upcoming_earnings`` path fetches serially through
+        ``get`` — with 50+ tracked companies a cold calendar cache turned
+        ``/calendar`` into a multi-minute render. Prefetching first cuts it to
+        roughly one fetch round-trip; each fetch is still bounded by the
+        calendar module's timeout.
+        """
+        cold = [t for t in tickers if not self.event_fresh(t)]
+        if not cold:
+            return
+        try:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(max_workers, len(cold)),
+                thread_name_prefix="calendar-prefetch",
+            ) as pool:
+                list(pool.map(self.get, cold))
+        except Exception:
+            logger.warning("Calendar prefetch failed", exc_info=True)
 
 
 # Global default cache
@@ -183,8 +216,7 @@ def warm_earnings_cache(tickers: list[str]) -> None:
         def _run() -> None:
             global _earn_warming
             try:
-                for t in cold:
-                    default_calendar_cache.get(t)
+                default_calendar_cache.prefetch(cold)
             except Exception:
                 logger.warning(
                     "Background earnings calendar warm failed", exc_info=True

@@ -1985,3 +1985,66 @@ def test_refresh_company_quote_skips_commit_when_unchanged(session: Session, mon
     quote = svc.refresh_company_quote("AAPL", session=session)
     assert quote.last_price == 150.0
     assert commits == []
+
+
+# ── earnings-calendar event build (batch 23) ─────────────────────────────────
+
+from types import SimpleNamespace
+
+from tickerlens.data.calendar import EarningsEvent
+
+
+def _cal_company(ticker: str) -> SimpleNamespace:
+    return SimpleNamespace(ticker=ticker, name=f"{ticker} Inc.", cik=f"CIK-{ticker}")
+
+
+def _cal_fetch_event(ticker: str, name: str | None) -> EarningsEvent:
+    # Mimics Yahoo normalization: the fetch form is hyphenated even when the
+    # DB ticker is dotted.
+    return EarningsEvent(
+        ticker=ticker.replace(".", "-"),
+        company_name=name,
+        earnings_date="2026-11-07",
+        days_until=32,
+        eps_estimate_avg=None,
+        revenue_estimate_avg=None,
+        dividend_date=None,
+        ex_dividend_date=None,
+    )
+
+
+def test_build_earnings_events_uses_db_display_ticker() -> None:
+    events = FinancialsService._build_earnings_events(
+        [_cal_company("BRK.B"), _cal_company("AAPL")], set(), _cal_fetch_event
+    )
+    by = {e.ticker: e for e in events}
+    assert set(by) == {"BRK.B", "AAPL"}
+    assert by["BRK.B"].company_name == "BRK.B Inc."
+    assert by["BRK.B"].is_watchlist is False
+
+
+def test_build_earnings_events_marks_watchlist() -> None:
+    events = FinancialsService._build_earnings_events(
+        [_cal_company("AAPL")], {"CIK-AAPL"}, _cal_fetch_event
+    )
+    assert events[0].is_watchlist is True
+
+
+def test_earnings_sort_key_upcoming_before_reported_before_tbd() -> None:
+    def ev(days: int | None) -> EarningsEvent:
+        return EarningsEvent(
+            ticker="X",
+            company_name=None,
+            earnings_date=None,
+            days_until=days,
+            eps_estimate_avg=None,
+            revenue_estimate_avg=None,
+            dividend_date=None,
+            ex_dividend_date=None,
+        )
+
+    ordered = sorted(
+        [ev(None), ev(-30), ev(10), ev(-1), ev(2)],
+        key=FinancialsService._earnings_sort_key,
+    )
+    assert [e.days_until for e in ordered] == [2, 10, -1, -30, None]

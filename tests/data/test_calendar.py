@@ -153,3 +153,71 @@ def test_warm_earnings_cache_never_raises() -> None:
         cal_mod.warm_earnings_cache(["AAPL"])  # must not raise
     finally:
         cal_mod.threading.Thread = orig
+
+
+def test_cache_normalizes_dotted_and_hyphen_ticker_spellings() -> None:
+    """BRK.B and BRK-B share one cache entry (batch-23; mirrors batch-17 QuoteCache fix)."""
+    mock_fetch = MagicMock()
+    mock_fetch.return_value = EarningsEvent(
+        ticker="BRK-B",
+        company_name="Berkshire Hathaway Inc.",
+        earnings_date="2026-11-07",
+        days_until=32,
+        eps_estimate_avg=None,
+        revenue_estimate_avg=None,
+        dividend_date=None,
+        ex_dividend_date=None,
+    )
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=mock_fetch)
+
+    res1 = cache.get("BRK.B")
+    assert res1.earnings_date == "2026-11-07"
+    assert mock_fetch.call_count == 1
+
+    # The hyphenated spelling is a cache hit, not a second Yahoo fetch.
+    res2 = cache.get("BRK-B")
+    assert res2.earnings_date == "2026-11-07"
+    assert mock_fetch.call_count == 1
+
+    # peek is spelling-insensitive too
+    assert cache.peek("BRK.B") is not None
+    assert cache.peek("BRK-B") is not None
+    assert cache.event_fresh("BRK.B")
+    assert cache.event_fresh("BRK-B")
+
+
+def test_prefetch_fetches_cold_tickers_concurrently() -> None:
+    import time as _time
+
+    def slow_fetch(ticker: str, name: str | None = None) -> EarningsEvent:
+        _time.sleep(0.3)
+        return EarningsEvent(
+            ticker=ticker,
+            company_name=name,
+            earnings_date="2026-11-01",
+            days_until=26,
+            eps_estimate_avg=None,
+            revenue_estimate_avg=None,
+            dividend_date=None,
+            ex_dividend_date=None,
+        )
+
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=slow_fetch)
+    tickers = ["T1", "T2", "T3", "T4"]
+    start = _time.monotonic()
+    cache.prefetch(tickers)
+    elapsed = _time.monotonic() - start
+
+    # Serial would take >= 1.2s; concurrent should be ~one round-trip.
+    assert elapsed < 0.9
+    for t in tickers:
+        assert cache.event_fresh(t)
+
+
+def test_prefetch_never_raises() -> None:
+    def boom(ticker: str, name: str | None = None) -> EarningsEvent:
+        raise RuntimeError("yahoo down")
+
+    cache = CalendarCache(ttl_seconds=300, fetch_fn=boom)
+    cache.prefetch(["T1", "T2"])  # must not raise
+    assert not cache.event_fresh("T1")
