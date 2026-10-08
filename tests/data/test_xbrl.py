@@ -1034,6 +1034,61 @@ def test_balance_sheet_metric_uses_fresh_tag_values() -> None:
     assert values[dt.date(2026, 3, 31)] == 100_000
 
 
+def test_partnership_equity_partners_capital_maps() -> None:
+    # Regression (fresh-ticker hunt round 4): partnership-structure filers
+    # (MLPs such as Energy Transfer, ET) report equity as PartnersCapital,
+    # not StockholdersEquity — without this mapping, total_equity rendered
+    # "—" for every quarter (and the newest quarter also lost
+    # total_liabilities, since the Assets = Liabilities + Equity derivation
+    # needs equity).
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "PartnersCapital": instant_units(
+                    [
+                        ("2026-03-31", 34_462_000_000, 2026, "Q1"),
+                        ("2026-06-30", 35_331_000_000, 2026, "Q2"),
+                    ]
+                ),
+            }
+        }
+    }
+    source_tag, _ = concept_facts(companyfacts, Metric.TOTAL_EQUITY, instant=True)
+    assert source_tag == "PartnersCapital"
+    values = balance_sheet_metric(companyfacts, Metric.TOTAL_EQUITY)
+    assert values[dt.date(2026, 6, 30)] == 35_331_000_000
+    assert values[dt.date(2026, 3, 31)] == 34_462_000_000
+
+
+def test_partnership_equity_tag_switch_gap_fills_newest_quarter() -> None:
+    # ET's real shape: StockholdersEquityIncludingPortionAttributableTo-
+    # NoncontrollingInterest stopped at 2026-03-31 while
+    # PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest
+    # (identical values where they overlap) continues through 2026-06-30.
+    # The chain's gap-fill must supply the newest quarter from the
+    # partnership tag rather than leaving it "—".
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": instant_units(
+                    [
+                        ("2026-03-31", 49_737_000_000, 2026, "Q1"),
+                    ]
+                ),
+                "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest": instant_units(
+                    [
+                        ("2026-03-31", 49_737_000_000, 2026, "Q1"),
+                        ("2026-06-30", 50_522_000_000, 2026, "Q2"),
+                    ]
+                ),
+            }
+        }
+    }
+    values = balance_sheet_metric(companyfacts, Metric.TOTAL_EQUITY)
+    assert values[dt.date(2026, 6, 30)] == 50_522_000_000
+    assert values[dt.date(2026, 3, 31)] == 49_737_000_000
+
+
 def _eps_metric(
     metric, end: str, val: float, fy: int, fp: str, source_tag: str
 ) -> "PeriodMetric":

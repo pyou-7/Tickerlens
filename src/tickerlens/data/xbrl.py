@@ -144,6 +144,14 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
             # the fallback for filers that don't report the total.
             "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
             "StockholdersEquity",
+            # Partnership-structure filers (MLPs such as Energy Transfer)
+            # report equity as PartnersCapital, not StockholdersEquity —
+            # without these, total_equity rendered "—" for every quarter (and
+            # the newest quarter also lost total_liabilities, since the
+            # Assets = Liabilities + Equity derivation needs equity). Same
+            # total-then-parent ordering as the corporate pair.
+            "PartnersCapitalIncludingPortionAttributableToNoncontrollingInterest",
+            "PartnersCapital",
         ),
         unit="USD",
     ),
