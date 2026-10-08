@@ -386,7 +386,13 @@ def compute_valuation(
         if sales_rate_note is not None:
             sales_confidence = "Medium"  # cap: the rate environment, not the data, drives the target
         reasoning = [
-            "No positive TTM earnings — valuing on sales instead (less reliable).",
+            # Batch 33: the sales path is only reachable with a positive TTM
+            # net margin, so TTM earnings ARE positive here — what is missing
+            # is per-share earnings data to anchor a P/E multiple (e.g. ET,
+            # an MLP that files no XBRL EPS facts). The old "No positive TTM
+            # earnings" claim was false for every company on this path.
+            "No per-share earnings to anchor a P/E multiple — valuing on sales "
+            "instead (less reliable).",
             f"TTM net margin {ttm_net_margin * 100:.1f}% × fair P/E {fair_pe_curve:.1f}× "
             f"implies a fair P/S of {fair_ps:.1f}× (current P/S is {current_ps:.1f}×).",
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "

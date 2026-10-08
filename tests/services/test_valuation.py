@@ -146,8 +146,20 @@ def test_sales_fallback_turnaround_positive_eps_no_growth():
     assert v.target_price == pytest.approx(150.0)
 
 
-def test_sales_fallback_ps_cap_and_rate_guardrail():
-    # 40% growth -> fair P/E 40x, rate-guarded to ~37.0x at the 4.5%
+def test_sales_fallback_copy_honest_about_earnings():
+    # Batch 33: the sales path is only reachable with a positive TTM net
+    # margin, so TTM earnings ARE positive — the old "No positive TTM
+    # earnings" bullet was false for every company on this path (e.g. ET, an
+    # MLP with positive net income but no XBRL EPS facts).
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=50.0,
+              ttm_net_income=100_000_000.0)
+    assert v.method == "sales"
+    assert not any("No positive TTM earnings" in r for r in v.reasoning)
+    assert any("No per-share earnings to anchor a P/E multiple" in r
+               for r in v.reasoning)
+
+
+def test_sales_fallback_ps_cap_and_rate_guardrail():    # 40% growth -> fair P/E 40x, rate-guarded to ~37.0x at the 4.5%
     # benchmark; 60% margin -> raw P/S 22.2x, capped at 10x with a note.
     v = _base(ttm_eps_diluted=-1.0, eps_growth_pct=None, current_price=50.0,
               revenue_growth_pct=40.0, ttm_net_income=600_000_000.0)
