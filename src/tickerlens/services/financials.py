@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
+import time
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -61,6 +63,18 @@ def _resolve_cik(edgar_client, ticker: str) -> str:
         return normalize_cik(edgar_client.cik_for_ticker(ticker))
     except KeyError as exc:
         raise CompanyNotFoundError(f"Unknown ticker: {ticker}") from exc
+
+
+# ── filings freshness ─────────────────────────────────────────────────────────
+# Company pages serve cached quarters; without a freshness check a 10-Q filed
+# today would never appear for an already-tracked ticker. The submissions feed
+# is tiny, so we peek at it (at most once per TTL per company) and re-pull
+# XBRL only when a quarterly/annual filing postdates everything processed.
+_FILINGS_CHECK_TTL = 6 * 3600  # seconds between EDGAR filing checks per company
+_QUARTERLY_FILING_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A"})
+# cik -> (checked_at_monotonic, latest_filing_date_processed)
+_filings_check_state: dict[str, tuple[float, str | None]] = {}
+_filings_check_lock = threading.Lock()
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -402,6 +416,73 @@ class FinancialsService:
                 db.close()
 
         return rows
+
+    def refresh_financials_if_stale(self, ticker: str) -> bool:
+        """Re-pull XBRL financials when EDGAR shows a newer 10-Q/10-K.
+
+        Company pages otherwise serve cached quarters forever — ``fetch_and_persist``
+        only runs on first visit. This checks the small submissions feed (at most
+        once per TTL per company) and re-pulls when a quarterly/annual filing
+        postdates everything already processed, so earnings appear in the app
+        after they're filed. Never raises; returns True when a refresh ran.
+        """
+        try:
+            cik = _resolve_cik(self.edgar_client, ticker)
+        except Exception:
+            return False
+        now = time.time()
+        with _filings_check_lock:
+            checked_at, processed = _filings_check_state.get(cik, (0.0, None))
+            if now - checked_at < _FILINGS_CHECK_TTL:
+                return False
+            # Mark checked up-front so a failing EDGAR call doesn't retry
+            # on every page view until the TTL expires.
+            _filings_check_state[cik] = (now, processed)
+        try:
+            submissions = self.edgar_client.submissions(cik)
+            recent = (submissions.get("filings") or {}).get("recent") or {}
+            forms = recent.get("form") or []
+            dates = recent.get("filingDate") or []
+            latest = max(
+                (d for f, d in zip(forms, dates) if f in _QUARTERLY_FILING_FORMS),
+                default=None,
+            )
+            if not latest:
+                return False
+            db = self._session or get_session()
+            try:
+                max_period_end = db.scalar(
+                    select(func.max(QuarterlyFinancial.period_end)).where(
+                        QuarterlyFinancial.cik == cik
+                    )
+                )
+            finally:
+                if self._session is None:
+                    db.close()
+            if max_period_end is None:
+                return False  # first-visit path in the route handles this
+            if latest > max_period_end.isoformat() and (
+                processed is None or latest > processed
+            ):
+                self.fetch_and_persist(ticker, periods=8)
+                db2 = self._session or get_session()
+                try:
+                    # Fill highlights for the new quarter; only touches rows
+                    # missing them, never wipes on transient failure.
+                    self._enrich_press_release_highlights(db2, ticker, cik)
+                    db2.commit()
+                except Exception:
+                    db2.rollback()
+                finally:
+                    if self._session is None:
+                        db2.close()
+                with _filings_check_lock:
+                    _filings_check_state[cik] = (now, latest)
+                return True
+            return False
+        except Exception:
+            logger.warning("filings freshness check failed for %s", ticker, exc_info=True)
+            return False
 
     def enrich_company(self, ticker: str, session: Session | None = None) -> None:
         """Update description, price, and market cap for an existing company."""

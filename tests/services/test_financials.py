@@ -2048,3 +2048,101 @@ def test_earnings_sort_key_upcoming_before_reported_before_tbd() -> None:
         key=FinancialsService._earnings_sort_key,
     )
     assert [e.days_until for e in ordered] == [2, 10, -1, -30, None]
+
+
+# ── refresh_financials_if_stale ───────────────────────────────────────────────
+
+def _submissions_forms(*forms_dates: tuple[str, str]) -> dict:
+    forms = [f for f, _ in forms_dates]
+    dates = [d for _, d in forms_dates]
+    return {"filings": {"recent": {"form": forms, "filingDate": dates}}}
+
+
+@pytest.fixture
+def _fresh_filings_state():
+    """Reset the module-level filings-check cache around each test."""
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+    yield
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+
+
+def test_refresh_runs_when_newer_10q_filed(session: Session, _fresh_filings_state) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2026, 6, 27), fiscal_year=2026,
+                     fiscal_period="Q3", revenue=94_930.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    # 10-Q filed after the newest stored quarter-end -> stale
+    mock_edgar.submissions.return_value = _submissions_forms(("10-Q", "2026-09-25"))
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("AAPL") is True
+    svc.fetch_and_persist.assert_called_once_with("AAPL", periods=8)
+
+
+def test_refresh_skipped_when_filings_not_newer(session: Session, _fresh_filings_state) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2026, 9, 27), fiscal_year=2026,
+                     fiscal_period="Q4", revenue=100_000.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    # Latest 10-Q predates the newest stored quarter-end -> fresh
+    mock_edgar.submissions.return_value = _submissions_forms(("10-Q", "2026-07-30"))
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+
+    assert svc.refresh_financials_if_stale("AAPL") is False
+    svc.fetch_and_persist.assert_not_called()
+
+
+def test_refresh_respects_ttl(session: Session, _fresh_filings_state) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2026, 6, 27), fiscal_year=2026,
+                     fiscal_period="Q3", revenue=94_930.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    # Latest 10-Q predates the stored quarter-end: nothing to do.
+    mock_edgar.submissions.return_value = _submissions_forms(("10-Q", "2026-06-01"))
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+
+    assert svc.refresh_financials_if_stale("AAPL") is False
+    assert svc.refresh_financials_if_stale("AAPL") is False
+    # Second call is served from the TTL cache: submissions fetched once.
+    assert mock_edgar.submissions.call_count == 1
+
+
+def test_refresh_never_raises_on_edgar_failure(session: Session, _fresh_filings_state) -> None:
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2026, 6, 27), fiscal_year=2026,
+                     fiscal_period="Q3", revenue=94_930.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.submissions.side_effect = RuntimeError("EDGAR down")
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+
+    assert svc.refresh_financials_if_stale("AAPL") is False
+
+
+def test_refresh_skips_unknown_ticker(_fresh_filings_state) -> None:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.side_effect = KeyError("ZZZZ")
+    svc = FinancialsService(edgar_client=mock_edgar)
+    assert svc.refresh_financials_if_stale("ZZZZ") is False

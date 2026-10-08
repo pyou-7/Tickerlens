@@ -64,6 +64,9 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
     ticker = ticker.upper()
     # Refresh quote so prices never lag (never raises; no-op when cache fresh).
     _svc.refresh_company_quote(ticker)
+    # Refresh XBRL financials when a newer 10-Q/10-K was filed since our last
+    # pull (never raises; no-op when the filings check TTL hasn't expired).
+    _svc.refresh_financials_if_stale(ticker)
     try:
         overview = _svc.get_overview(ticker)
     except CompanyNotFoundError:
@@ -241,6 +244,9 @@ def company_detail(
     ticker = ticker.upper()
     # Refresh quote so prices never lag (never raises; no-op when cache fresh).
     _svc.refresh_company_quote(ticker)
+    # Refresh XBRL financials when a newer 10-Q/10-K was filed since our last
+    # pull (never raises; no-op when the filings check TTL hasn't expired).
+    _svc.refresh_financials_if_stale(ticker)
     try:
         ctx = _svc.get_detail(
             ticker, granularity=granularity, selected_quarter=quarter, selected_year=year,
@@ -501,6 +507,9 @@ def company_tearsheet(request: Request, ticker: str) -> HTMLResponse:
     ticker = ticker.upper()
     # Refresh quote so prices never lag (never raises; no-op when cache fresh).
     _svc.refresh_company_quote(ticker)
+    # Refresh XBRL financials when a newer 10-Q/10-K was filed since our last
+    # pull (never raises; no-op when the filings check TTL hasn't expired).
+    _svc.refresh_financials_if_stale(ticker)
     try:
         overview = _svc.get_overview(ticker)
         detail = _svc.get_detail(ticker)
