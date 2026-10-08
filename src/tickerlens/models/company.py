@@ -14,6 +14,12 @@ class Company(Base):
     ticker: Mapped[str | None] = mapped_column(String(20), index=True)
     fiscal_year_end: Mapped[str | None] = mapped_column(String(4))  # MMDD
     sic: Mapped[str | None] = mapped_column(String(10))
+    # Latest 10-Q/10-K(/A) filingDate (YYYY-MM-DD) already incorporated into
+    # quarterly_financials. Drives refresh_financials_if_stale: a refresh runs
+    # only when EDGAR shows a filing newer than this marker, so restarts and
+    # repeat visits don't trigger redundant full XBRL re-pulls. NULL for rows
+    # that predate the marker (one heuristic pass, then it is set).
+    xbrl_filings_processed: Mapped[str | None] = mapped_column(String(10))
     description: Mapped[str | None] = mapped_column(String(2000))
     last_price: Mapped[float | None] = mapped_column()
     market_cap: Mapped[float | None] = mapped_column()

@@ -69,12 +69,26 @@ def _resolve_cik(edgar_client, ticker: str) -> str:
 # Company pages serve cached quarters; without a freshness check a 10-Q filed
 # today would never appear for an already-tracked ticker. The submissions feed
 # is tiny, so we peek at it (at most once per TTL per company) and re-pull
-# XBRL only when a quarterly/annual filing postdates everything processed.
+# XBRL only when a quarterly/annual filing postdates the xbrl_filings_processed
+# marker persisted on the company row (batch 31: an in-memory-only marker
+# re-pulled after every restart because filing dates always postdate period
+# ends — the persisted marker survives restarts).
 _FILINGS_CHECK_TTL = 6 * 3600  # seconds between EDGAR filing checks per company
 _QUARTERLY_FILING_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A"})
 # cik -> (checked_at_monotonic, latest_filing_date_processed)
 _filings_check_state: dict[str, tuple[float, str | None]] = {}
 _filings_check_lock = threading.Lock()
+
+
+def _latest_quarterly_filing_date(submissions: dict) -> str | None:
+    """Latest 10-Q/10-K(/A) filingDate in an EDGAR submissions feed, if any."""
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    return max(
+        (d for f, d in zip(forms, dates) if f in _QUARTERLY_FILING_FORMS),
+        default=None,
+    )
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -394,6 +408,7 @@ class FinancialsService:
         cik = _resolve_cik(self.edgar_client, ticker)
         submissions = self.edgar_client.submissions(cik)
         companyfacts = self.edgar_client.companyfacts(cik)
+        latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
             companyfacts,
@@ -404,10 +419,18 @@ class FinancialsService:
 
         db = session or self._session or get_session()
         try:
-            _upsert_company(db, cik, submissions, ticker)
+            _upsert_company(
+                db, cik, submissions, ticker,
+                xbrl_filings_processed=latest_filing,
+            )
             for row in rows:
                 _upsert_financial(db, cik, row)
             db.commit()
+            if latest_filing is not None:
+                # The pull just incorporated this filing: record it so a
+                # same-process freshness check doesn't immediately re-pull.
+                with _filings_check_lock:
+                    _filings_check_state[cik] = (time.time(), latest_filing)
         except Exception:
             db.rollback()
             raise
@@ -423,8 +446,9 @@ class FinancialsService:
         Company pages otherwise serve cached quarters forever — ``fetch_and_persist``
         only runs on first visit. This checks the small submissions feed (at most
         once per TTL per company) and re-pulls when a quarterly/annual filing
-        postdates everything already processed, so earnings appear in the app
-        after they're filed. Never raises; returns True when a refresh ran.
+        postdates the ``xbrl_filings_processed`` marker on the company row, so
+        earnings appear in the app after they're filed. Never raises; returns
+        True when a refresh ran.
         """
         try:
             cik = _resolve_cik(self.edgar_client, ticker)
@@ -440,13 +464,7 @@ class FinancialsService:
             _filings_check_state[cik] = (now, processed)
         try:
             submissions = self.edgar_client.submissions(cik)
-            recent = (submissions.get("filings") or {}).get("recent") or {}
-            forms = recent.get("form") or []
-            dates = recent.get("filingDate") or []
-            latest = max(
-                (d for f, d in zip(forms, dates) if f in _QUARTERLY_FILING_FORMS),
-                default=None,
-            )
+            latest = _latest_quarterly_filing_date(submissions)
             if not latest:
                 return False
             db = self._session or get_session()
@@ -456,14 +474,27 @@ class FinancialsService:
                         QuarterlyFinancial.cik == cik
                     )
                 )
+                processed_db = db.scalar(
+                    select(Company.xbrl_filings_processed).where(
+                        Company.cik == cik
+                    )
+                )
             finally:
                 if self._session is None:
                     db.close()
             if max_period_end is None:
                 return False  # first-visit path in the route handles this
-            if latest > max_period_end.isoformat() and (
-                processed is None or latest > processed
-            ):
+            # The persisted marker is the primary guard: a filing date always
+            # postdates the quarter's period end, so comparing the filing
+            # date against period_end alone would re-pull after every restart.
+            # Rows that predate the marker (NULL) get one heuristic pass
+            # against the newest stored quarter-end, then the marker is set.
+            known = processed_db if processed_db is not None else processed
+            if known is not None:
+                needs_refresh = latest > known
+            else:
+                needs_refresh = latest > max_period_end.isoformat()
+            if needs_refresh:
                 self.fetch_and_persist(ticker, periods=8)
                 db2 = self._session or get_session()
                 try:
@@ -2399,29 +2430,43 @@ def _build_yearly_period(
     )
 
 
-def _upsert_company(session: Session, cik: str, submissions: dict, ticker: str) -> None:
+def _upsert_company(
+    session: Session,
+    cik: str,
+    submissions: dict,
+    ticker: str,
+    xbrl_filings_processed: str | None = None,
+) -> None:
     tickers = submissions.get("tickers") or []
     primary_ticker = ticker.upper() if ticker else (tickers[0] if tickers else None)
 
+    insert_values: dict = {
+        "cik": cik,
+        "name": submissions.get("name", ""),
+        "ticker": primary_ticker,
+        "fiscal_year_end": submissions.get("fiscalYearEnd"),
+        "sic": str(submissions.get("sic", "")) or None,
+        "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
+    }
+    update_set = {
+        "name": submissions.get("name", ""),
+        "ticker": primary_ticker,
+        "fiscal_year_end": submissions.get("fiscalYearEnd"),
+        "sic": str(submissions.get("sic", "")) or None,
+        "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
+    }
+    if xbrl_filings_processed is not None:
+        # Only ever advance the marker — a feed without quarterly forms must
+        # not wipe a previously recorded filing date.
+        insert_values["xbrl_filings_processed"] = xbrl_filings_processed
+        update_set["xbrl_filings_processed"] = xbrl_filings_processed
+
     stmt = (
         insert(Company)
-        .values(
-            cik=cik,
-            name=submissions.get("name", ""),
-            ticker=primary_ticker,
-            fiscal_year_end=submissions.get("fiscalYearEnd"),
-            sic=str(submissions.get("sic", "")) or None,
-            updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
-        )
+        .values(**insert_values)
         .on_conflict_do_update(
             index_elements=["cik"],
-            set_={
-                "name": submissions.get("name", ""),
-                "ticker": primary_ticker,
-                "fiscal_year_end": submissions.get("fiscalYearEnd"),
-                "sic": str(submissions.get("sic", "")) or None,
-                "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
-            },
+            set_=update_set,
         )
     )
     session.execute(stmt)

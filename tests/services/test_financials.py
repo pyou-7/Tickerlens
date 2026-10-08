@@ -2146,3 +2146,102 @@ def test_refresh_skips_unknown_ticker(_fresh_filings_state) -> None:
     mock_edgar.cik_for_ticker.side_effect = KeyError("ZZZZ")
     svc = FinancialsService(edgar_client=mock_edgar)
     assert svc.refresh_financials_if_stale("ZZZZ") is False
+
+
+def test_refresh_skips_pull_when_filing_already_processed(
+    session: Session, _fresh_filings_state
+) -> None:
+    """Regression (batch 31): a filing date always postdates the quarter's
+    period end, so the old ``latest > max_period_end`` check fired a full
+    re-pull after every server restart even when the latest 10-Q was already
+    ingested. The persisted ``xbrl_filings_processed`` marker must suppress it.
+
+    Mirrors the real AAPL shape: 10-Q filed 2026-07-31 for the quarter ended
+    2026-06-27 — filing date > period end, but the quarter is already in the DB.
+    """
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.xbrl_filings_processed = "2026-07-31"
+    session.add(company)
+    session.add(_row(cik=cik, period_end=dt.date(2026, 6, 27), fiscal_year=2026,
+                     fiscal_period="Q3", revenue=94_930.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.submissions.return_value = _submissions_forms(("10-Q", "2026-07-31"))
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+
+    assert svc.refresh_financials_if_stale("AAPL") is False
+    svc.fetch_and_persist.assert_not_called()
+
+
+def test_refresh_runs_when_filing_newer_than_processed_marker(
+    session: Session, _fresh_filings_state
+) -> None:
+    """A genuinely newer 10-Q (past the persisted marker) still triggers."""
+    cik = "0000320193"
+    company = _company(cik=cik)
+    company.xbrl_filings_processed = "2026-05-01"
+    session.add(company)
+    session.add(_row(cik=cik, period_end=dt.date(2026, 3, 28), fiscal_year=2026,
+                     fiscal_period="Q2", revenue=95_000.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.submissions.return_value = _submissions_forms(("10-Q", "2026-07-31"))
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("AAPL") is True
+    svc.fetch_and_persist.assert_called_once_with("AAPL", periods=8)
+
+
+def test_fetch_and_persist_records_processed_filing_date(
+    session: Session, _fresh_filings_state
+) -> None:
+    """fetch_and_persist stores the latest quarterly filing date it
+    incorporated, so a later freshness check doesn't re-pull the same filing."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    mock_edgar.submissions.return_value = {
+        **_SUBMISSIONS,
+        "filings": {"recent": {"form": ["10-Q", "8-K"], "filingDate": ["2025-05-01", "2025-05-02"]}},
+    }
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist("AAPL", periods=4, session=session)
+
+    company = session.get(Company, "0000320193")
+    assert company is not None
+    assert company.xbrl_filings_processed == "2025-05-01"
+
+    # And the in-memory fast path agrees: an immediate freshness check is a no-op.
+    svc.fetch_and_persist = MagicMock()
+    assert svc.refresh_financials_if_stale("AAPL") is False
+    svc.fetch_and_persist.assert_not_called()
+
+
+def test_fetch_and_persist_does_not_wipe_marker_without_quarterly_forms(
+    session: Session,
+) -> None:
+    """A submissions feed with no 10-Q/10-K forms must not clear a marker set
+    by an earlier pull."""
+    company = _company(cik="0000320193")
+    company.xbrl_filings_processed = "2025-05-01"
+    session.add(company)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    mock_edgar.submissions.return_value = _SUBMISSIONS  # no "filings" key
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist("AAPL", periods=4, session=session)
+
+    assert session.get(Company, "0000320193").xbrl_filings_processed == "2025-05-01"
