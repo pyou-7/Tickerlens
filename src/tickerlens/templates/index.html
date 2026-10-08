@@ -178,7 +178,11 @@
         <div class="flex items-center justify-between gap-2">
           <span class="font-mono font-bold text-sm text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">{{ ev.ticker }}</span>
           {% if ev.days_until is not none %}
-            {% if ev.days_until <= 7 %}
+            {% if ev.days_until == 0 %}
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800 animate-pulse">
+                Today!
+              </span>
+            {% elif ev.days_until <= 7 %}
               <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
                 In {{ ev.days_until }}d
               </span>

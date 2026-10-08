@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 from unittest.mock import MagicMock
 
 import pytest
@@ -1017,3 +1018,56 @@ def test_tearsheet_no_divergence_callout_without_note(
     assert resp.status_code == 200
     assert "Valuation × Fundamentals" not in resp.text
     assert "Valuation check:" not in resp.text
+
+
+# ── home earnings strip: same-day pill (batch 34) ─────────────────────────────
+
+def _home_client(
+    monkeypatch: pytest.MonkeyPatch, events: list
+) -> TestClient:
+    """Home page with the earnings events stubbed (everything else empty)."""
+    mock_svc = MagicMock()
+    mock_svc.get_cached_upcoming_earnings.return_value = events
+    mock_svc.get_watchlist.return_value = []
+    mock_svc.get_benchmarks.return_value = []
+    mock_svc.get_popular_stocks.return_value = []
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_home_same_day_earnings_renders_today_not_in_0d(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A same-day earnings event must render "Today!" on the home strip —
+    the /calendar page already did, but the strip rendered "In 0d"."""
+    from tickerlens.data.calendar import EarningsEvent
+
+    today = dt.date.today().isoformat()
+    events = [
+        EarningsEvent(
+            ticker="PEP",
+            company_name="PEPSICO INC",
+            earnings_date=today,
+            days_until=0,
+            eps_estimate_avg=2.30,
+            revenue_estimate_avg=None,
+            dividend_date=None,
+            ex_dividend_date=None,
+        ),
+        EarningsEvent(
+            ticker="DPZ",
+            company_name="DOMINO'S PIZZA INC",
+            earnings_date="2099-01-01",
+            days_until=5,
+            eps_estimate_avg=4.38,
+            revenue_estimate_avg=None,
+            dividend_date=None,
+            ex_dividend_date=None,
+        ),
+    ]
+    client = _home_client(monkeypatch, events)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Today!" in resp.text
+    assert "In 0d" not in resp.text
+    assert "In 5d" in resp.text
