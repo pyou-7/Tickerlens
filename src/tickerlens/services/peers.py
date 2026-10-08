@@ -26,7 +26,12 @@ _CURATED_PEERS: dict[str, list[str]] = {
     "APLD": ["GLXY", "MARA", "RIOT", "CLSK", "NVDA"],
     "GLXY": ["APLD", "COIN", "MARA", "RIOT", "MS"],
     # Auto / Aerospace
-    "TSLA": ["RIVN", "F", "GM", "LCID", "BYD"],
+    # NOTE (batch 28, verified 2026-10-07 vs live SEC company_tickers.json):
+    # "BYD" resolves to BOYD GAMING CORP (casino operator) — the EV maker
+    # trades OTC as BYDDY and is not SEC-listed. NIO was tried as the listed
+    # EV peer but files 20-F in CNY (unsupported filer -> 404), so TSLA
+    # keeps its four US-GAAP peers; the SIC-371 fallback adds nothing new.
+    "TSLA": ["RIVN", "F", "GM", "LCID"],
     "RKLB": ["BA", "LMT", "RTX", "NOC", "SPCE"],
     # Retail / E-commerce
     "AMZN": ["MSFT", "GOOGL", "WMT", "COST", "TGT"],
@@ -47,22 +52,23 @@ _CURATED_PEERS: dict[str, list[str]] = {
     "KO": ["PEP", "MNST", "KDP", "CELH"],
     "NEE": ["DUK", "SO", "AEP", "SRE"],
     "AMT": ["CCI", "SBAC", "PLD", "EQIX"],
-    "DUOL": ["CHGG", "COUR", "EDTK", "RBLX"],
-    "UBER": ["LYFT", "DASH", "ABNB", "GRUB"],
-    "RBLX": ["U", "EA", "TTWO", "SONY"],
-    "SOFI": ["UPST", "AFRM", "LC", "HOOD"],
+    "DUOL": ["CHGG", "COUR", "LOPE", "RBLX"],  # batch 28: EDTK was Skillful Craftsman (Chinese micro-cap), not an edtech peer
+    "UBER": ["LYFT", "DASH", "ABNB", "CART"],  # batch 28: GRUB delisted (Wonder acquisition)
+    "RBLX": ["U", "APP", "TTWO", "SONY"],  # batch 28: EA delisted (take-private)
+    "SOFI": ["UPST", "AFRM", "COF", "HOOD"],  # batch 28: LC unresolvable; NU tried but files 20-F (unsupported)
     # Energy / Industrials / Defense / Insurance / Telecom
     "XOM": ["CVX", "COP", "EOG", "SLB", "SHEL"],
     "CAT": ["DE", "AGCO", "TEX", "PCAR", "CMI"],
     "LMT": ["RTX", "NOC", "GD", "BA", "HII"],
     "BRK.B": ["AIG", "MET", "CB", "TRV", "PGR"],
     "T": ["VZ", "TMUS", "CMCSA", "CHTR", "LUMN"],
-    # Media / Retail / Consumer staples
-    "DIS": ["NFLX", "WBD", "PARA", "CMCSA", "FOX"],
-    "NFLX": ["DIS", "WBD", "PARA", "ROKU", "AMZN"],
+    # Media / Retail / Consumer staples — batch 28: PARA ticker reassigned to
+    # Banzai International after the Paramount Skydance merger; PSKY is the media co.
+    "DIS": ["NFLX", "WBD", "PSKY", "CMCSA", "FOX"],
+    "NFLX": ["DIS", "WBD", "PSKY", "ROKU", "AMZN"],
     "HD": ["LOW", "WMT", "COST", "TGT", "BBY"],
     "PG": ["CL", "KMB", "UL", "EL", "CHD"],
-    "NKE": ["DECK", "CROX", "SKX", "LULU", "WWW"],
+    "NKE": ["DECK", "CROX", "SHOO", "LULU", "WWW"],  # batch 28: SKX delisted; BIRK tried but files 20-F (unsupported)
     "DPZ": ["PZZA", "QSR", "YUM", "MCD", "WEN"],
     "PLUG": ["ENPH", "FSLR", "BE", "FCEL", "BLDP"],
 }
@@ -76,10 +82,17 @@ _SIC_PREFIX_PEERS: dict[str, list[str]] = {
     "357": ["AAPL", "HPQ", "DELL", "HPE"],  # Computer hardware
     "36": ["APH", "TEL", "JBL", "FLEX", "TDY"],  # Electronics (non-semis)
     "738": ["V", "MA", "PYPL", "FIS", "GPN"],  # Business/payment services
-    "73": ["V", "PYPL", "UBER", "SHOP", "SQ"],  # Services (general)
+    "73": ["V", "PYPL", "UBER", "SHOP", "XYZ"],  # Services (general)
     # Financials / Insurance
     "60": ["JPM", "BAC", "WFC", "C"],  # Commercial banking
-    "61": ["SOFI", "SYF", "COF", "AXP", "DFS"],  # Credit institutions
+    # Batch 28 (verified 2026-10-07 vs live SEC company_tickers.json):
+    #  - 61: DFS delisted (Capital One acquisition) -> ALLY
+    #  - 73: SQ -> XYZ (Block ticker change)
+    #  - 56: GPS not in SEC file (Gap is listed as GAP) -> GAP
+    #  - 30: SKX delisted -> WWW
+    #  - 781/784/799: PARA reassigned to Banzai (Paramount is now PSKY),
+    #    EA delisted -> PSKY, ROKU
+    "61": ["SOFI", "SYF", "COF", "AXP", "ALLY"],  # Credit institutions
     "62": ["GS", "MS", "GLXY", "COIN"],  # Security brokers
     "63": ["BRK.B", "AIG", "MET", "CB", "TRV"],  # Insurance carriers
     # Energy
@@ -99,17 +112,17 @@ _SIC_PREFIX_PEERS: dict[str, list[str]] = {
     # Consumer / Retail
     "208": ["KO", "PEP", "MNST", "KDP", "STZ"],  # Beverages
     "20": ["KO", "PEP", "HSY", "GIS", "KHC"],  # Food (general)
-    "30": ["NKE", "DECK", "CROX", "SKX", "SHOO"],  # Rubber & plastics (footwear)
+    "30": ["NKE", "DECK", "CROX", "WWW", "SHOO"],  # Rubber & plastics (footwear)
     "52": ["HD", "LOW", "BLDR", "TT", "WSM"],  # Building materials retail
     "53": ["WMT", "COST", "TGT", "DG", "DLTR"],  # General merchandise
-    "56": ["TJX", "ROST", "BURL", "GPS", "ANF"],  # Apparel retail
+    "56": ["TJX", "ROST", "BURL", "GAP", "ANF"],  # Apparel retail
     "59": ["AMZN", "BBY", "DKS", "TSCO", "ULTA"],  # Misc retail
     "596": ["AMZN", "EBAY", "ETSY"],  # Electronic shopping
     # Telecom / Media / Transport / Wholesale
     "48": ["T", "VZ", "TMUS", "CMCSA", "CHTR"],  # Telecom
-    "781": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Motion pictures
-    "784": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Video rental/entertainment
-    "799": ["DIS", "NFLX", "WBD", "PARA", "EA"],  # Amusement & recreation
+    "781": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Motion pictures
+    "784": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Video rental/entertainment
+    "799": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Amusement & recreation
     "45": ["DAL", "UAL", "AAL", "LUV", "ALK"],  # Air transportation
     "47": ["FDX", "UPS", "XPO", "JBHT", "CHRW"],  # Transport services
     "50": ["GWW", "FAST", "WSO", "MSM", "POOL"],  # Durable wholesale

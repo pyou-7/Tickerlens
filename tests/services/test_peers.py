@@ -115,3 +115,66 @@ def test_sic_prefix_limit_and_dedupe() -> None:
     peers = get_peers_for_company("OIL1", sic="1311", limit=3)
     assert len(peers) == 3
     assert len({p.ticker for p in peers}) == 3
+
+
+# --- Batch 28: peer-map validity audit (verified 2026-10-07 vs live SEC
+# company_tickers.json). Dead tickers 404 on click; reassigned tickers
+# silently compare against the wrong company. ---
+
+# Tickers removed in batch 28 and why:
+#   DFS  delisted (Capital One acquisition)
+#   EA   delisted (take-private)
+#   GPS  not in SEC file (Gap is listed as GAP)
+#   GRUB delisted (Wonder acquisition)
+#   LC   not resolvable in SEC company_tickers.json
+#   SKX  delisted (3G Capital take-private)
+#   SQ   Block changed ticker to XYZ
+#   BYD  resolves to BOYD GAMING CORP (casino), not the EV maker
+#   PARA ticker reassigned to Banzai International (Paramount is now PSKY)
+#   EDTK Skillful Craftsman Education Technology Ltd (Chinese micro-cap)
+_KNOWN_BAD_PEERS = {"DFS", "EA", "GPS", "GRUB", "LC", "SKX", "SQ", "BYD", "PARA", "EDTK"}
+
+
+def test_peer_maps_contain_no_known_bad_tickers() -> None:
+    from tickerlens.services.peers import _CURATED_PEERS, _SIC_PREFIX_PEERS
+
+    for key, peers in _CURATED_PEERS.items():
+        bad = set(peers) & _KNOWN_BAD_PEERS
+        assert not bad, f"curated {key}: {bad}"
+    for prefix, peers in _SIC_PREFIX_PEERS.items():
+        bad = set(peers) & _KNOWN_BAD_PEERS
+        assert not bad, f"SIC prefix {prefix}: {bad}"
+
+
+def test_peer_replacements_curated() -> None:
+    cases = {
+        # ticker: (must be present, must be absent)
+        "TSLA": ("RIVN", "BYD"),   # BYD was Boyd Gaming, not the EV maker (NIO is 20-F/CNY: unsupported)
+        "DUOL": ("LOPE", "EDTK"),  # EDTK was a Chinese micro-cap
+        "UBER": ("CART", "GRUB"),  # GRUB delisted
+        "SOFI": ("COF", "LC"),     # LC unresolvable
+        "RBLX": ("APP", "EA"),     # EA delisted
+        "NKE": ("SHOO", "SKX"),    # SKX delisted
+        "DIS": ("PSKY", "PARA"),   # PARA reassigned to Banzai
+        "NFLX": ("PSKY", "PARA"),
+    }
+    for ticker, (good, bad) in cases.items():
+        got = [p.ticker for p in get_peers_for_company(ticker)]
+        assert good in got, f"{ticker}: {good} missing from {got}"
+        assert bad not in got, f"{ticker}: {bad} still present in {got}"
+
+
+def test_peer_replacements_sic_fallback() -> None:
+    cases = {
+        # sic: (must be present, must be absent)
+        "6111": ("ALLY", "DFS"),   # DFS delisted
+        "7311": ("XYZ", "SQ"),     # Block ticker change
+        "5611": ("GAP", "GPS"),    # Gap is GAP in the SEC file
+        "3011": ("WWW", "SKX"),    # SKX delisted
+        "7812": ("PSKY", "PARA"),  # PARA reassigned
+        "7812b": ("ROKU", "EA"),   # EA delisted (same prefix, second check)
+    }
+    for sic, (good, bad) in cases.items():
+        got = [p.ticker for p in get_peers_for_company("ZZZ9", sic=sic.rstrip("b"))]
+        assert good in got, f"sic {sic}: {good} missing from {got}"
+        assert bad not in got, f"sic {sic}: {bad} still present in {got}"
