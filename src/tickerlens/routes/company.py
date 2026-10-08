@@ -332,6 +332,13 @@ def company_vs(request: Request, ticker: str, other: str) -> HTMLResponse:
                 ) from exc
     _svc.refresh_company_quote(ticker)
     _svc.refresh_company_quote(other)
+    # Refresh XBRL financials when a newer 10-Q/10-K was filed since our last
+    # pull (never raises; no-op when the filings check TTL hasn't expired).
+    # The vs page otherwise serves cached quarters forever — stale rows (e.g.
+    # pre-batch-8 finance-SIC FCF) would linger here after overview/detail/
+    # tearsheet had already self-healed via the same call.
+    _svc.refresh_financials_if_stale(ticker)
+    _svc.refresh_financials_if_stale(other)
     try:
         vs = _svc.get_company_vs(ticker, other)
     except CompanyNotFoundError as exc:

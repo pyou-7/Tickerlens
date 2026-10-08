@@ -714,6 +714,27 @@ def test_company_vs_404_when_peer_unloadable(client: TestClient, monkeypatch) ->
     assert resp.status_code == 404
 
 
+def test_company_vs_refreshes_filings_for_both_tickers(
+    client: TestClient, monkeypatch
+) -> None:
+    # Regression (batch 32): the vs route never called
+    # refresh_financials_if_stale, so it served cached quarters forever —
+    # stale rows (e.g. pre-batch-8 finance-SIC FCF) lingered on the vs page
+    # after overview/detail/tearsheet had already self-healed.
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = _vs_ctx()
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    refreshed = [
+        c.args[0] for c in mock_svc.refresh_financials_if_stale.call_args_list
+    ]
+    assert refreshed == ["AAPL", "MSFT"]
+
+
 def test_earnings_calendar_route(client: TestClient, monkeypatch) -> None:
     from tickerlens import routes
     from tickerlens.data.calendar import EarningsEvent
