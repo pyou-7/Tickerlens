@@ -642,3 +642,13 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 **Why:** The auto-refresh runs on every company page view; a trigger that re-pulls after every restart is a silent latency/cost defect on the hottest path, and the vacuous comparison meant the "staleness" logic could never actually distinguish fresh from stale across restarts. Persisting the marker makes the check correct by construction; keeping the in-memory TTL state unchanged preserves the 6h EDGAR politeness bound.
 **Tests:** 4 new tests in `tests/services/test_financials.py`: redundant-pull regression (real AAPL shape — 10-Q filed 2026-07-31, period ended 2026-06-27, marker set → no pull), genuine-new-filing trigger (marker older → refresh runs), `fetch_and_persist` records the marker, and a form-less submissions feed doesn't wipe it. Suite at 395 green. Live-verified on :8123 as documented in the PROJECT_STATUS row.
 **Follow-ups (not this batch):** PEG-path sector calibration remains heuristic territory; the live-10Y-yield wiring offer still awaits the user's word.
+
+---
+
+## 2026-10-08 — vs route now triggers filings auto-refresh (batch 32)
+
+**What:** `GET /company/{ticker}/vs/{other}` now calls `refresh_financials_if_stale()` for both tickers before building the comparison — the same never-raises, 6h-TTL-guarded call the overview/detail/tearsheet routes already make.
+**Why:** Auditing the vs page against live data surfaced stale pre-batch-8 rows: GS (SIC 6211) rendered Free Cash Flow $5.60B and UNH (SIC 6324) $10.25B on the vs page while every other surface rendered "—" — the batch-8 finance-SIC FCF suppression only applies at seed time, and these rows were seeded before it. Both self-healed the moment their overview pages were viewed during the audit (batch-31's one-time legacy re-pull NULLed the FCF and set the markers), but the vs route had no such path and would have served stale rows indefinitely.
+**Alternatives considered:** A startup backfill NULLing finance-SIC FCF was considered but rejected — the batch-31 auto-refresh already self-heals stale rows on view; the gap was only that the vs route never triggered it. No data migration needed.
+**Tests:** 1 new route test (`test_company_vs_refreshes_filings_for_both_tickers`) asserting the vs endpoint refreshes both tickers' filings. Suite at 396 green. Live on :8123: `/company/{AAPL/vs/MSFT,JPM/vs/GS,UNH/vs/MET}` 200 with "—" FCF for all finance sides, `/company/{AAPL,GS/detail}` 200, zero server errors.
+**Follow-ups (not this batch):** None — vs-mode audit found no other defects (404s, fiscal-calendar note, same-ticker 50/50 bars, swap toolbar all verified).
