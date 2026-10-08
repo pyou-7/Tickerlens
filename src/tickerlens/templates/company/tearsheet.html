@@ -111,6 +111,19 @@
       </div>
     </div>
 
+    <!-- 2b. Valuation × fundamentals reconciliation (batch 30). The batch-25
+         "Valuation check" divergence thesis is appended after the sliced
+         theses below, so without this callout a printed tearsheet would show
+         e.g. Watch 66/100 next to Strong Sell −97.7% with no explanation. -->
+    {% if ai_analysis %}
+      {% for t in ai_analysis.theses if t.startswith("Valuation check:") %}
+      <div class="p-4 rounded-xl border border-amber-300 bg-amber-50 page-break-inside-avoid">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1">Valuation × Fundamentals</div>
+        <p class="text-xs leading-relaxed text-slate-800">{{ t }}</p>
+      </div>
+      {% endfor %}
+    {% endif %}
+
     <!-- 3. Latest Reported Quarter Key Financial Performance -->
     <div class="page-break-inside-avoid space-y-3">
       <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700 border-b border-slate-200 pb-1">
@@ -251,7 +264,7 @@
         <div>
           <div class="text-[10px] font-bold uppercase text-slate-600 mb-1">Key Theses (GAAP Filings)</div>
           <ul class="text-[11px] text-slate-700 space-y-1">
-            {% for t in ai_analysis.theses[:3] %}
+            {% for t in ai_analysis.theses[:3] if not t.startswith("Valuation check:") %}
             <li class="flex items-start gap-1.5"><span class="font-bold">•</span><span>{{ t }}</span></li>
             {% endfor %}
           </ul>

@@ -911,3 +911,88 @@ def test_overview_computes_overview_once_after_refresh(client: TestClient, monke
     assert resp.status_code == 200
     mock_svc.refresh_company_quote.assert_called_once_with("APLD")
     assert mock_svc.get_overview.call_count == 1
+
+
+# ── Tearsheet divergence callout (batch 30) ──────────────────────────────
+
+def _tearsheet_client(monkeypatch: pytest.MonkeyPatch, theses: list) -> TestClient:
+    """Tearsheet route with a stubbed service; theses control the AI briefing."""
+    from types import SimpleNamespace
+
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_overview.return_value = SimpleNamespace(
+        ticker="TSLA",
+        name="Tesla, Inc.",
+        cik="1318605",
+        sector="Auto Manufacturers",
+        last_price=377.81,
+        market_cap=1.49e12,
+        latest_label="Q2 FY2026",
+        latest_period_end="2026-06-30",
+        latest_kpi=SimpleNamespace(
+            revenue=28.24e9, net_income=1.2e9, eps_diluted=0.35, free_cash_flow=0.5e9
+        ),
+        yoy=SimpleNamespace(revenue=25.5, net_income=10.0, eps_diluted=5.0, free_cash_flow=-2.0),
+    )
+    mock_svc.get_detail.return_value = SimpleNamespace(
+        management_guidance=None,
+        management_guidance_source=None,
+        risk_factors="supply-chain risk",
+        risk_factors_source="10-K",
+    )
+    mock_svc.get_valuation.return_value = SimpleNamespace(
+        signal="Strong Sell", target_price=8.97, upside_pct=-97.7
+    )
+    mock_svc.get_stored_quarters.return_value = []
+    mock_svc.get_ai_analysis.return_value = SimpleNamespace(
+        signal="Watch",
+        confidence="Medium",
+        cap_tier="Mega-Cap",
+        composite_score=66,
+        executive_summary="Tesla scores 66/100.",
+        theses=theses,
+        risks=["competition risk"],
+    )
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+_DIVERGENCE_NOTE = (
+    "Valuation check: the model rates TSLA a Strong Sell "
+    "(-97.7% implied downside to the $8.97 target) — the 'Watch' rating "
+    "above rests on fundamentals, not on price."
+)
+
+_DIVERGENCE_THESES = [
+    "Top-line revenue grew +25.5% YoY in Q2 FY2026.",
+    "Trailing net margin of 4.2% demonstrates operational leverage.",
+    "Generated $0.50B in trailing Free Cash Flow.",
+    "Model price target of $8.97 implies -97.7% upside.",
+    _DIVERGENCE_NOTE,
+    "Positioned in the Mega-Cap bracket.",
+]
+
+
+def test_tearsheet_renders_divergence_callout_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch-25 divergence thesis (appended after the sliced theses[:3])
+    must surface as a single callout on the printed tearsheet — never dropped,
+    never duplicated in the Key Theses list."""
+    client = _tearsheet_client(monkeypatch, _DIVERGENCE_THESES)
+    resp = client.get("/company/TSLA/tearsheet")
+    assert resp.status_code == 200
+    assert "Valuation × Fundamentals" in resp.text
+    assert resp.text.count("Valuation check:") == 1
+
+
+def test_tearsheet_no_divergence_callout_without_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _tearsheet_client(monkeypatch, _DIVERGENCE_THESES[:4])
+    resp = client.get("/company/TSLA/tearsheet")
+    assert resp.status_code == 200
+    assert "Valuation × Fundamentals" not in resp.text
+    assert "Valuation check:" not in resp.text
