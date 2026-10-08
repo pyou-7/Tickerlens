@@ -488,6 +488,40 @@ def test_concept_facts_prefers_chain_order_when_fresh():
     assert tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
 
 
+def test_concept_facts_prefers_total_revenues_over_narrower_tag():
+    """Mirror the Applied Digital (APLD) case: its Q1 FY2027 10-Q (filed
+    2026-10-07) reports $341.9M under ``Revenues`` — matching the earnings
+    release — but only $262.8M under the ASC-606-only
+    ``RevenueFromContractWithCustomerExcludingAssessedTax`` tag (the $79M gap
+    is non-contract revenue such as leases). The total top-line tag must win
+    when both are fresh."""
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2026-06-01", "2026-08-31", 341_875_000.0, 2027, "Q1",
+                                 filed="2026-10-07")
+                        ]
+                    }
+                },
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {
+                        "USD": [
+                            fact("2026-06-01", "2026-08-31", 262_755_000.0, 2027, "Q1",
+                                 filed="2026-10-07")
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, facts = concept_facts(cf, Metric.REVENUE, staleness_window=(70, 100))
+    assert tag == "Revenues"
+    assert facts[0].val == 341_875_000.0
+
+
 def test_concept_facts_falls_back_to_first_tag_when_all_stale():
     cf = {
         "facts": {

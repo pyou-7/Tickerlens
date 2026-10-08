@@ -77,11 +77,18 @@ class QuarterlyFinancials(BaseModel):
 
 
 CONCEPTS: dict[Metric, ConceptSpec] = {
+    # Revenue: prefer the total top-line ``Revenues`` tag when the filer
+    # provides it. The ``...ExcludingAssessedTax`` variant is ASC-606-only
+    # revenue and silently drops non-contract revenue such as leases —
+    # Applied Digital's Q1 FY2027 10-Q filed 2026-10-07 reports $341.9M under
+    # ``Revenues`` (matching its earnings release) but only $262.8M under
+    # the narrower tag, which the old order picked. Staleness skipping still
+    # protects filers whose ``Revenues`` tag is abandoned.
     Metric.REVENUE: ConceptSpec(
         tags=(
+            "Revenues",
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "RevenueFromContractWithCustomerIncludingAssessedTax",
-            "Revenues",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
         ),
