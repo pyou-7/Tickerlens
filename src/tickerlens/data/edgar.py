@@ -23,6 +23,7 @@ class EdgarClient:
         cache_dir: Path | str | None = None,
         min_request_interval_seconds: float = 0.1,
         http_client: httpx.Client | None = None,
+        cache_ttl_seconds: float = 6 * 3600,
     ) -> None:
         settings = get_settings()
         self.user_agent = user_agent or settings.edgar_user_agent
@@ -34,10 +35,27 @@ class EdgarClient:
         self.min_request_interval_seconds = min_request_interval_seconds
         self._last_request_at = 0.0
         self._http_client = http_client
+        # Disk cache TTL. A write-once cache used to freeze companyfacts and
+        # submissions snapshots forever, which silently disabled the
+        # auto-refresh: the freshness trigger went blind to new filings and a
+        # triggered pull re-extracted the same stale snapshot. The default
+        # matches the financials-service filings-check TTL so each check
+        # performs at most one live fetch per endpoint per company.
+        self.cache_ttl_seconds = cache_ttl_seconds
 
-    def fetch_json(self, url: str) -> dict[str, Any]:
+    def _cache_is_fresh(
+        self, cache_file: Path, max_age_seconds: float | None
+    ) -> bool:
+        if not cache_file.exists():
+            return False
+        ttl = self.cache_ttl_seconds if max_age_seconds is None else max_age_seconds
+        return (time.time() - cache_file.stat().st_mtime) < ttl
+
+    def fetch_json(
+        self, url: str, max_age_seconds: float | None = None
+    ) -> dict[str, Any]:
         cache_file = self._cache_file(url)
-        if cache_file.exists():
+        if self._cache_is_fresh(cache_file, max_age_seconds):
             return json.loads(cache_file.read_text())
 
         self._throttle()
@@ -49,10 +67,12 @@ class EdgarClient:
         cache_file.write_text(json.dumps(data))
         return data
 
-    def fetch_text(self, url: str) -> str:
+    def fetch_text(
+        self, url: str, max_age_seconds: float | None = None
+    ) -> str:
         """Fetch a non-JSON URL (e.g. filing index HTML) with caching."""
         cache_file = self._cache_file(url).with_suffix(".html")
-        if cache_file.exists():
+        if self._cache_is_fresh(cache_file, max_age_seconds):
             return cache_file.read_text()
 
         self._throttle()
@@ -88,11 +108,17 @@ class EdgarClient:
                     return normalize_cik(item["cik_str"])
         raise KeyError(f"Ticker not found in SEC company_tickers.json: {ticker}")
 
-    def submissions(self, cik: str | int) -> dict[str, Any]:
-        return self.fetch_json(SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)))
+    def submissions(self, cik: str | int, *, fresh: bool = False) -> dict[str, Any]:
+        return self.fetch_json(
+            SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)),
+            max_age_seconds=0 if fresh else None,
+        )
 
-    def companyfacts(self, cik: str | int) -> dict[str, Any]:
-        return self.fetch_json(SEC_COMPANYFACTS_URL.format(cik=normalize_cik(cik)))
+    def companyfacts(self, cik: str | int, *, fresh: bool = False) -> dict[str, Any]:
+        return self.fetch_json(
+            SEC_COMPANYFACTS_URL.format(cik=normalize_cik(cik)),
+            max_age_seconds=0 if fresh else None,
+        )
 
     def _cache_file(self, url: str) -> Path:
         key = hashlib.sha256(url.encode()).hexdigest()[:16]

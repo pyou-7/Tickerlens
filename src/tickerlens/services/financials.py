@@ -91,6 +91,37 @@ def _latest_quarterly_filing_date(submissions: dict) -> str | None:
     )
 
 
+def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
+    """Latest quarterly filing date whose covered quarter is in ``rows``.
+
+    The submissions feed's ``reportDate`` tells which quarter a 10-Q/10-K
+    covers. A filing only counts as processed when its quarter made it into
+    the extracted rows: SEC's companyfacts API can lag a filing by weeks
+    (the filing exists, its XBRL facts aren't ingested yet), and advancing
+    the marker to such a filing would permanently suppress the refresh that
+    would otherwise pick the quarter up once ingested. Filings without a
+    reportDate keep the old behavior (counted as processed) since the live
+    feed always provides one.
+    """
+    if not rows:
+        return None
+    max_end = max(r.end.isoformat() for r in rows)
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    reports = recent.get("reportDate") or []
+    marker: str | None = None
+    for i, (form, filing_date) in enumerate(zip(forms, dates)):
+        if form not in _QUARTERLY_FILING_FORMS:
+            continue
+        report_date = reports[i] if i < len(reports) else None
+        if report_date is not None and report_date > max_end:
+            continue  # quarter not extracted yet — don't claim it processed
+        if marker is None or filing_date > marker:
+            marker = filing_date
+    return marker
+
+
 # ── public output models ───────────────────────────────────────────────────────
 
 class KPISnapshot(BaseModel):
@@ -406,8 +437,11 @@ class FinancialsService:
     ) -> list[QuarterlyFinancials]:
         """Fetch XBRL financials from EDGAR and upsert into SQLite."""
         cik = _resolve_cik(self.edgar_client, ticker)
-        submissions = self.edgar_client.submissions(cik)
-        companyfacts = self.edgar_client.companyfacts(cik)
+        # Deliberate pull: always read live EDGAR, never a cached snapshot.
+        # The disk cache has a TTL, but the pull only happens when the
+        # freshness check suspects new data, so it must see the current feed.
+        submissions = self.edgar_client.submissions(cik, fresh=True)
+        companyfacts = self.edgar_client.companyfacts(cik, fresh=True)
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
@@ -416,21 +450,26 @@ class FinancialsService:
             periods=periods,
             sic=submissions.get("sic"),
         )
+        # The marker must reflect filings actually incorporated, not merely
+        # seen: companyfacts can lag a filing, and marking an un-ingested
+        # filing processed would suppress the refresh that picks its quarter
+        # up once the facts appear.
+        processed_filing = _processed_filing_marker(submissions, rows)
 
         db = session or self._session or get_session()
         try:
             _upsert_company(
                 db, cik, submissions, ticker,
-                xbrl_filings_processed=latest_filing,
+                xbrl_filings_processed=processed_filing,
             )
             for row in rows:
                 _upsert_financial(db, cik, row)
             db.commit()
-            if latest_filing is not None:
+            if processed_filing is not None:
                 # The pull just incorporated this filing: record it so a
                 # same-process freshness check doesn't immediately re-pull.
                 with _filings_check_lock:
-                    _filings_check_state[cik] = (time.time(), latest_filing)
+                    _filings_check_state[cik] = (time.time(), processed_filing)
         except Exception:
             db.rollback()
             raise

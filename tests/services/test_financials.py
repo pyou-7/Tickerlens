@@ -2245,3 +2245,85 @@ def test_fetch_and_persist_does_not_wipe_marker_without_quarterly_forms(
     svc.fetch_and_persist("AAPL", periods=4, session=session)
 
     assert session.get(Company, "0000320193").xbrl_filings_processed == "2025-05-01"
+
+
+def test_fetch_and_persist_marks_only_processed_filings(
+    session: Session, _fresh_filings_state
+) -> None:
+    """Regression (batch 37): the ``xbrl_filings_processed`` marker must not
+    advance to a filing whose quarter isn't in the extracted rows. Mirrors
+    DUK: the 10-Q covering Q2 was filed, but companyfacts had no facts for
+    it, so the marker stays at the older processed 10-Q and the freshness
+    check keeps retrying instead of skipping the quarter forever."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0001326160"
+    mock_edgar.submissions.return_value = {
+        **_SUBMISSIONS,
+        "filings": {"recent": {
+            "form": ["10-Q", "10-Q"],
+            "filingDate": ["2025-08-04", "2025-05-01"],
+            "reportDate": ["2025-06-30", "2025-03-31"],
+        }},
+    }
+    # _MINIMAL_COMPANYFACTS only has facts through 2025-03-31: the Q2
+    # 10-Q's quarter is missing from the extracted rows.
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist("DUK", periods=4, session=session)
+
+    company = session.get(Company, "0001326160")
+    assert company is not None
+    assert company.xbrl_filings_processed == "2025-05-01"
+
+
+def test_refresh_refires_after_pull_with_unprocessed_filing(
+    session: Session, _fresh_filings_state
+) -> None:
+    """End-to-end of the batch-37 loop: a pull that ingests nothing new
+    (companyfacts lags the filing) leaves the marker behind the latest
+    filing, so the next freshness check fires again instead of treating the
+    quarter as handled."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0001326160"
+    mock_edgar.submissions.return_value = {
+        **_SUBMISSIONS,
+        "filings": {"recent": {
+            "form": ["10-Q", "10-Q"],
+            "filingDate": ["2025-08-04", "2025-05-01"],
+            "reportDate": ["2025-06-30", "2025-03-31"],
+        }},
+    }
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist("DUK", periods=4, session=session)
+    assert session.get(Company, "0001326160").xbrl_filings_processed == "2025-05-01"
+
+    # Simulate a later check (fresh in-memory state, as after a restart).
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("DUK") is True
+    svc.fetch_and_persist.assert_called_once_with("DUK", periods=8)
+
+
+def test_fetch_and_persist_pull_uses_live_edgar(
+    session: Session, _fresh_filings_state
+) -> None:
+    """A deliberate pull must bypass the disk cache: it runs precisely
+    because the freshness check suspects new data, so a cached snapshot
+    would make the pull a no-op."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    mock_edgar.submissions.return_value = _SUBMISSIONS
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist("AAPL", periods=4, session=session)
+
+    mock_edgar.submissions.assert_called_with("0000320193", fresh=True)
+    mock_edgar.companyfacts.assert_called_with("0000320193", fresh=True)
