@@ -337,6 +337,22 @@ def compute_valuation(
                     f"growth premium applies — valued at the {fair_pe:.1f}× floor "
                     f"multiple (current P/E is {current_pe:.1f}×)."
                 )
+        elif raw_pe < _MIN_PE and rate_note is None:
+            # Batch 40: 2% <= growth < 5.34% — the PEG-implied multiple sits
+            # below the model's 8x floor, so the floor (not the PEG
+            # implication) drives the multiple. Same honesty class as the
+            # batch-27 fix: never claim "a PEG of 1.5 on that growth
+            # implies" a multiple the PEG math doesn't produce. The
+            # guardrail note below still names the binding floor, and the
+            # target math is untouched (fair_pe already reflects the floor).
+            # (When the rate guardrail also binds, the old copy stands — the
+            # guardrail + rate notes disclose both drivers.)
+            multiple_line = (
+                f"A PEG of {PEG_TARGET} on {eps_growth_pct:.1f}% growth implies a fair "
+                f"P/E of {raw_pe:.1f}× — below the {_MIN_PE:.0f}× floor for "
+                f"low-growth earnings, so valued at the floor instead "
+                f"(current P/E is {current_pe:.1f}×)."
+            )
         else:
             multiple_line = (
                 f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "

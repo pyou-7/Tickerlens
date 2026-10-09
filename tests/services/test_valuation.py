@@ -327,3 +327,41 @@ def test_margin_at_boundary_still_valued():
               ten_year_yield_pct=2.0)
     assert v.method == "peg"
     assert v.target_price == pytest.approx(150.0)
+
+
+# ── Batch 40: honest floor copy when the 8x P/E floor binds on positive growth
+def test_low_positive_growth_floor_copy_honest():
+    # Mirror the AWK case: +4.0% growth >= the 2% growth floor, but
+    # 1.5 x 4% = 6.0x sits below the 8x P/E floor — the card must not claim
+    # "a PEG of 1.5 on that growth implies a fair P/E of 8.0x". The floor
+    # drives the multiple; say so, with the PEG-implied multiple shown.
+    v = _base(eps_growth_pct=4.0, ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.fair_multiple == pytest.approx(8.0)
+    assert v.target_price == pytest.approx(40.0)  # target math unchanged
+    assert v.confidence == "Medium"  # guardrail drove the target
+    assert not any("on that growth implies a fair P/E of 8.0" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 6.0× — below the 8× floor" in p for p in v.reasoning)
+    assert any("valued at the floor instead" in p for p in v.reasoning)
+    assert any("hit the 8× floor" in p for p in v.reasoning)  # guardrail note intact
+
+
+def test_growth_just_above_floor_keeps_peg_copy():
+    # 5.5% growth: 1.5 x 5.5 = 8.25x clears the floor — the PEG implication
+    # is exact, so the original copy stands and confidence stays High.
+    v = _base(eps_growth_pct=5.5, ten_year_yield_pct=2.0)
+    assert v.fair_multiple == pytest.approx(8.2)
+    assert v.confidence == "High"
+    assert any("A PEG of 1.5 on that growth implies a fair P/E of 8.2×" in p
+               for p in v.reasoning)
+
+
+def test_floor_plus_rate_cap_keeps_old_copy():
+    # Both guardrails bind (4% growth, 25% 10Y): the guardrail note and the
+    # rate note disclose both drivers, so the primary line is left alone.
+    v = _base(eps_growth_pct=4.0, ten_year_yield_pct=25.0)
+    assert v.fair_multiple == pytest.approx(6.7)
+    assert v.confidence == "Medium"
+    assert any("on that growth implies a fair P/E of 6.7×" in p for p in v.reasoning)
+    assert any("hit the 8× floor" in p for p in v.reasoning)
+    assert any("10-year Treasury is at 25.0%" in p for p in v.reasoning)
