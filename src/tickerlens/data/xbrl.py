@@ -639,21 +639,23 @@ def _merge_standalone_with_q4(
 ) -> list[PeriodMetric]:
     """Merge quarterly facts with derived Q4 rows, fixing mislabeled Q4 stubs.
 
-    A 70–100-day fact is quarterly by duration, so an fp="FY" label on one is
-    a filer mislabeling of its 10-K Q4 stub (ABBV's 10-K tags the 91-day Q4
-    Revenues fact fp="FY"; verified against raw SEC JSON). The filer's own
+    A 70–100-day fact is quarterly by duration, so any non-"Q4" fp label on
+    one that coincides with a derivable Q4 is a filer mislabeling of its 10-K
+    Q4 stub (ABBV's 10-K tags the 91-day Q4 Revenues fact fp="FY"; BNY's
+    2024 10-K tags its 92-day Q4 NoninterestIncome/InterestIncomeExpenseNet
+    stubs fp="Q1" — both verified against raw SEC JSON). The filer's own
     quarterly fact is authoritative over the derived Q4 row, so relabel it
-    and let it supersede the duplicate — otherwise the phantom FY row steals
-    a slot in the recent-periods slice and collides on (cik, period_end) at
+    and let it supersede the duplicate — otherwise the phantom row steals a
+    slot in the recent-periods slice and collides on (cik, period_end) at
     upsert (and in the bank composite it would be *summed* with the derived
-    Q4, roughly doubling the quarter).
+    Q4, roughly doubling the quarter, as BNY's Q4 2024 revenue was).
     """
     derived_q4_ends = {item.end for item in q4}
     metrics: list[PeriodMetric] = []
     superseded_q4: set[dt.date] = set()
     for fact in standalone:
         pm = _period_metric(metric, source_tag, fact)
-        if pm.fp == "FY" and pm.end in derived_q4_ends:
+        if pm.fp != "Q4" and pm.end in derived_q4_ends:
             pm = pm.model_copy(update={"fp": "Q4"})
             superseded_q4.add(pm.end)
         metrics.append(pm)

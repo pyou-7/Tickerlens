@@ -1790,3 +1790,77 @@ def test_ifrs_only_filer_raises_unsupported() -> None:
         assert "US-GAAP" in str(exc)
     else:
         raise AssertionError("expected UnsupportedFilerError")
+
+
+def test_mislabeled_q4_stub_relabeled_from_q1() -> None:
+    # Regression (fresh-ticker hunt round 5, BNY): the 2024 10-K tags its
+    # 92-day Q4 stub fp="Q1" (verified against raw SEC JSON — the filer's own
+    # label, not our transform). The pre-fix guard only caught fp="FY", so
+    # the stub neither superseded the derived Q4 nor relabeled — the quarter
+    # rendered "Q1 FY2024" with a doubled value on the bank composite path.
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2024-01-01", "2024-03-31", 3_500_000_000, 2024, "Q1"),
+            ("2024-04-01", "2024-06-30", 3_554_000_000, 2024, "Q2"),
+            ("2024-07-01", "2024-09-30", 3_600_000_000, 2024, "Q3"),
+            ("2024-01-01", "2024-09-30", 10_654_000_000, 2024, "Q3"),
+            ("2024-01-01", "2024-12-31", 14_307_000_000, 2024, "FY"),
+            ("2024-10-01", "2024-12-31", 3_653_000_000, 2024, "Q1"),  # mislabeled Q4 stub
+        ],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+    )
+    metrics = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    }
+    q4 = metrics[dt.date(2024, 12, 31)]
+    assert q4.fp == "Q4"
+    # The filer's own stub fact wins over the FY−9M derivation (3_653_000_000).
+    assert q4.value == 3_653_000_000
+    assert all(m.fp != "Q1" or m.end.month != 12 for m in metrics.values())
+
+
+def test_mislabeled_q4_stub_not_doubled_on_bank_composite() -> None:
+    # BNY's actual defect: NoninterestIncome and InterestIncomeExpenseNet each
+    # carry an fp="Q1"-tagged 92-day Q4 stub in the 2024 10-K. The bank
+    # composite sums both components by period end, so the unsuperseded
+    # derived duplicates doubled Q4 2024 revenue (9_694_000_000 stored vs
+    # 4_847_000_000 filed) and the merged item took the stub's "Q1" label.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "NoninterestIncome": {
+                    "units": {
+                        "USD": [
+                            fact("2024-07-01", "2024-09-30", 3_600_000_000, 2024, "Q3"),
+                            fact("2024-01-01", "2024-09-30", 10_654_000_000, 2024, "Q3"),
+                            fact("2024-01-01", "2024-12-31", 14_307_000_000, 2024, "FY"),
+                            fact("2024-10-01", "2024-12-31", 3_653_000_000, 2024, "Q1"),
+                        ]
+                    }
+                },
+                "InterestIncomeExpenseNet": {
+                    "units": {
+                        "USD": [
+                            fact("2024-07-01", "2024-09-30", 1_048_000_000, 2024, "Q3"),
+                            fact("2024-01-01", "2024-09-30", 3_118_000_000, 2024, "Q3"),
+                            fact("2024-01-01", "2024-12-31", 4_312_000_000, 2024, "FY"),
+                            fact("2024-10-01", "2024-12-31", 1_194_000_000, 2024, "Q1"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    metrics = {
+        m.end: m
+        for m in quarterly_income_metric(companyfacts, Metric.REVENUE, "1231", sic="6022")
+    }
+    q4 = metrics[dt.date(2024, 12, 31)]
+    assert q4.fp == "Q4"
+    assert q4.value == 3_653_000_000 + 1_194_000_000  # summed once, not doubled
+    q3 = metrics[dt.date(2024, 9, 30)]
+    assert (q3.fp, q3.value) == ("Q3", 3_600_000_000 + 1_048_000_000)
