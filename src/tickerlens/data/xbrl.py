@@ -556,8 +556,11 @@ def quarterly_income_metric(
     # is a $0.7B fee-income sub-component vs $19B total Revenues); banks that
     # file Revenues only annually fall through to the component composite;
     # mortgage REITs (SIC 6798, e.g. NLY) whose top line is net interest
-    # income fall through to the mREIT composite. Falls back to the generic
-    # chain when none is available (e.g. insurers without quarterly Revenues).
+    # income fall through to the mREIT composite. Business development
+    # companies (no SIC, e.g. ARCC) whose top line is gross investment income
+    # are tag-detected on the generic-chain KeyError below. Falls back to the
+    # generic chain when none is available (e.g. insurers without quarterly
+    # Revenues).
     if metric is Metric.REVENUE and _is_finance_sic(sic):
         total = _finance_total_revenue(companyfacts, fiscal_year_end)
         if total:
@@ -585,13 +588,24 @@ def quarterly_income_metric(
         except KeyError:
             ni_facts = None
     spec = CONCEPTS[metric]
-    candidates = _chain_candidates(
-        companyfacts,
-        spec.tags,
-        spec.unit,
-        staleness_window=(70, 100),
-        metric_name=metric.value,
-    )
+    try:
+        candidates = _chain_candidates(
+            companyfacts,
+            spec.tags,
+            spec.unit,
+            staleness_window=(70, 100),
+            metric_name=metric.value,
+        )
+    except KeyError:
+        # No revenue facts on the generic chain: tag-detected BDC coverage
+        # (ARCC — no SIC, no ``Revenues``, top line is gross investment
+        # income). Runs only when nothing else applies, so the unsupported-
+        # filer path is preserved for genuinely uncovered filers.
+        if metric is Metric.REVENUE:
+            bdc = _bdc_quarterly_revenue(companyfacts, fiscal_year_end)
+            if bdc:
+                return bdc
+        raise
     # Per-share metrics must share one share basis: after a stock split the
     # filer restates comparative per-share facts in later filings (NFLX's
     # 10-for-1 split restated Q2-2025 diluted EPS from 7.19 to 0.72 in the
@@ -943,6 +957,17 @@ _BANK_REVENUE_COMPONENTS: tuple[tuple[str, ...], ...] = (
 )
 
 
+# Business development companies (e.g. ARCC) report no SIC at all and file no
+# ``Revenues`` — their top line is gross investment income. This composite is
+# tag-detected rather than SIC-dispatched: it only fires when the generic
+# chain finds no revenue facts, so operating companies are unaffected; when
+# the filer has no gross-investment-income facts either it returns [] and
+# the KeyError propagates to the honest unsupported-filer path.
+_BDC_REVENUE_TAGS: tuple[str, ...] = (
+    "GrossInvestmentIncomeOperating",
+)
+
+
 # Mortgage REITs (SIC 6798) file no ``Revenues`` and no ``NoninterestIncome`` —
 # their top line is net interest income (NLY files 85 quarterly
 # ``InterestIncomeExpenseNet`` facts and no quarterly ``Revenues``). Equity
@@ -998,6 +1023,34 @@ def _finance_total_revenue(
         return []
     newest = _newest_in_window(facts, (70, 100))
     if newest is None or (dt.date.today() - newest).days > _MAX_TAG_STALENESS_DAYS:
+        return []
+    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
+
+
+def _bdc_quarterly_revenue(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly revenue for business development companies as gross
+    investment income.
+
+    BDCs (e.g. ARCC) report no SIC and file no ``Revenues`` — their top line
+    is ``GrossInvestmentIncomeOperating`` (Q2'26: $768M standalone, clean
+    framed quarterly facts). Same tag selection, standalone-quarter
+    extraction, and Q4-from-annual derivation as a regular income metric.
+    Returns [] when the filer has no gross-investment-income facts so the
+    caller keeps the unsupported-filer path.
+    """
+    try:
+        source_tag, facts = _select_tag_facts(
+            companyfacts, _BDC_REVENUE_TAGS, "USD", staleness_window=(70, 100)
+        )
+    except KeyError:
+        logger.warning(
+            "BDC revenue tag %s missing — composite skipped", _BDC_REVENUE_TAGS[0]
+        )
         return []
     standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)

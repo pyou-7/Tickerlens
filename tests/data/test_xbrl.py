@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pytest
+
 from tickerlens.data.xbrl import (
     Metric,
     UnsupportedFilerError,
@@ -934,6 +936,108 @@ def test_mreit_revenue_derives_q4() -> None:
     by_end = {m.end: m for m in metrics}
     assert by_end[dt.date(2025, 12, 31)].value == 570000000.0
     assert by_end[dt.date(2025, 12, 31)].fp == "Q4"
+
+
+def _bdc_companyfacts(
+    gross_income: list[dict] | None,
+    revenues: list[dict] | None = None,
+    sales_net: list[dict] | None = None,
+) -> dict:
+    tags: dict[str, dict] = {}
+    if gross_income is not None:
+        tags["GrossInvestmentIncomeOperating"] = {"units": {"USD": gross_income}}
+    if revenues is not None:
+        tags["Revenues"] = {"units": {"USD": revenues}}
+    if sales_net is not None:
+        tags["SalesRevenueNet"] = {"units": {"USD": sales_net}}
+    return {"facts": {"us-gaap": tags}}
+
+
+def test_bdc_revenue_uses_gross_investment_income() -> None:
+    """ARCC case: no SIC and no Revenues takes the tag-detected BDC
+    composite — revenue is gross investment income, not a 404."""
+    companyfacts = _bdc_companyfacts(
+        gross_income=[
+            fact("2026-01-01", "2026-03-31", 752000000.0, 2026, "Q1"),
+            fact("2026-04-01", "2026-06-30", 768000000.0, 2026, "Q2"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=""
+    )
+
+    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
+        (dt.date(2026, 3, 31), 752000000.0, "GrossInvestmentIncomeOperating"),
+        (dt.date(2026, 6, 30), 768000000.0, "GrossInvestmentIncomeOperating"),
+    ]
+
+
+def test_bdc_revenue_prefers_fresh_revenues() -> None:
+    """A filer with current quarterly Revenues must never take the BDC
+    composite — the standard top line always wins."""
+    companyfacts = _bdc_companyfacts(
+        gross_income=[fact("2026-01-01", "2026-03-31", 1000.0, 2026, "Q1")],
+        revenues=[_recent_fact(149, 60, 1790000000.0)],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=None
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 1790000000.0
+    assert metrics[0].source_tag == "Revenues"
+
+
+def test_bdc_revenue_prefers_sales_net_fallback() -> None:
+    """The BDC composite must not fire when the generic chain resolves
+    revenue some other way (SalesRevenueNet here) — it is a last resort."""
+    companyfacts = _bdc_companyfacts(
+        gross_income=[fact("2026-01-01", "2026-03-31", 1000.0, 2026, "Q1")],
+        sales_net=[fact("2026-01-01", "2026-03-31", 900000000.0, 2026, "Q1")],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=None
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].source_tag == "SalesRevenueNet"
+
+
+def test_bdc_without_gross_facts_stays_unsupported() -> None:
+    """No revenue tags at all and no gross-investment-income facts: the
+    KeyError must still propagate so callers keep the honest
+    unsupported-filer path."""
+    with pytest.raises(KeyError):
+        quarterly_income_metric(
+            {"facts": {"us-gaap": {}}},
+            Metric.REVENUE,
+            fiscal_year_end="1231",
+            sic=None,
+        )
+
+
+def test_bdc_revenue_derives_q4() -> None:
+    """The BDC composite runs the standard Q4-from-annual derivation so
+    the year completes when the filer only stands alone Q1-Q3."""
+    companyfacts = _bdc_companyfacts(
+        gross_income=[
+            fact("2025-01-01", "2025-03-31", 750000000.0, 2025, "Q1"),
+            fact("2025-04-01", "2025-06-30", 760000000.0, 2025, "Q2"),
+            fact("2025-07-01", "2025-09-30", 770000000.0, 2025, "Q3"),
+            fact("2025-01-01", "2025-09-30", 2280000000.0, 2025, "Q3"),
+            fact("2025-01-01", "2025-12-31", 3050000000.0, 2025, "FY"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=""
+    )
+
+    by_end = {m.end: m for m in metrics}
+    assert by_end[dt.date(2025, 12, 31)].value == 770000000.0
 
 
 def test_is_mreit_sic_boundaries() -> None:
