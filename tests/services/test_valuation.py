@@ -291,3 +291,39 @@ def test_flat_eps_growth_uses_honest_floor_copy():
 def test_positive_growth_keeps_peg_copy():
     v = _base(eps_growth_pct=20.0, ten_year_yield_pct=2.0)
     assert any("A PEG of 1.5 on that growth implies" in p for p in v.reasoning)
+
+
+# ── Batch 36: non-operating-earnings guard (margin > 100%) ──────────────────
+def test_margin_over_100_pct_is_watch_on_peg_path():
+    # Mirror the NLY case: TTM EPS 4.11 growing +257% would print Strong Buy
+    # +734% on the PEG path, but TTM net income (186% of revenue, unrealized
+    # portfolio gains) is not operating earnings — no multiple applies.
+    v = _base(ttm_eps_diluted=4.11, eps_growth_pct=257.0, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("non-operating" in r for r in v.reasoning)
+
+
+def test_margin_over_100_pct_blocks_sales_path_too():
+    # No per-share data either: the margin-anchored sales fallback must not
+    # step in where the PEG path was refused (fair P/S = P/E x 186% margin
+    # would fabricate a target just as badly).
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0,
+              revenue_growth_pct=40.0, shares_outstanding=600_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+
+
+def test_margin_at_boundary_still_valued():
+    # The guard is strictly > 100%: a 99% margin (unusual but operating)
+    # keeps the PEG path.
+    v = _base(ttm_eps_diluted=5.0, eps_growth_pct=20.0, current_price=100.0,
+              ttm_revenue=1_000_000_000.0, ttm_net_income=990_000_000.0,
+              ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.target_price == pytest.approx(150.0)

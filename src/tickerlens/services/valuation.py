@@ -266,6 +266,42 @@ def compute_valuation(
         else "Medium"
     )
 
+    # ── Non-operating-earnings guard (batch 36) ───────────────────────────
+    # A TTM net margin above 100% means earnings exceed the top line — only
+    # possible via non-operating items (mortgage REITs book unrealized
+    # portfolio gains/losses through net income; NLY's TTM net income is
+    # ~162% of its net interest income). A PEG growth multiple — or a
+    # margin-anchored sales multiple — on that EPS values mark-to-market
+    # noise, not the business, so the model returns Watch/unavailable with
+    # honest copy instead of a fabricated target (NLY rendered Strong Buy
+    # +734% on the PEG path before this guard). Mirrors the batch-26
+    # non-positive-margin guard on the sales path: both directions of
+    # margin absurdity mean "no multiple applies".
+    operating_margin: float | None = None
+    if ttm_net_income is not None and ttm_revenue is not None and ttm_revenue > 0:
+        operating_margin = ttm_net_income / ttm_revenue
+    if operating_margin is not None and operating_margin > 1.0:
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(eps_growth_pct, 1) if eps_growth_pct is not None else None,
+            reasoning=[
+                f"TTM net income is {operating_margin * 100:.0f}% of TTM revenue — "
+                "earnings exceed the top line, so they are dominated by "
+                "non-operating items (e.g. unrealized gains/losses), not the "
+                "business's earning power.",
+                "A growth multiple on that EPS would value accounting noise, "
+                "not the company — no target until earnings reflect operations.",
+            ],
+        )
+
     # ── Primary: PEG-implied P/E ──────────────────────────────────────────
     if ttm_eps_diluted is not None and ttm_eps_diluted > 0 and eps_growth_pct is not None:
         raw_pe = PEG_TARGET * _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)

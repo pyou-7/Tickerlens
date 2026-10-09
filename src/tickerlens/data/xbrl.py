@@ -183,7 +183,8 @@ def extract_recent_quarterly_financials(
 
     ``sic`` selects the revenue concept: finance filers (SIC 6000-6299) report
     revenue as noninterest income + net interest income rather than a single
-    ``Revenues`` tag.
+    ``Revenues`` tag; mortgage REITs (SIC 6798) report net interest income
+    only.
     """
 
     # Revenue is the canonical anchor — hard failure if missing.
@@ -553,15 +554,20 @@ def quarterly_income_metric(
     # Finance filers (SIC Division H) report revenue differently: prefer the
     # filer's own total-revenue tag when current (MET's contract-revenue tag
     # is a $0.7B fee-income sub-component vs $19B total Revenues); banks that
-    # file Revenues only annually fall through to the component composite.
-    # Falls back to the generic chain when neither is available (e.g.
-    # insurers without quarterly Revenues).
+    # file Revenues only annually fall through to the component composite;
+    # mortgage REITs (SIC 6798, e.g. NLY) whose top line is net interest
+    # income fall through to the mREIT composite. Falls back to the generic
+    # chain when none is available (e.g. insurers without quarterly Revenues).
     if metric is Metric.REVENUE and _is_finance_sic(sic):
         total = _finance_total_revenue(companyfacts, fiscal_year_end)
         if total:
             return total
         if _is_bank_sic(sic):
             composite = _bank_quarterly_revenue(companyfacts, fiscal_year_end)
+            if composite:
+                return composite
+        if _is_mreit_sic(sic):
+            composite = _mreit_quarterly_revenue(companyfacts, fiscal_year_end)
             if composite:
                 return composite
         logger.warning(
@@ -937,6 +943,20 @@ _BANK_REVENUE_COMPONENTS: tuple[tuple[str, ...], ...] = (
 )
 
 
+# Mortgage REITs (SIC 6798) file no ``Revenues`` and no ``NoninterestIncome`` —
+# their top line is net interest income (NLY files 85 quarterly
+# ``InterestIncomeExpenseNet`` facts and no quarterly ``Revenues``). Equity
+# REITs share SIC 6798 but file current quarterly ``Revenues`` and take the
+# finance preference above, so this composite only ever fires when ``Revenues``
+# is absent; when the filer has no net-interest-income facts either it
+# returns [] and the generic chain applies unchanged.
+_MREIT_SIC = 6798
+_MREIT_REVENUE_TAGS: tuple[str, ...] = (
+    "InterestIncomeExpenseNet",
+    "NetInterestIncome",
+)
+
+
 # Finance filers (SIC Division H, 6000-6999) report revenue differently from
 # operating companies: the contract-revenue tags the generic chain prefers
 # are often small sub-components (MET: $0.7B fee income) while the filer's own
@@ -1042,6 +1062,43 @@ def _bank_quarterly_revenue(
         ),
         key=lambda item: item.end,
     )
+
+
+def _is_mreit_sic(sic: str | int | None) -> bool:
+    """True for SIC 6798 (real estate investment trusts, incl. mortgage REITs)."""
+    if sic is None:
+        return False
+    try:
+        return int(str(sic).strip()) == _MREIT_SIC
+    except (TypeError, ValueError):
+        return False
+
+
+def _mreit_quarterly_revenue(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly revenue for mortgage REITs as net interest income.
+
+    A single-component series (no summation needed, unlike the bank
+    composite): the same tag selection, standalone-quarter extraction, and
+    Q4-from-annual derivation as a regular income metric. Returns [] when the
+    filer has no net-interest-income facts so the caller falls back to the
+    generic chain.
+    """
+    try:
+        source_tag, facts = _select_tag_facts(
+            companyfacts, _MREIT_REVENUE_TAGS, "USD", staleness_window=(70, 100)
+        )
+    except KeyError:
+        logger.warning(
+            "mREIT revenue component %s missing — composite skipped",
+            _MREIT_REVENUE_TAGS[0],
+        )
+        return []
+    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
 def _newest_in_window(

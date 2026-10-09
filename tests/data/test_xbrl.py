@@ -845,6 +845,108 @@ def test_is_bank_sic_boundaries() -> None:
     assert not _is_bank_sic("n/a")
 
 
+def _mreit_companyfacts(
+    interest_net: list[dict] | None,
+    revenues: list[dict] | None = None,
+    sales_net: list[dict] | None = None,
+) -> dict:
+    tags: dict[str, dict] = {}
+    if interest_net is not None:
+        tags["InterestIncomeExpenseNet"] = {"units": {"USD": interest_net}}
+    if revenues is not None:
+        tags["Revenues"] = {"units": {"USD": revenues}}
+    if sales_net is not None:
+        tags["SalesRevenueNet"] = {"units": {"USD": sales_net}}
+    return {"facts": {"us-gaap": tags}}
+
+
+def test_mreit_revenue_uses_net_interest_income() -> None:
+    """NLY case: SIC 6798 with no quarterly Revenues takes the mREIT
+    composite — revenue is net interest income, not a 404."""
+    companyfacts = _mreit_companyfacts(
+        interest_net=[
+            fact("2026-01-01", "2026-03-31", 510000000.0, 2026, "Q1"),
+            fact("2026-04-01", "2026-06-30", 488000000.0, 2026, "Q2"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6798"
+    )
+
+    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
+        (dt.date(2026, 3, 31), 510000000.0, "InterestIncomeExpenseNet"),
+        (dt.date(2026, 6, 30), 488000000.0, "InterestIncomeExpenseNet"),
+    ]
+
+
+def test_mreit_revenue_prefers_fresh_revenues() -> None:
+    """Equity REITs share SIC 6798 but file current quarterly Revenues —
+    the finance preference must win over the mREIT composite."""
+    companyfacts = _mreit_companyfacts(
+        interest_net=[fact("2026-01-01", "2026-03-31", 1000.0, 2026, "Q1")],
+        revenues=[_recent_fact(149, 60, 1790000000.0)],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic=6798
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].value == 1790000000.0
+    assert metrics[0].source_tag == "Revenues"
+
+
+def test_mreit_sic_without_nii_falls_back_to_generic_chain() -> None:
+    """SIC 6798 filer with no net-interest-income facts falls through to
+    the generic chain — the composite must not swallow unrelated REITs."""
+    companyfacts = _mreit_companyfacts(
+        interest_net=None,
+        sales_net=[fact("2026-01-01", "2026-03-31", 900000000.0, 2026, "Q1")],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6798"
+    )
+
+    assert [(m.end, m.value, m.source_tag) for m in metrics] == [
+        (dt.date(2026, 3, 31), 900000000.0, "SalesRevenueNet")
+    ]
+
+
+def test_mreit_revenue_derives_q4() -> None:
+    """The mREIT composite runs the standard Q4-from-annual derivation so
+    the year completes when the filer only stands alone Q1-Q3."""
+    companyfacts = _mreit_companyfacts(
+        interest_net=[
+            fact("2025-01-01", "2025-03-31", 500000000.0, 2025, "Q1"),
+            fact("2025-04-01", "2025-06-30", 510000000.0, 2025, "Q2"),
+            fact("2025-07-01", "2025-09-30", 520000000.0, 2025, "Q3"),
+            fact("2025-01-01", "2025-09-30", 1530000000.0, 2025, "Q3"),
+            fact("2025-01-01", "2025-12-31", 2100000000.0, 2025, "FY"),
+        ],
+    )
+
+    metrics = quarterly_income_metric(
+        companyfacts, Metric.REVENUE, fiscal_year_end="1231", sic="6798"
+    )
+
+    by_end = {m.end: m for m in metrics}
+    assert by_end[dt.date(2025, 12, 31)].value == 570000000.0
+    assert by_end[dt.date(2025, 12, 31)].fp == "Q4"
+
+
+def test_is_mreit_sic_boundaries() -> None:
+    from tickerlens.data.xbrl import _is_mreit_sic
+
+    assert _is_mreit_sic(6798)
+    assert _is_mreit_sic("6798")
+    assert not _is_mreit_sic(6799)
+    assert not _is_mreit_sic(6000)
+    assert not _is_mreit_sic(None)
+    assert not _is_mreit_sic("n/a")
+
+
 def test_bank_composite_end_to_end_anchors_recent_quarters() -> None:
     """extract_recent_quarterly_financials with a bank SIC anchors on the
     composite, so joined metrics (net income) follow recent ends."""
