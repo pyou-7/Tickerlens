@@ -263,9 +263,10 @@ class CompanyOverview(BaseModel):
 class PeriodData(BaseModel):
     """Data for a single selected period (quarterly or yearly aggregate)."""
     label: str                  # "Q2 FY2025" or "FY2025"
-    period_end: dt.date | None  # None for yearly aggregates
+    period_end: dt.date | None  # quarter end; the year's last quarter end for yearly
     fiscal_year: int
     fiscal_period: str | None   # "Q1"–"Q4" for quarterly; None for yearly
+    quarters_count: int = 0     # stored quarters in the period (1 quarterly; <4 = partial FY)
     kpi: KPISnapshot
     yoy: KPIChange
     qoq: KPIChange | None       # None for yearly
@@ -2411,6 +2412,7 @@ def _build_quarterly_period(
             period_end=row.period_end,
             fiscal_year=row.fiscal_year,
             fiscal_period=row.fiscal_period,
+            quarters_count=1,
             kpi=_to_kpi(row),
             yoy=_compute_yoy(row, list(all_rows)),
             qoq=_compute_qoq(row, prior_qoq),
@@ -2460,6 +2462,7 @@ def _build_yearly_period(
         period_end=year_rows[-1].period_end if year_rows else None,
         fiscal_year=selected_year,
         fiscal_period=None,
+        quarters_count=len(year_rows),
         kpi=kpi,
         yoy=yoy,
         qoq=None,
@@ -2582,6 +2585,10 @@ def render_period_csv(name: str, ticker: str | None, period: PeriodData) -> str:
     w.writerow(["# Period", period.label])
     if period.period_end:
         w.writerow(["# Period end", period.period_end.isoformat()])
+    if period.fiscal_period is None and 0 < period.quarters_count < 4:
+        # Partial fiscal year: the sums below cover only the reported
+        # quarters, not a full 12 months.
+        w.writerow(["# Period note", f"partial year — {period.quarters_count} of 4 quarters reported"])
     w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
     w.writerow(["metric", "value", "yoy_pct", "qoq_pct"])
     for label, kpi_attr, chg_attr, bs_attr in _CSV_METRICS:
@@ -2617,6 +2624,12 @@ def render_compare_csv(name: str, ticker: str | None, ctx: CompareContext) -> st
     w.writerow(["# Period A", ctx.period_a_label])
     w.writerow(["# Period B", ctx.period_b_label])
     w.writerow(["# Mode", ctx.mode])
+    for side, side_label in (("A", ctx.a), ("B", ctx.b)):
+        if ctx.mode == "yearly" and 0 < side_label.quarters_count < 4:
+            w.writerow([
+                f"# Period {side} note",
+                f"partial year — {side_label.quarters_count} of 4 quarters reported",
+            ])
     w.writerow(["# Source", "SEC EDGAR XBRL companyfacts (filing-derived)"])
     w.writerow(["metric", "period_a", "period_b", "delta", "delta_pct"])
     for label, kpi_attr, _, bs_attr in _CSV_METRICS:

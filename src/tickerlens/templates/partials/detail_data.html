@@ -128,6 +128,9 @@
       {% if ctx.current.period_end %}
         <span class="normal-case text-slate-400 dark:text-gray-500 ml-1">(ended {{ ctx.current.period_end }})</span>
       {% endif %}
+      {% if ctx.granularity == 'yearly' and 0 < ctx.current.quarters_count < 4 %}
+        <span class="normal-case text-amber-600 dark:text-amber-400 ml-1">— partial year, {{ ctx.current.quarters_count }} of 4 quarters reported</span>
+      {% endif %}
     </h2>
     {% if ctx.current.qoq %}
     <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-950 p-0.5 text-xs shadow-inner" role="group" aria-label="Change comparison mode">

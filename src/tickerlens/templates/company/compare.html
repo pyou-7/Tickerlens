@@ -187,8 +187,8 @@
       <thead>
         <tr class="text-left border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/30">
           <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400">Metric</th>
-          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-indigo-600 dark:text-indigo-400 text-right">{{ ctx.period_a_label }}</th>
-          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">{{ ctx.period_b_label }}</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-indigo-600 dark:text-indigo-400 text-right">{{ ctx.period_a_label }}{% if ctx.mode == 'yearly' and 0 < ctx.a.quarters_count < 4 %}<div class="normal-case font-medium text-amber-600 dark:text-amber-400">partial — {{ ctx.a.quarters_count }} of 4 quarters</div>{% endif %}</th>
+          <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">{{ ctx.period_b_label }}{% if ctx.mode == 'yearly' and 0 < ctx.b.quarters_count < 4 %}<div class="normal-case font-medium text-amber-600 dark:text-amber-400">partial — {{ ctx.b.quarters_count }} of 4 quarters</div>{% endif %}</th>
           <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">Δ (A − B)</th>
           <th class="px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-gray-400 text-right">Δ %</th>
         </tr>

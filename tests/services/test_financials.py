@@ -2327,3 +2327,63 @@ def test_fetch_and_persist_pull_uses_live_edgar(
 
     mock_edgar.submissions.assert_called_with("0000320193", fresh=True)
     mock_edgar.companyfacts.assert_called_with("0000320193", fresh=True)
+
+
+# ── quarters_count / partial-year disclosure (batch 39) ───────────────────────
+
+def test_build_yearly_period_counts_stored_quarters() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=85.0),
+        _row(period_end=dt.date(2024, 12, 31), fiscal_year=2024, fiscal_period="Q4", revenue=119.0),
+        _row(period_end=dt.date(2024, 9, 30), fiscal_year=2024, fiscal_period="Q3", revenue=111.0),
+        _row(period_end=dt.date(2024, 6, 30), fiscal_year=2024, fiscal_period="Q2", revenue=100.0),
+        _row(period_end=dt.date(2024, 3, 31), fiscal_year=2024, fiscal_period="Q1", revenue=90.0),
+    ]
+    partial = _build_yearly_period(rows, selected_year=2025, default_year=2025)
+    assert partial.quarters_count == 2  # only Q1+Q2 reported — the honesty signal
+    full = _build_yearly_period(rows, selected_year=2024, default_year=2024)
+    assert full.quarters_count == 4
+
+
+def test_build_quarterly_period_counts_one_quarter() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1", revenue=95.0),
+        _row(period_end=dt.date(2025, 6, 30), fiscal_year=2025, fiscal_period="Q2", revenue=100.0),
+    ]
+    data, _ = _build_quarterly_period(rows, "Q2 FY2025", rows[-1])
+    assert data.quarters_count == 1
+
+
+def test_render_period_csv_partial_year_note() -> None:
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        KPIChange,
+        KPISnapshot,
+        PeriodData,
+        render_period_csv,
+    )
+
+    def period(**kw) -> PeriodData:
+        base = dict(
+            label="FY2025", period_end=dt.date(2025, 6, 30), fiscal_year=2025,
+            fiscal_period=None, kpi=KPISnapshot(), yoy=KPIChange(), qoq=None,
+            balance_sheet=BalanceSheet(), balance_sheet_yoy=BalanceSheetChange(),
+            balance_sheet_qoq=None,
+        )
+        base.update(kw)
+        return PeriodData(**base)
+
+    partial_csv = render_period_csv("ARCC", "ARCC", period(quarters_count=2))
+    assert "# Period note,partial year — 2 of 4 quarters reported" in partial_csv
+
+    full_csv = render_period_csv("ARCC", "ARCC", period(quarters_count=4))
+    assert "# Period note" not in full_csv
+
+    # Quarterly periods never get the note (they are single quarters by definition).
+    quarterly_csv = render_period_csv(
+        "Apple Inc.", "AAPL",
+        period(label="Q2 FY2025", fiscal_period="Q2", quarters_count=1),
+    )
+    assert "# Period note" not in quarterly_csv

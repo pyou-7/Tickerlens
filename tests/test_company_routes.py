@@ -550,6 +550,7 @@ def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -
         bs.total_liabilities = 250_000.0
         bs.total_equity = 100_000.0
         bs.cash_and_equivalents = 50_000.0
+        getattr(mock_ctx, side).quarters_count = 4  # full fiscal years (batch 39)
     for field in ("revenue", "net_income", "eps_basic", "eps_diluted",
                   "free_cash_flow", "total_assets", "total_liabilities",
                   "total_equity", "cash_and_equivalents"):
@@ -1071,3 +1072,143 @@ def test_home_same_day_earnings_renders_today_not_in_0d(
     assert "Today!" in resp.text
     assert "In 0d" not in resp.text
     assert "In 5d" in resp.text
+
+
+# ── partial-year disclosure (batch 39) ────────────────────────────────────────
+
+def _yearly_detail_ctx(*, quarters_count: int, label: str = "FY2026"):
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        DetailContext,
+        KPIChange,
+        KPISnapshot,
+        PeriodData,
+    )
+
+    cur = PeriodData(
+        label=label,
+        period_end=__import__("datetime").date(2026, 6, 30),
+        fiscal_year=2026,
+        fiscal_period=None,
+        quarters_count=quarters_count,
+        kpi=KPISnapshot(revenue=1_531_000_000.0, net_income=400_000_000.0),
+        yoy=KPIChange(),
+        qoq=None,
+        balance_sheet=BalanceSheet(total_assets=20_000_000_000.0),
+        balance_sheet_yoy=BalanceSheetChange(),
+        balance_sheet_qoq=None,
+    )
+    return DetailContext(
+        cik="0001538118", name="Ares Capital Corp", ticker="ARCC", sector="Financial Services",
+        last_price=20.0, market_cap=12e9,
+        granularity="yearly", quarter_options=["Q2 FY2026", "Q1 FY2026"],
+        year_options=[2026, 2025], selected_quarter="Q2 FY2026", selected_year=2026,
+        current=cur, chart_labels=["Q1 FY2026", "Q2 FY2026"],
+        chart_revenue=[763_000_000.0, 768_000_000.0], chart_eps=[0.5, 0.52],
+    )
+
+
+def test_detail_yearly_partial_year_note_renders(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _yearly_detail_ctx(quarters_count=2)
+    mock_svc.get_sibling_tickers.return_value = []
+    mock_svc.get_peers.return_value = []
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/ARCC/detail?granularity=yearly")
+    assert resp.status_code == 200
+    assert "partial year" in resp.text
+    assert "2 of 4 quarters reported" in resp.text
+
+
+def test_detail_yearly_full_year_has_no_partial_note(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _yearly_detail_ctx(quarters_count=4, label="FY2025")
+    mock_svc.get_sibling_tickers.return_value = []
+    mock_svc.get_peers.return_value = []
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/ARCC/detail?granularity=yearly&year=2025")
+    assert resp.status_code == 200
+    assert "partial year" not in resp.text
+
+
+def _yearly_compare_ctx(*, a_count: int, b_count: int):
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        CompareContext,
+        CompareDeltas,
+        KPIChange,
+        KPISnapshot,
+        MetricDelta,
+        PeriodData,
+    )
+
+    def period(label: str, revenue: float, count: int) -> PeriodData:
+        return PeriodData(
+            label=label, period_end=None, fiscal_year=int(label[2:]),
+            fiscal_period=None, quarters_count=count,
+            kpi=KPISnapshot(revenue=revenue), yoy=KPIChange(), qoq=None,
+            balance_sheet=BalanceSheet(), balance_sheet_yoy=BalanceSheetChange(),
+            balance_sheet_qoq=None,
+        )
+
+    return CompareContext(
+        cik="0000320193", name="Apple Inc.", ticker="AAPL", sector="Technology",
+        last_price=None, market_cap=None, mode="yearly",
+        quarter_options=[], year_options=[2026, 2025],
+        period_a_label="FY2026", period_b_label="FY2025", preset=None,
+        a=period("FY2026", 300_000_000.0, a_count),
+        b=period("FY2025", 390_000_000.0, b_count),
+        deltas=CompareDeltas(revenue=MetricDelta(absolute=-90_000_000.0, pct=-23.1)),
+    )
+
+
+def test_compare_yearly_partial_year_header_note_renders(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_compare.return_value = _yearly_compare_ctx(a_count=2, b_count=4)
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/compare?mode=yearly")
+    assert resp.status_code == 200
+    assert "partial" in resp.text
+    assert "2 of 4 quarters" in resp.text
+    # B is a full year — only one side flagged
+    assert resp.text.count("partial") == 1
+
+
+def test_compare_yearly_full_years_no_partial_note(client: TestClient, monkeypatch) -> None:
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_compare.return_value = _yearly_compare_ctx(a_count=4, b_count=4)
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/compare?mode=yearly")
+    assert resp.status_code == 200
+    assert "partial" not in resp.text
+
+
+def test_render_compare_csv_partial_year_notes() -> None:
+    import csv
+    import io as _io
+
+    from tickerlens.services.financials import render_compare_csv
+
+    ctx = _yearly_compare_ctx(a_count=2, b_count=4)
+    rows = list(csv.reader(_io.StringIO(render_compare_csv("Apple Inc.", "AAPL", ctx))))
+    notes = [r for r in rows if r[0].startswith("# Period") and "note" in r[0]]
+    assert ["# Period A note", "partial year — 2 of 4 quarters reported"] in notes
+    assert not any(r[0] == "# Period B note" for r in notes)
+
+    full = _yearly_compare_ctx(a_count=4, b_count=4)
+    rows_full = list(csv.reader(_io.StringIO(render_compare_csv("Apple Inc.", "AAPL", full))))
+    assert not any("note" in r[0] for r in rows_full if r[0].startswith("# Period"))
