@@ -417,3 +417,104 @@ def test_ai_analysis_growth_thesis_unchanged() -> None:
         "Top-line revenue grew +10.0% YoY in Q2 FY2026, "
         "reflecting balance-sheet growth and fee-income momentum."
     )
+
+
+def _eps_thesis(analysis) -> str | None:
+    return next((t for t in analysis.theses if "Diluted EPS" in t), None)
+
+
+def test_ai_analysis_declining_eps_disclosed() -> None:
+    """Batch 42: the briefing had no EPS line at all, so a collapsing
+    quarter read as pure upside — DUOL's \"Invest 92\" briefing narrated
+    +18.3% revenue and a 35.9% margin while diluted EPS fell 27.5% YoY
+    with no disclosure. The decline must now appear in the theses."""
+    overview = _bank_overview(
+        ticker="DUOL",
+        name="DUOLINGO INC",
+        yoy=KPIChange(revenue=18.3, net_income=-26.0, eps_diluted=-27.5, free_cash_flow=5.0),
+    )
+    analysis = generate_ai_analysis(overview=overview, valuation=None, rows=[])
+    eps = _eps_thesis(analysis)
+    assert eps is not None
+    assert eps.startswith("Diluted EPS declined 27.5% YoY in Q2 FY2026")
+    assert "grew" not in eps
+
+
+def test_ai_analysis_eps_flat_band() -> None:
+    """Batch 42: near-flat EPS carries no earnings-momentum signal —
+    mirrors the batch-41 2% revenue band."""
+    overview = _bank_overview(
+        yoy=KPIChange(revenue=10.0, net_income=2.0, eps_diluted=0.4, free_cash_flow=5.0),
+    )
+    eps = _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert eps is not None
+    assert "essentially flat" in eps
+    assert "grew" not in eps
+
+
+def test_ai_analysis_eps_growth_band_boundary() -> None:
+    """Batch 42: exactly 2.0% EPS keeps the growth line; just inside is flat."""
+    edge = _bank_overview(
+        yoy=KPIChange(revenue=10.0, net_income=2.0, eps_diluted=2.0, free_cash_flow=5.0),
+    )
+    eps_edge = _eps_thesis(generate_ai_analysis(overview=edge, valuation=None, rows=[]))
+    assert eps_edge is not None
+    assert eps_edge.startswith("Diluted EPS grew +2.0%")
+
+    inside = _bank_overview(
+        yoy=KPIChange(revenue=10.0, net_income=2.0, eps_diluted=1.99, free_cash_flow=5.0),
+    )
+    eps_in = _eps_thesis(generate_ai_analysis(overview=inside, valuation=None, rows=[]))
+    assert eps_in is not None
+    assert "essentially flat" in eps_in
+
+
+def test_ai_analysis_eps_growth_while_loss_making() -> None:
+    """Batch 42: pct uses |prior|, so a smaller loss renders as positive
+    \"growth\" — the thesis must say the quarter stayed loss-making
+    (the APLD +shape with cur_eps < 0)."""
+    overview = _bank_overview(
+        latest_kpi=KPISnapshot(revenue=40000.0, net_income=-8000.0, eps_diluted=-0.82, free_cash_flow=20000.0),
+        yoy=KPIChange(revenue=27.2, net_income=25.4, eps_diluted=35.1, free_cash_flow=-5.0),
+    )
+    eps = _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert eps is not None
+    assert "improved" in eps
+    assert "remained loss-making on a per-share basis" in eps
+    assert "grew" not in eps
+
+
+def test_ai_analysis_eps_decline_while_loss_making() -> None:
+    """Batch 42: a decline into/widening a loss must name it — the APLD
+    -1071.4% shape (cur_eps -0.82) must not read as a plain decline."""
+    overview = _bank_overview(
+        latest_kpi=KPISnapshot(revenue=40000.0, net_income=-8000.0, eps_diluted=-0.82, free_cash_flow=20000.0),
+        yoy=KPIChange(revenue=27.2, net_income=-50.0, eps_diluted=-1071.4, free_cash_flow=-5.0),
+    )
+    eps = _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert eps is not None
+    assert "declined 1071.4%" in eps
+    assert "loss-making on a per-share basis" in eps
+
+
+def test_ai_analysis_eps_base_effect_growth() -> None:
+    """Batch 42: >=200% magnitudes are small-prior-base artifacts (NLY
+    +3433.3%) — the thesis must qualify them, not print a bare
+    \"grew +3433.3%\" that reads as genuine hypergrowth."""
+    overview = _bank_overview(
+        yoy=KPIChange(revenue=10.0, net_income=200.0, eps_diluted=3433.3, free_cash_flow=5.0),
+    )
+    eps = _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert eps is not None
+    assert "rose +3433.3%" in eps
+    assert "small prior-year base" in eps
+    assert "grew" not in eps
+
+
+def test_ai_analysis_eps_missing_yoy_no_thesis() -> None:
+    """Batch 42: missing EPS YoY (None, e.g. first-seeded tickers) emits no
+    earnings line — unknown, not flat (batch-25 principle)."""
+    overview = _bank_overview(
+        yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=None, free_cash_flow=8.0),
+    )
+    assert _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[])) is None

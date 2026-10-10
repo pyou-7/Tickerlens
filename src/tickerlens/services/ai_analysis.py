@@ -15,6 +15,14 @@ from tickerlens.services.valuation import ValuationSignal
 # the valuation copy's "essentially flat" band for EPS growth (batch 27).
 _FLAT_REVENUE_PCT = 2.0
 
+# Same 2% noise band for the earnings thesis (batch 42): near-flat EPS
+# carries no earnings-momentum signal. Magnitudes >= 200% are almost
+# always a small-prior-base artifact (NLY +3433%, APLD -1071%), so the
+# thesis says "rose"/"declined" with the base-effect qualifier instead
+# of a bare "grew +3433.3%" that reads as genuine hypergrowth.
+_FLAT_EPS_PCT = 2.0
+_BASE_EFFECT_PCT = 200.0
+
 
 class AIAnalysis(BaseModel):
     """Integrated fundamental research & AI synthesis briefing (PRD §4.4)."""
@@ -288,6 +296,52 @@ def generate_ai_analysis(
             f"Top-line revenue declined {abs(rev_yoy):.1f}% YoY in {overview.latest_label}, "
             f"{_revenue_decline_tail(overview.sector)}"
         )
+    # Earnings thesis (batch 42): the briefing previously had no EPS line
+    # at all, so a collapsing quarter read as pure upside — DUOL's
+    # "Invest 92" briefing narrated +18.3% revenue and 35.9% margin while
+    # diluted EPS fell 27.5% YoY, and ARCC's "operational leverage" line
+    # sat next to a 53.8% EPS decline with no disclosure. Mirror the
+    # batch-41 revenue structure: flat band, sign-aware verbs, and
+    # loss-making/base-effect guards (pct uses |prior|, so a smaller
+    # loss or a tiny base both render as positive "growth").
+    cur_eps = overview.latest_kpi.eps_diluted if overview.latest_kpi else None
+    if eps_yoy == 0:
+        pass  # no YoY data or exactly zero — no earnings narrative to give
+    elif abs(eps_yoy) < _FLAT_EPS_PCT:
+        theses.append(
+            f"Diluted EPS was essentially flat YoY in {overview.latest_label} "
+            f"({eps_yoy:+.1f}%), with no earnings-momentum signal either way this quarter."
+        )
+    elif eps_yoy > 0:
+        if cur_eps is not None and cur_eps < 0:
+            theses.append(
+                f"Diluted EPS improved {eps_yoy:+.1f}% YoY in {overview.latest_label}, "
+                "though the latest quarter remained loss-making on a per-share basis."
+            )
+        elif abs(eps_yoy) >= _BASE_EFFECT_PCT:
+            theses.append(
+                f"Diluted EPS rose {eps_yoy:+.1f}% YoY in {overview.latest_label}, "
+                "amplified by a small prior-year base."
+            )
+        else:
+            theses.append(
+                f"Diluted EPS grew {eps_yoy:+.1f}% YoY in {overview.latest_label}."
+            )
+    else:
+        if cur_eps is not None and cur_eps < 0:
+            theses.append(
+                f"Diluted EPS declined {abs(eps_yoy):.1f}% YoY in {overview.latest_label}, "
+                "with the latest quarter loss-making on a per-share basis."
+            )
+        elif abs(eps_yoy) >= _BASE_EFFECT_PCT:
+            theses.append(
+                f"Diluted EPS declined {abs(eps_yoy):.1f}% YoY in {overview.latest_label}, "
+                "amplified by a small prior-year base."
+            )
+        else:
+            theses.append(
+                f"Diluted EPS declined {abs(eps_yoy):.1f}% YoY in {overview.latest_label}."
+            )
     if net_margin > 0:
         theses.append(
             f"Trailing net margin of {net_margin:.1f}% demonstrates operational leverage and pricing discipline."
