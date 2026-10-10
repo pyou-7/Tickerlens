@@ -118,6 +118,22 @@ def _revenue_decline_tail(sector: str | None) -> str:
     return "signaling soft demand in its end markets this quarter."
 
 
+def _margin_thesis_tail(sector: str | None) -> str:
+    """Sector-aware close for the net-margin thesis.
+
+    "Operational leverage and pricing discipline" is industrial-register
+    copy: a bank's or insurer's margin comes from net interest spreads,
+    underwriting, and fee income — not operating leverage. The batch-46
+    audit found every financial-sector ticker (JPM, BNY, MET, SCHW, NLY,
+    AIG) rendering the industrial line. Same key set as the revenue tails
+    (batch 41).
+    """
+    sec = (sector or "").lower()
+    if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
+        return "demonstrating spread discipline and fee-income efficiency."
+    return "demonstrating operational leverage and pricing discipline."
+
+
 def _extract_key_risks(
     risk_factors: str | None,
     guidance: str | None,
@@ -344,7 +360,7 @@ def generate_ai_analysis(
             )
     if net_margin > 0:
         theses.append(
-            f"Trailing net margin of {net_margin:.1f}% demonstrates operational leverage and pricing discipline."
+            f"Trailing net margin of {net_margin:.1f}% {_margin_thesis_tail(overview.sector)}"
         )
     if ttm_fcf > 0:
         theses.append(

@@ -518,3 +518,35 @@ def test_ai_analysis_eps_missing_yoy_no_thesis() -> None:
         yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=None, free_cash_flow=8.0),
     )
     assert _eps_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[])) is None
+
+
+def _margin_thesis(analysis) -> str | None:
+    return next((t for t in analysis.theses if "Trailing net margin" in t), None)
+
+
+def test_ai_analysis_margin_thesis_sector_aware_financials() -> None:
+    """Batch 46: the net-margin thesis must not use industrial-register
+    "operational leverage and pricing discipline" for banks/insurers/
+    brokers (audit: JPM, BNY, MET, SCHW, NLY, AIG all rendered it)."""
+    for sector in ("Banking", "Insurance", "Securities & Investments", "Financial Services"):
+        overview = _bank_overview(
+            sector=sector,
+            yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+        )
+        margin = _margin_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+        assert margin is not None, sector
+        assert "operational leverage" not in margin, sector
+        assert "pricing discipline" not in margin, sector
+        assert "spread discipline and fee-income efficiency" in margin, sector
+
+
+def test_ai_analysis_margin_thesis_industrial_unchanged() -> None:
+    """Batch 46: non-financial sectors keep the original industrial
+    margin register."""
+    overview = _bank_overview(
+        sector="Manufacturing",
+        yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+    )
+    margin = _margin_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert margin is not None
+    assert margin == "Trailing net margin of 32.7% demonstrating operational leverage and pricing discipline."
