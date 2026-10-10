@@ -345,14 +345,67 @@ def compute_valuation(
             # implies" a multiple the PEG math doesn't produce. The
             # guardrail note below still names the binding floor, and the
             # target math is untouched (fair_pe already reflects the floor).
-            # (When the rate guardrail also binds, the old copy stands — the
-            # guardrail + rate notes disclose both drivers.)
+            # (Batch 45 completes the honesty class on the cap side: when a
+            # cap or the rate guardrail binds, the primary bullet now names
+            # the raw PEG-implied multiple and the binding driver instead
+            # of claiming the PEG math implies the guarded number.)
             multiple_line = (
                 f"A PEG of {PEG_TARGET} on {eps_growth_pct:.1f}% growth implies a fair "
                 f"P/E of {raw_pe:.1f}× — below the {_MIN_PE:.0f}× floor for "
                 f"low-growth earnings, so valued at the floor instead "
                 f"(current P/E is {current_pe:.1f}×)."
             )
+        elif raw_pe > _MAX_PE:
+            # Batch 45: cap-side mirror of the batch-40 floor honesty fix.
+            # PEG math implies raw_pe (on growth already clamped to the
+            # model maximum); the 40x cap — and possibly the rate
+            # guardrail — produces fair_pe. Never claim "a PEG of 1.5 on
+            # that growth implies" the guarded number: 41 of 102 DB
+            # companies rendered that false claim (e.g. CVX "implies a
+            # fair P/E of 37.0×" when the PEG math implies 51.8×). The
+            # guardrail/rate notes below still name the binding drivers,
+            # and the target math is untouched (fair_pe already reflects
+            # the caps).
+            drivers = f"above the {_MAX_PE:.0f}× cap for high-growth earnings"
+            if rate_note is not None:
+                drivers += (
+                    f", and further capped at {fair_pe:.1f}× "
+                    f"by the rate environment"
+                )
+            growth_txt = (
+                f"{eps_growth_pct:.1f}% growth "
+                f"(above the {_MAX_GROWTH_PCT:.0f}% model maximum)"
+                if eps_growth_pct > _MAX_GROWTH_PCT
+                else f"{eps_growth_pct:.1f}% growth"
+            )
+            multiple_line = (
+                f"A PEG of {PEG_TARGET} on {growth_txt} implies a fair "
+                f"P/E of {raw_pe:.1f}× — {drivers}, so valued at {fair_pe:.1f}× "
+                f"instead (current P/E is {current_pe:.1f}×)."
+            )
+        elif rate_note is not None:
+            # Batch 45: rate guardrail binds alone (the 24.7%–26.67% growth
+            # band at a 4.5% 10-year; or, with a very high yield, below the
+            # 8x floor). Same honesty class: the PEG math implies raw_pe,
+            # not the rate-capped number.
+            if raw_pe > fair_pe:
+                multiple_line = (
+                    f"A PEG of {PEG_TARGET} on {eps_growth_pct:.1f}% growth implies a fair "
+                    f"P/E of {raw_pe:.1f}× — above what the rate environment allows, "
+                    f"so valued at {fair_pe:.1f}× instead (current P/E is {current_pe:.1f}×)."
+                )
+            else:
+                # raw_pe < fair_pe only when the 8x floor bound first and
+                # the rate guardrail then capped the floor value (needs a
+                # >20.8% 10-year — unreachable at the default 4.5%
+                # benchmark). Name the chain honestly.
+                multiple_line = (
+                    f"A PEG of {PEG_TARGET} on {eps_growth_pct:.1f}% growth implies a fair "
+                    f"P/E of {raw_pe:.1f}× — below the {_MIN_PE:.0f}× floor for "
+                    f"low-growth earnings, and the floor multiple is further capped "
+                    f"at {fair_pe:.1f}× by the rate environment, so valued at "
+                    f"{fair_pe:.1f}× instead (current P/E is {current_pe:.1f}×)."
+                )
         else:
             multiple_line = (
                 f"A PEG of {PEG_TARGET} on that growth implies a fair P/E of {fair_pe:.1f}× "
@@ -432,6 +485,23 @@ def compute_valuation(
             revenue_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT,
             raw_ps, 0.0, _MAX_PS, "P/S",
         )
+        if raw_ps > _MAX_PS:
+            # Batch 45: same honesty class as the PEG-path cap fix — the
+            # margin×P/E identity implies raw_ps, the 10x cap produces
+            # fair_ps. Say so instead of claiming the identity implies the
+            # capped number (V rendered "implies a fair P/S of 10.0×" when
+            # 51.7% × 21.6× = 11.2×).
+            ps_line = (
+                f"TTM net margin {ttm_net_margin * 100:.1f}% × fair P/E "
+                f"{fair_pe_curve:.1f}× implies a fair P/S of {raw_ps:.1f}× — "
+                f"above the {_MAX_PS:.0f}× cap, so valued at {fair_ps:.1f}× "
+                f"instead (current P/S is {current_ps:.1f}×)."
+            )
+        else:
+            ps_line = (
+                f"TTM net margin {ttm_net_margin * 100:.1f}% × fair P/E {fair_pe_curve:.1f}× "
+                f"implies a fair P/S of {fair_ps:.1f}× (current P/S is {current_ps:.1f}×)."
+            )
         sales_confidence = "Medium" if confidence == "High" else confidence
         if guardrail_note is not None:
             sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
@@ -445,8 +515,7 @@ def compute_valuation(
             # earnings" claim was false for every company on this path.
             "No per-share earnings to anchor a P/E multiple — valuing on sales "
             "instead (less reliable).",
-            f"TTM net margin {ttm_net_margin * 100:.1f}% × fair P/E {fair_pe_curve:.1f}× "
-            f"implies a fair P/S of {fair_ps:.1f}× (current P/S is {current_ps:.1f}×).",
+            ps_line,
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
             f"({upside:+.1f}% implied upside).",
         ]

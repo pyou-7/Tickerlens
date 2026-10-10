@@ -356,12 +356,116 @@ def test_growth_just_above_floor_keeps_peg_copy():
                for p in v.reasoning)
 
 
-def test_floor_plus_rate_cap_keeps_old_copy():
-    # Both guardrails bind (4% growth, 25% 10Y): the guardrail note and the
-    # rate note disclose both drivers, so the primary line is left alone.
+def test_floor_plus_rate_cap_honest_chain():
+    # Batch 45 supersedes the batch-40 punt: 4% growth at a 25% 10Y — the
+    # PEG math implies 6.0x, the 8x floor would bind, and the rate
+    # guardrail caps the floor value at 6.7x. The primary bullet must name
+    # the chain instead of claiming "a PEG of 1.5 on that growth implies
+    # a fair P/E of 6.7x". (Unreachable at the default 4.5% benchmark —
+    # needs a >20.8% 10-year — but the copy must stay honest there too.)
     v = _base(eps_growth_pct=4.0, ten_year_yield_pct=25.0)
     assert v.fair_multiple == pytest.approx(6.7)
     assert v.confidence == "Medium"
-    assert any("on that growth implies a fair P/E of 6.7×" in p for p in v.reasoning)
-    assert any("hit the 8× floor" in p for p in v.reasoning)
-    assert any("10-year Treasury is at 25.0%" in p for p in v.reasoning)
+    assert not any("on that growth implies a fair P/E of 6.7×" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 6.0× — below the 8× floor" in p for p in v.reasoning)
+    assert any("further capped at 6.7× by the rate environment" in p for p in v.reasoning)
+    assert any("hit the 8× floor" in p for p in v.reasoning)  # guardrail note intact
+    assert any("10-year Treasury is at 25.0%" in p for p in v.reasoning)  # rate note intact
+
+
+# ── Batch 45: honest cap-side copy when the 40x P/E cap (or rate) binds
+def test_high_growth_cap_copy_honest():
+    # 30% growth: 1.5 x 30 = 45x sits above the 40x P/E cap (yield pinned
+    # low so the rate guardrail stays dormant). The card must not claim
+    # "a PEG of 1.5 on that growth implies a fair P/E of 40.0x" — the
+    # cap drives the multiple; say so, with the PEG-implied multiple shown.
+    v = _base(eps_growth_pct=30.0, ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.fair_multiple == pytest.approx(40.0)
+    assert v.target_price == pytest.approx(200.0)  # 5.0 EPS * 40x — math unchanged
+    assert v.confidence == "Medium"  # guardrail drove the target
+    assert not any("on that growth implies a fair P/E of 40.0" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 45.0× — above the 40× cap" in p for p in v.reasoning)
+    assert any("so valued at 40.0× instead" in p for p in v.reasoning)
+    assert any("hit the 40× cap" in p for p in v.reasoning)  # guardrail note intact
+
+
+def test_high_growth_cap_plus_rate_copy_honest():
+    # Mirror the CVX case: 34.5% growth at the default 4.5% 10Y — PEG math
+    # implies 51.75x, the 40x cap binds, and the rate guardrail caps at
+    # 37.0x. Both drivers must be named in the primary bullet.
+    v = _base(eps_growth_pct=34.5)
+    assert v.fair_multiple == pytest.approx(37.0)
+    assert v.target_price == pytest.approx(185.19)  # 5.0 EPS * 37.04 — math unchanged
+    assert v.confidence == "Medium"
+    assert not any("on that growth implies a fair P/E of 37.0" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 51.8× — above the 40× cap" in p for p in v.reasoning)
+    assert any("further capped at 37.0× by the rate environment" in p for p in v.reasoning)
+    assert any("hit the 40× cap" in p for p in v.reasoning)
+    assert any("10-year Treasury is at 4.5%" in p for p in v.reasoning)
+
+
+def test_growth_clamped_names_model_maximum():
+    # Mirror the COF case: 100% growth is clamped to the 40% model maximum
+    # before the PEG math runs — the bullet must not claim 1.5 x 100%
+    # implies 60x without naming the clamp.
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v.fair_multiple == pytest.approx(40.0)
+    assert v.target_price == pytest.approx(200.0)  # math unchanged
+    assert any("100.0% growth (above the 40% model maximum)" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 60.0× — above the 40× cap" in p for p in v.reasoning)
+    assert any("hit the 40% cap" in p for p in v.reasoning)  # growth-clamp note intact
+
+
+def test_rate_only_band_copy_honest():
+    # 25% growth at the default 4.5% 10Y: PEG math implies 37.5x — under
+    # the 40x cap but above the 37.0x the rate environment allows. Only
+    # the rate guardrail binds; the bullet must name it, not attribute
+    # 37.0x to the PEG math.
+    v = _base(eps_growth_pct=25.0)
+    assert v.fair_multiple == pytest.approx(37.0)
+    assert v.confidence == "Medium"
+    assert not any("on that growth implies a fair P/E of 37.0" in p for p in v.reasoning)
+    assert any("implies a fair P/E of 37.5× — above what the rate environment allows" in p
+               for p in v.reasoning)
+    assert any("so valued at 37.0× instead" in p for p in v.reasoning)
+    assert any("10-year Treasury is at 4.5%" in p for p in v.reasoning)
+
+
+def test_unclamped_growth_keeps_peg_copy():
+    # 20% growth, low yield: 1.5 x 20 = 30x, no guardrail binds — the PEG
+    # implication is exact, so the original copy stands and confidence
+    # stays High (regression guard for the new branches).
+    v = _base(eps_growth_pct=20.0, ten_year_yield_pct=2.0)
+    assert v.fair_multiple == pytest.approx(30.0)
+    assert v.confidence == "High"
+    assert any("A PEG of 1.5 on that growth implies a fair P/E of 30.0×" in p
+               for p in v.reasoning)
+
+
+def test_sales_ps_cap_copy_honest():
+    # Mirror the V case: 51.7% margin x fair P/E 21.6x = 11.2x raw P/S,
+    # above the 10x cap. The card must not claim the margin×P/E identity
+    # implies the capped 10.0x.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None,
+              ttm_revenue=100_000_000_000.0, revenue_growth_pct=14.4,
+              ttm_net_income=51_700_000_000.0,
+              shares_outstanding=2_000_000_000.0, ten_year_yield_pct=2.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(10.0)
+    assert not any("implies a fair P/S of 10.0×" in p for p in v.reasoning)
+    assert any("implies a fair P/S of 11.2× — above the 10× cap" in p for p in v.reasoning)
+    assert any("so valued at 10.0× instead" in p for p in v.reasoning)
+    assert any("fair P/S hit the 10× cap" in p for p in v.reasoning)  # note intact
+
+
+def test_sales_no_cap_keeps_ps_copy():
+    # Raw P/S under the cap: the identity implication is exact, so the
+    # original copy stands (regression guard).
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None,
+              ttm_revenue=100_000_000_000.0, revenue_growth_pct=10.0,
+              ttm_net_income=20_000_000_000.0,
+              shares_outstanding=2_000_000_000.0, ten_year_yield_pct=2.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(3.0)  # 20% margin x 15x P/E
+    assert any("implies a fair P/S of 3.0× (current P/S is" in p for p in v.reasoning)
