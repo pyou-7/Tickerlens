@@ -332,3 +332,88 @@ def test_ai_analysis_missing_yoy_growth_neutral() -> None:
     analysis = generate_ai_analysis(overview=overview, valuation=None, rows=[])
     assert analysis.growth_score == 50
     assert not any("YoY in Q2 FY2026" in t for t in analysis.theses)
+
+
+def test_ai_analysis_flat_revenue_no_growth_narrative() -> None:
+    """Batch 41: near-flat revenue (the DHI +0.015% Q3 FY2026 shape) must not
+    render as growth — the old branch said "Top-line revenue grew +0.0% YoY ...
+    healthy demand", fabricating a demand narrative from noise."""
+    overview = _bank_overview(
+        sector="Construction",
+        ticker="DHI",
+        name="D R HORTON INC",
+        yoy=KPIChange(revenue=0.015, net_income=2.0, eps_diluted=1.0, free_cash_flow=5.0),
+    )
+    analysis = generate_ai_analysis(overview=overview, valuation=None, rows=[])
+    rev = next(t for t in analysis.theses if "Top-line revenue" in t)
+    assert "essentially flat" in rev
+    assert "+0.0%" in rev
+    assert "grew" not in rev
+    assert "healthy demand" not in rev
+    # growth ladder untouched: still the 55 flat-growth rung, copy-only change
+    assert analysis.growth_score == 55
+
+
+def test_ai_analysis_flat_band_boundary() -> None:
+    """Batch 41: the flat band is |rev_yoy| < 2.0 — just inside stays flat,
+    exactly 2.0 keeps the growth line (mirrors the valuation copy's 0-2%
+    "essentially flat" band, batch 27)."""
+    inside = _bank_overview(
+        yoy=KPIChange(revenue=1.99, net_income=2.0, eps_diluted=1.0, free_cash_flow=5.0),
+    )
+    rev_in = next(
+        t for t in generate_ai_analysis(overview=inside, valuation=None, rows=[]).theses
+        if "Top-line revenue" in t
+    )
+    assert "essentially flat" in rev_in
+
+    edge = _bank_overview(
+        yoy=KPIChange(revenue=2.0, net_income=2.0, eps_diluted=1.0, free_cash_flow=5.0),
+    )
+    rev_edge = next(
+        t for t in generate_ai_analysis(overview=edge, valuation=None, rows=[]).theses
+        if "Top-line revenue" in t
+    )
+    assert rev_edge.startswith("Top-line revenue grew +2.0%")
+
+
+def test_ai_analysis_declining_revenue_honest_copy() -> None:
+    """Batch 41: a revenue decline (the COIN -18.5% Q2 FY2026 shape) must not
+    render as "grew -18.5% ... fee-income momentum"."""
+    overview = _bank_overview(
+        sector="Financial Services",
+        ticker="COIN",
+        name="COINBASE GLOBAL INC",
+        yoy=KPIChange(revenue=-18.5, net_income=-10.0, eps_diluted=-8.0, free_cash_flow=-5.0),
+    )
+    analysis = generate_ai_analysis(overview=overview, valuation=None, rows=[])
+    rev = next(t for t in analysis.theses if "Top-line revenue" in t)
+    assert rev.startswith("Top-line revenue declined 18.5%")
+    assert "grew" not in rev
+    assert "momentum" not in rev
+    # financial-sector register: fee income, not "soft demand in end markets"
+    assert "fee income" in rev
+
+    # non-financial decline keeps the generic register
+    ind = _bank_overview(
+        sector="Manufacturing",
+        ticker="DECL",
+        yoy=KPIChange(revenue=-5.0, net_income=-10.0, eps_diluted=-8.0, free_cash_flow=-5.0),
+    )
+    rev_ind = next(
+        t for t in generate_ai_analysis(overview=ind, valuation=None, rows=[]).theses
+        if "Top-line revenue" in t
+    )
+    assert "declined 5.0%" in rev_ind
+    assert "soft demand" in rev_ind
+
+
+def test_ai_analysis_growth_thesis_unchanged() -> None:
+    """Batch 41 regression: healthy growth keeps the original line and the
+    sector-aware tail (batch 25)."""
+    analysis = generate_ai_analysis(overview=_bank_overview(), valuation=None, rows=[])
+    rev = next(t for t in analysis.theses if "Top-line revenue" in t)
+    assert rev == (
+        "Top-line revenue grew +10.0% YoY in Q2 FY2026, "
+        "reflecting balance-sheet growth and fee-income momentum."
+    )

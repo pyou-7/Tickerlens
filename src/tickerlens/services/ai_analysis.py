@@ -9,6 +9,13 @@ from tickerlens.services.financials import CompanyOverview, DetailContext
 from tickerlens.services.valuation import ValuationSignal
 
 
+# Revenue growth below this magnitude is noise, not a demand signal:
+# the old thesis rendered "grew +0.0% YoY ... healthy demand" for
+# essentially-flat quarters (DHI +0.015%, batch 41). The 2% band mirrors
+# the valuation copy's "essentially flat" band for EPS growth (batch 27).
+_FLAT_REVENUE_PCT = 2.0
+
+
 class AIAnalysis(BaseModel):
     """Integrated fundamental research & AI synthesis briefing (PRD §4.4)."""
 
@@ -89,6 +96,18 @@ def _revenue_thesis_tail(sector: str | None) -> str:
     if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
         return "reflecting balance-sheet growth and fee-income momentum."
     return "reflecting healthy demand across commercial segments."
+
+
+def _revenue_decline_tail(sector: str | None) -> str:
+    """Sector-aware close for the revenue-decline thesis.
+
+    Mirrors _revenue_thesis_tail: financials' "revenue" is net interest /
+    fee income, so "soft demand in end markets" would be wrong-register.
+    """
+    sec = (sector or "").lower()
+    if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
+        return "a softer quarter for balance-sheet growth and fee income."
+    return "signaling soft demand in its end markets this quarter."
 
 
 def _extract_key_risks(
@@ -246,10 +265,28 @@ def generate_ai_analysis(
 
     # Theses points (citing exact metrics)
     theses: list[str] = []
-    if rev_yoy != 0:
+    if rev_yoy == 0:
+        pass  # no YoY data or exactly zero — no revenue narrative to give
+    elif abs(rev_yoy) < _FLAT_REVENUE_PCT:
+        # Near-flat revenue is not growth and carries no demand signal:
+        # the old branch rendered "grew +0.0% YoY ... healthy demand" for
+        # essentially-flat quarters (DHI +0.015%), fabricating a demand
+        # narrative from noise.
+        theses.append(
+            f"Top-line revenue was essentially flat YoY in {overview.latest_label} "
+            f"({rev_yoy:+.1f}%), with no demand signal either way this quarter."
+        )
+    elif rev_yoy > 0:
         theses.append(
             f"Top-line revenue grew {rev_yoy:+.1f}% YoY in {overview.latest_label}, "
             f"{_revenue_thesis_tail(overview.sector)}"
+        )
+    else:
+        # A decline is not "growth": the old branch rendered
+        # "grew -18.5% ... fee-income momentum" (COIN Q2 FY2026).
+        theses.append(
+            f"Top-line revenue declined {abs(rev_yoy):.1f}% YoY in {overview.latest_label}, "
+            f"{_revenue_decline_tail(overview.sector)}"
         )
     if net_margin > 0:
         theses.append(
