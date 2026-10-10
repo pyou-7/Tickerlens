@@ -264,6 +264,16 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
     assert any(f.revenue == pytest.approx(95_000) for f in financials)
 
 
+def test_fetch_and_persist_defaults_to_eight_quarters() -> None:
+    # Batch 44: ad-hoc seeds that omitted `periods` silently used the old
+    # default of 4 and left thin tickers (LMT, ZTS, PYPL) with NULL freshness
+    # markers in the DB. The persisting default must stay 8.
+    import inspect
+
+    sig = inspect.signature(FinancialsService.fetch_and_persist)
+    assert sig.parameters["periods"].default == 8
+
+
 # ── _compute_qoq ─────────────────────────────────────────────────────────────
 
 def test_compute_qoq_calculates_change_from_prior_quarter() -> None:
@@ -2309,6 +2319,131 @@ def test_refresh_refires_after_pull_with_unprocessed_filing(
 
     assert svc.refresh_financials_if_stale("DUK") is True
     svc.fetch_and_persist.assert_called_once_with("DUK", periods=8)
+
+
+def _middle_gap_submissions() -> dict:
+    """SKYD shape (batch 44): the Q3'25 10-Q was filed 2025-11-10 but SEC
+    never ingested its facts; the marker sits at 2026-08-04 on newer
+    processed filings."""
+    return {"filings": {"recent": {
+        "form": ["10-Q", "10-Q", "10-K", "10-Q"],
+        "filingDate": ["2026-08-04", "2026-05-04", "2026-02-25", "2025-11-10"],
+        "reportDate": ["2026-06-30", "2026-03-31", "2025-12-31", "2025-09-30"],
+    }}}
+
+
+def test_middle_gap_helper_detects_unprocessed_filing() -> None:
+    from tickerlens.services.financials import _has_unprocessed_quarter_in_window
+
+    stored = [  # 2025-09-30 missing from inside the window
+        "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30",
+        "2025-12-31", "2026-03-31", "2026-06-30",
+    ]
+    assert _has_unprocessed_quarter_in_window(
+        _middle_gap_submissions(), stored, "2026-08-04"
+    ) is True
+
+
+def test_middle_gap_helper_quiet_when_no_gap() -> None:
+    from tickerlens.services.financials import _has_unprocessed_quarter_in_window
+
+    stored = ["2025-09-30", "2025-12-31", "2026-03-31", "2026-06-30"]
+    assert _has_unprocessed_quarter_in_window(
+        _middle_gap_submissions(), stored, "2026-08-04"
+    ) is False
+
+
+def test_middle_gap_helper_ignores_out_of_window_filing() -> None:
+    """A filing older than the stored window is legitimately unstored —
+    must not false-positive into perpetual re-pulls."""
+    from tickerlens.services.financials import _has_unprocessed_quarter_in_window
+
+    submissions = {"filings": {"recent": {
+        "form": ["10-Q", "10-Q"],
+        "filingDate": ["2026-08-04", "2024-05-01"],
+        "reportDate": ["2026-06-30", "2024-03-31"],
+    }}}
+    stored = ["2026-03-31", "2026-06-30"]  # 2024-03-31 outside the window
+    assert _has_unprocessed_quarter_in_window(submissions, stored, "2026-08-04") is False
+
+
+def test_middle_gap_helper_ignores_filing_newer_than_marker() -> None:
+    """A filing newer than the marker is the latest>marker path's
+    responsibility, not the middle-gap check's."""
+    from tickerlens.services.financials import _has_unprocessed_quarter_in_window
+
+    submissions = {"filings": {"recent": {
+        "form": ["10-Q"],
+        "filingDate": ["2026-08-04"],
+        "reportDate": ["2026-06-30"],
+    }}}
+    assert _has_unprocessed_quarter_in_window(submissions, ["2026-03-31"], "2026-05-01") is False
+
+
+def test_refresh_fires_on_middle_gap(
+    session: Session, _fresh_filings_state
+) -> None:
+    """End-to-end of the batch-44 middle-gap check: the marker is ahead of an
+    un-ingested middle filing, so the refresh fires instead of treating the
+    missing quarter as handled."""
+    cik = "0002041610"
+    company = _company(cik=cik, name="Skydance Corp", ticker="SKYD")
+    company.xbrl_filings_processed = "2026-08-04"
+    session.add(company)
+    for end, fy, fp in [
+        (dt.date(2024, 9, 30), 2025, "Q3"),
+        (dt.date(2024, 12, 31), 2025, "Q4"),
+        (dt.date(2025, 3, 31), 2025, "Q1"),
+        (dt.date(2025, 6, 30), 2025, "Q2"),
+        # 2025-09-30 (Q3) missing: filed 2025-11-10, never ingested by SEC
+        (dt.date(2025, 12, 31), 2025, "Q4"),
+        (dt.date(2026, 3, 31), 2026, "Q1"),
+        (dt.date(2026, 6, 30), 2026, "Q2"),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy,
+                         fiscal_period=fp, revenue=1.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    svc.fetch_and_persist.assert_called_once_with("SKYD", periods=8)
+
+
+def test_refresh_skips_when_middle_gap_closed(
+    session: Session, _fresh_filings_state
+) -> None:
+    """Same shape but every in-window filing has its quarter stored —
+    the middle-gap check must not fire."""
+    cik = "0002041610"
+    company = _company(cik=cik, name="Skydance Corp", ticker="SKYD")
+    company.xbrl_filings_processed = "2026-08-04"
+    session.add(company)
+    for end, fy, fp in [
+        (dt.date(2025, 9, 30), 2025, "Q3"),
+        (dt.date(2025, 12, 31), 2025, "Q4"),
+        (dt.date(2026, 3, 31), 2026, "Q1"),
+        (dt.date(2026, 6, 30), 2026, "Q2"),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy,
+                         fiscal_period=fp, revenue=1.0))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is False
+    svc.fetch_and_persist.assert_not_called()
 
 
 def test_fetch_and_persist_pull_uses_live_edgar(

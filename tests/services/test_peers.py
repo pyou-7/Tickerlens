@@ -130,7 +130,8 @@ def test_sic_prefix_limit_and_dedupe() -> None:
 #   SKX  delisted (3G Capital take-private)
 #   SQ   Block changed ticker to XYZ
 #   BYD  resolves to BOYD GAMING CORP (casino), not the EV maker
-#   PARA ticker reassigned to Banzai International (Paramount is now PSKY)
+#   PARA ticker reassigned to Banzai International (Paramount Skydance is now SKYD;
+#   re-tickered from PSKY 2026-10-10 — batch 44)
 #   EDTK Skillful Craftsman Education Technology Ltd (Chinese micro-cap)
 _KNOWN_BAD_PEERS = {"DFS", "EA", "GPS", "GRUB", "LC", "SKX", "SQ", "BYD", "PARA", "EDTK"}
 
@@ -146,6 +147,18 @@ def test_peer_maps_contain_no_known_bad_tickers() -> None:
         assert not bad, f"SIC prefix {prefix}: {bad}"
 
 
+def test_peer_maps_contain_no_renamed_tickers() -> None:
+    # Batch 44: Paramount Skydance re-tickered PSKY -> SKYD (SEC
+    # company_tickers.json, 2026-10-10). A stale PSKY peer chip links to
+    # /company/PSKY, which 404s — the renamed ticker must not survive in the maps.
+    from tickerlens.services.peers import _CURATED_PEERS, _SIC_PREFIX_PEERS
+
+    for key, peers in _CURATED_PEERS.items():
+        assert "PSKY" not in peers, f"curated {key}: stale PSKY peer"
+    for prefix, peers in _SIC_PREFIX_PEERS.items():
+        assert "PSKY" not in peers, f"SIC prefix {prefix}: stale PSKY peer"
+
+
 def test_peer_replacements_curated() -> None:
     cases = {
         # ticker: (must be present, must be absent)
@@ -155,8 +168,8 @@ def test_peer_replacements_curated() -> None:
         "SOFI": ("COF", "LC"),     # LC unresolvable
         "RBLX": ("APP", "EA"),     # EA delisted
         "NKE": ("SHOO", "SKX"),    # SKX delisted
-        "DIS": ("PSKY", "PARA"),   # PARA reassigned to Banzai
-        "NFLX": ("PSKY", "PARA"),
+        "DIS": ("SKYD", "PARA"),   # PARA reassigned to Banzai; PSKY re-tickered to SKYD
+        "NFLX": ("SKYD", "PARA"),
     }
     for ticker, (good, bad) in cases.items():
         got = [p.ticker for p in get_peers_for_company(ticker)]
@@ -171,7 +184,7 @@ def test_peer_replacements_sic_fallback() -> None:
         "7311": ("XYZ", "SQ"),     # Block ticker change
         "5611": ("GAP", "GPS"),    # Gap is GAP in the SEC file
         "3011": ("WWW", "SKX"),    # SKX delisted
-        "7812": ("PSKY", "PARA"),  # PARA reassigned
+        "7812": ("SKYD", "PARA"),  # PARA reassigned; PSKY re-tickered to SKYD
         "7812b": ("ROKU", "EA"),   # EA delisted (same prefix, second check)
     }
     for sic, (good, bad) in cases.items():

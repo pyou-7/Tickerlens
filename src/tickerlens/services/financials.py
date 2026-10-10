@@ -6,7 +6,7 @@ import threading
 import time
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -120,6 +120,43 @@ def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
         if marker is None or filing_date > marker:
             marker = filing_date
     return marker
+
+
+def _has_unprocessed_quarter_in_window(
+    submissions: dict, stored_ends: list[str], marker: str
+) -> bool:
+    """True when a quarterly filing at-or-before the marker has no stored quarter.
+
+    Batch 44: ``xbrl_filings_processed`` tracks only the latest *processed*
+    filing, so a 10-Q/10-K older than the marker whose XBRL facts SEC never
+    ingested (SKYD's merger-era Q3'25 10-Q, filed 2025-11-10, report
+    2025-09-30) would otherwise never refire the refresh — newer processed
+    filings keep the marker ahead of it forever. This scans the
+    already-fetched submissions feed for a quarterly filing no newer than the
+    marker whose reportDate falls inside the stored window yet has no stored
+    quarter. Window-bounded so filings older than the extraction window
+    (legitimately unstored) don't false-positive.
+    """
+    if not stored_ends:
+        return False
+    lo, hi = min(stored_ends), max(stored_ends)
+    have = set(stored_ends)
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    reports = recent.get("reportDate") or []
+    for form, filing_date, report_date in zip(forms, dates, reports):
+        if form not in _QUARTERLY_FILING_FORMS:
+            continue
+        if not filing_date or not report_date:
+            continue
+        if filing_date > marker:
+            continue  # newer than the marker: the latest>marker path owns it
+        if not (lo <= report_date <= hi):
+            continue  # outside the extracted window — legitimately unstored
+        if report_date not in have:
+            return True
+    return False
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -433,10 +470,17 @@ class FinancialsService:
     def fetch_and_persist(
         self,
         ticker: str,
-        periods: int = 4,
+        periods: int = 8,
         session: Session | None = None,
     ) -> list[QuarterlyFinancials]:
-        """Fetch XBRL financials from EDGAR and upsert into SQLite."""
+        """Fetch XBRL financials from EDGAR and upsert into SQLite.
+
+        The default window is 8 quarters (not 4): every route seeds with
+        ``periods=8``, and a thinner default left ad-hoc seeds (LMT, ZTS,
+        PYPL — batch 44) with half a window and NULL freshness markers,
+        degrading YoY comparisons and the valuation card until a page view
+        happened to trigger the refresh.
+        """
         cik = _resolve_cik(self.edgar_client, ticker)
         # Deliberate pull: always read live EDGAR, never a cached snapshot.
         # The disk cache has a TTL, but the pull only happens when the
@@ -509,10 +553,13 @@ class FinancialsService:
                 return False
             db = self._session or get_session()
             try:
-                max_period_end = db.scalar(
-                    select(func.max(QuarterlyFinancial.period_end)).where(
-                        QuarterlyFinancial.cik == cik
-                    )
+                stored_ends = sorted(
+                    r.isoformat()
+                    for r in db.scalars(
+                        select(QuarterlyFinancial.period_end).where(
+                            QuarterlyFinancial.cik == cik
+                        )
+                    ).all()
                 )
                 processed_db = db.scalar(
                     select(Company.xbrl_filings_processed).where(
@@ -522,8 +569,9 @@ class FinancialsService:
             finally:
                 if self._session is None:
                     db.close()
-            if max_period_end is None:
+            if not stored_ends:
                 return False  # first-visit path in the route handles this
+            max_period_end_iso = stored_ends[-1]
             # The persisted marker is the primary guard: a filing date always
             # postdates the quarter's period end, so comparing the filing
             # date against period_end alone would re-pull after every restart.
@@ -532,8 +580,15 @@ class FinancialsService:
             known = processed_db if processed_db is not None else processed
             if known is not None:
                 needs_refresh = latest > known
+                if not needs_refresh:
+                    # Middle-gap check (batch 44): a quarterly filing older
+                    # than the marker whose facts SEC never ingested would
+                    # otherwise never refire — see _has_unprocessed_quarter_in_window.
+                    needs_refresh = _has_unprocessed_quarter_in_window(
+                        submissions, stored_ends, known
+                    )
             else:
-                needs_refresh = latest > max_period_end.isoformat()
+                needs_refresh = latest > max_period_end_iso
             if needs_refresh:
                 self.fetch_and_persist(ticker, periods=8)
                 db2 = self._session or get_session()

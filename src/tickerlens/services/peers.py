@@ -63,9 +63,11 @@ _CURATED_PEERS: dict[str, list[str]] = {
     "BRK.B": ["AIG", "MET", "CB", "TRV", "PGR"],
     "T": ["VZ", "TMUS", "CMCSA", "CHTR", "LUMN"],
     # Media / Retail / Consumer staples — batch 28: PARA ticker reassigned to
-    # Banzai International after the Paramount Skydance merger; PSKY is the media co.
-    "DIS": ["NFLX", "WBD", "PSKY", "CMCSA", "FOX"],
-    "NFLX": ["DIS", "WBD", "PSKY", "ROKU", "AMZN"],
+    # Banzai International after the Paramount Skydance merger.
+    # Batch 44: Paramount Skydance re-tickered PSKY -> SKYD (SEC company_tickers.json,
+    # verified 2026-10-10); the company is now "Skydance Corp".
+    "DIS": ["NFLX", "WBD", "SKYD", "CMCSA", "FOX"],
+    "NFLX": ["DIS", "WBD", "SKYD", "ROKU", "AMZN"],
     "HD": ["LOW", "WMT", "COST", "TGT", "BBY"],
     "PG": ["CL", "KMB", "UL", "EL", "CHD"],
     "NKE": ["DECK", "CROX", "SHOO", "LULU", "WWW"],  # batch 28: SKX delisted; BIRK tried but files 20-F (unsupported)
@@ -90,8 +92,8 @@ _SIC_PREFIX_PEERS: dict[str, list[str]] = {
     #  - 73: SQ -> XYZ (Block ticker change)
     #  - 56: GPS not in SEC file (Gap is listed as GAP) -> GAP
     #  - 30: SKX delisted -> WWW
-    #  - 781/784/799: PARA reassigned to Banzai (Paramount is now PSKY),
-    #    EA delisted -> PSKY, ROKU
+    #  - 781/784/799: PARA reassigned to Banzai (Paramount is now SKYD, re-tickered
+    #    from PSKY 2026-10-10 — batch 44), EA delisted -> SKYD, ROKU
     "61": ["SOFI", "SYF", "COF", "AXP", "ALLY"],  # Credit institutions
     "62": ["GS", "MS", "GLXY", "COIN"],  # Security brokers
     "63": ["BRK.B", "AIG", "MET", "CB", "TRV"],  # Insurance carriers
@@ -120,9 +122,9 @@ _SIC_PREFIX_PEERS: dict[str, list[str]] = {
     "596": ["AMZN", "EBAY", "ETSY"],  # Electronic shopping
     # Telecom / Media / Transport / Wholesale
     "48": ["T", "VZ", "TMUS", "CMCSA", "CHTR"],  # Telecom
-    "781": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Motion pictures
-    "784": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Video rental/entertainment
-    "799": ["DIS", "NFLX", "WBD", "PSKY", "ROKU"],  # Amusement & recreation
+    "781": ["DIS", "NFLX", "WBD", "SKYD", "ROKU"],  # Motion pictures
+    "784": ["DIS", "NFLX", "WBD", "SKYD", "ROKU"],  # Video rental/entertainment
+    "799": ["DIS", "NFLX", "WBD", "SKYD", "ROKU"],  # Amusement & recreation
     "45": ["DAL", "UAL", "AAL", "LUV", "ALK"],  # Air transportation
     "47": ["FDX", "UPS", "XPO", "JBHT", "CHRW"],  # Transport services
     "50": ["GWW", "FAST", "WSO", "MSM", "POOL"],  # Durable wholesale
