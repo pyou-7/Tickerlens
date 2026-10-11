@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -2444,6 +2445,278 @@ def test_refresh_skips_when_middle_gap_closed(
 
     assert svc.refresh_financials_if_stale("SKYD") is False
     svc.fetch_and_persist.assert_not_called()
+
+
+# ── ingested-but-unextractable gap acknowledgment (batch 48) ─────────────────
+
+def test_missing_in_window_quarters_lists_gaps() -> None:
+    from tickerlens.services.financials import _missing_in_window_quarters
+
+    stored = [  # 2025-09-30 missing from inside the window
+        "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30",
+        "2025-12-31", "2026-03-31", "2026-06-30",
+    ]
+    assert _missing_in_window_quarters(
+        _middle_gap_submissions(), stored, "2026-08-04"
+    ) == ["2025-09-30"]
+
+
+def test_missing_in_window_quarters_dedupes_amendments() -> None:
+    """A 10-K and its 10-K/A share a reportDate — one gap, not two."""
+    from tickerlens.services.financials import _missing_in_window_quarters
+
+    submissions = {"filings": {"recent": {
+        "form": ["10-K/A", "10-K", "10-Q"],
+        "filingDate": ["2026-04-24", "2026-02-25", "2026-08-04"],
+        "reportDate": ["2025-12-31", "2025-12-31", "2026-06-30"],
+    }}}
+    stored = ["2025-06-30", "2025-09-30", "2026-03-31", "2026-06-30"]
+    assert _missing_in_window_quarters(
+        submissions, stored, "2026-08-04"
+    ) == ["2025-12-31"]
+
+
+def test_missing_in_window_quarters_honors_skip_list() -> None:
+    from tickerlens.services.financials import (
+        _has_unprocessed_quarter_in_window,
+        _missing_in_window_quarters,
+    )
+
+    stored = [
+        "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30",
+        "2025-12-31", "2026-03-31", "2026-06-30",
+    ]
+    subs = _middle_gap_submissions()
+    assert _missing_in_window_quarters(
+        subs, stored, "2026-08-04", {"2025-09-30"}
+    ) == []
+    assert _has_unprocessed_quarter_in_window(
+        subs, stored, "2026-08-04", {"2025-09-30"}
+    ) is False
+    # ...but an un-acknowledged gap still fires
+    assert _has_unprocessed_quarter_in_window(subs, stored, "2026-08-04") is True
+
+
+def test_read_skipped_quarters_tolerant() -> None:
+    from tickerlens.services.financials import _read_skipped_quarters
+
+    assert _read_skipped_quarters(None) == set()
+    assert _read_skipped_quarters("") == set()
+    assert _read_skipped_quarters("not-json{{{") == set()
+    assert _read_skipped_quarters("42") == set()
+    assert _read_skipped_quarters('["2025-09-30", 7, null]') == {"2025-09-30"}
+
+
+def test_revenue_duration_facts_scoped_to_revenue_chain() -> None:
+    """Only USD duration facts on the generic revenue chain count — a filing
+    can be partially ingested (APLD's FY2026 10-K: 153 duration facts, no
+    annual revenue fact), so any-tag facts must not read as "the extractor
+    had its chance"."""
+    from tickerlens.services.financials import _revenue_duration_facts
+
+    companyfacts = {"facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000},
+            {"start": None, "end": "2025-09-30", "val": 999},  # instant: ignored
+        ]}},
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-06-01", "end": "2026-05-31", "val": 396858000},
+        ]}},
+    }, "dei": {}}}
+    assert _revenue_duration_facts(companyfacts) == {"2025-09-30": [(53, "RevenueFromContractWithCustomerExcludingAssessedTax")]}
+    assert _revenue_duration_facts({"facts": {}}) == {}
+    assert _revenue_duration_facts({}) == {}
+
+
+def _skyd_structural_companyfacts() -> dict:
+    """SKYD shape: 53-day stub Q3'25 + FY2025 annual with stubbed 9M."""
+    rev = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    return {"facts": {"us-gaap": {rev: {"units": {"USD": [
+        {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000},   # 53d stub
+        {"start": "2025-01-01", "end": "2025-12-31", "val": 12269000000},  # 364d annual
+        {"start": "2026-04-01", "end": "2026-06-30", "val": 6913000000},   # 90d quarter
+    ]}}}, "dei": {}}}
+
+
+def test_is_structural_gap_stub_quarter() -> None:
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rf = _revenue_duration_facts(_skyd_structural_companyfacts())
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-09-30") is True
+    # a proper quarter-length fact is extractable, not structural
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2026-06-30") is False
+
+
+def test_is_structural_gap_annual_with_stub_9m() -> None:
+    """SKYD's 10-K gap: annual fact ingested, 9M window holds only the 53-day
+    stub — FY−9M can never derive Q4."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rf = _revenue_duration_facts(_skyd_structural_companyfacts())
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-12-31") is True
+
+
+def test_is_structural_gap_false_when_revenue_missing() -> None:
+    """APLD shape: 153 non-revenue duration facts ingested, but the annual
+    revenue fact still missing — the retry loop must stay alive."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    companyfacts = {"facts": {"us-gaap": {
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-06-01", "end": "2026-05-31", "val": 396858000},
+        ]}},
+    }, "dei": {}}}
+    rf = _revenue_duration_facts(companyfacts)
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2026-05-31") is False
+
+
+def test_is_structural_gap_false_when_9m_proper() -> None:
+    """Annual ingested and a proper 240–290d 9M fact present — Q4 should
+    derive, so a missing quarter here is not structural (keep retrying)."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rev = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    companyfacts = {"facts": {"us-gaap": {rev: {"units": {"USD": [
+        {"start": "2025-01-01", "end": "2025-12-31", "val": 12269000000},  # 364d
+        {"start": "2025-01-01", "end": "2025-09-30", "val": 8000000000},   # 272d 9M
+    ]}}}, "dei": {}}}
+    rf = _revenue_duration_facts(companyfacts)
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-12-31") is False
+
+
+def test_prior_quarter_report_date() -> None:
+    from tickerlens.services.financials import _prior_quarter_report_date
+
+    assert _prior_quarter_report_date(_middle_gap_submissions(), "2025-12-31") == "2025-09-30"
+    assert _prior_quarter_report_date(_middle_gap_submissions(), "2024-01-01") is None
+    assert _prior_quarter_report_date({}, "2025-12-31") is None
+
+
+def _stub_companyfacts() -> dict:
+    """SKYD shape: the merger-stub quarter's facts ARE ingested."""
+    return {"facts": {"us-gaap": {"RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "units": {"USD": [
+            {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000,
+             "filed": "2025-11-10", "form": "10-Q"},
+        ]}}}, "dei": {}}}
+
+
+def _unsubmitted_companyfacts() -> dict:
+    """Batch-37 shape: the missing quarter's facts are NOT ingested yet."""
+    return {"facts": {"us-gaap": {"RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "units": {"USD": [
+            {"start": "2026-04-01", "end": "2026-06-30", "val": 6913000000,
+             "filed": "2026-08-04", "form": "10-Q"},
+        ]}}}, "dei": {}}}
+
+
+def _gap_company(session: Session, cik: str = "0002041610") -> None:
+    company = _company(cik=cik, name="Skydance Corp", ticker="SKYD")
+    company.xbrl_filings_processed = "2026-08-04"
+    session.add(company)
+    for end, fy, fp in [
+        (dt.date(2024, 9, 30), 2025, "Q3"),
+        (dt.date(2024, 12, 31), 2025, "Q4"),
+        (dt.date(2025, 3, 31), 2025, "Q1"),
+        (dt.date(2025, 6, 30), 2025, "Q2"),
+        # 2025-09-30 (Q3) missing: filed 2025-11-10
+        (dt.date(2025, 12, 31), 2025, "Q4"),
+        (dt.date(2026, 3, 31), 2026, "Q1"),
+        (dt.date(2026, 6, 30), 2026, "Q2"),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy,
+                         fiscal_period=fp, revenue=1.0))
+    session.commit()
+
+
+def test_refresh_acknowledges_ingested_stub_then_stays_quiet(
+    session: Session, _fresh_filings_state
+) -> None:
+    """The batch-48 futility fix: a middle-gap refire that still yields no
+    quarter — while the filing's facts ARE ingested (stub period) — records
+    the reportDate as acknowledged; the next check stays quiet instead of
+    re-pulling every 6h forever."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = _stub_companyfacts()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()  # refire yields no new quarter
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert set(json.loads(
+        session.get(Company, "0002041610").xbrl_skipped_quarters
+    )) == {"2025-09-30"}
+
+    # Simulate the next 6h check (fresh in-memory state, as after a restart).
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+    svc.fetch_and_persist.reset_mock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is False
+    svc.fetch_and_persist.assert_not_called()
+
+
+def test_refresh_keeps_retrying_when_facts_not_ingested(
+    session: Session, _fresh_filings_state
+) -> None:
+    """The batch-37 ingestion lag must NOT be acknowledged: with no facts at
+    the missing reportDate, the retry loop stays alive."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = _unsubmitted_companyfacts()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert session.get(Company, "0002041610").xbrl_skipped_quarters is None
+
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert svc.fetch_and_persist.call_count == 2
+
+
+def test_refresh_keeps_retrying_on_partial_ingestion(
+    session: Session, _fresh_filings_state
+) -> None:
+    """APLD shape: the 10-K's facts are partially ingested (153 non-revenue
+    duration facts) but the annual revenue fact is still missing. The
+    revenue-chain-scoped check must NOT acknowledge — the retry loop stays
+    alive until SEC finishes ingesting."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = {"facts": {"us-gaap": {
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-07-01", "end": "2025-09-30", "val": 1000},
+        ]}},
+    }, "dei": {}}}
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert session.get(Company, "0002041610").xbrl_skipped_quarters is None
+
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert svc.fetch_and_persist.call_count == 2
 
 
 def test_fetch_and_persist_pull_uses_live_edgar(

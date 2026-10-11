@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -21,7 +22,12 @@ from tickerlens.data.filings import (
 )
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
-from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
+from tickerlens.data.xbrl import (
+    CONCEPTS,
+    Metric,
+    QuarterlyFinancials,
+    extract_recent_quarterly_financials,
+)
 from tickerlens.data.yahoo import (
     QuoteSnapshot,
     cached_quote,
@@ -122,29 +128,124 @@ def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
     return marker
 
 
-def _has_unprocessed_quarter_in_window(
-    submissions: dict, stored_ends: list[str], marker: str
+def _read_skipped_quarters(value: str | None) -> set[str]:
+    """Parse ``Company.xbrl_skipped_quarters`` tolerantly; never raises."""
+    if not value:
+        return set()
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return set()
+    if not isinstance(parsed, list):
+        return set()
+    return {str(item) for item in parsed if isinstance(item, str)}
+
+
+def _revenue_duration_facts(companyfacts: dict) -> dict[str, list[tuple[int, str]]]:
+    """Map end-date -> [(duration_days, tag)] for USD duration facts on the
+    generic revenue concept chain.
+
+    Used to tell "the filing's facts aren't ingested yet — keep retrying"
+    apart from "the facts are ingested but stub-shaped, so the extractor
+    deliberately yields no quarter — acknowledge and stop". Scoped to the
+    revenue chain (the extractor's anchor): a filing can be partially
+    ingested (APLD's FY2026 10-K: 153 duration facts present, but the annual
+    revenue fact still missing), so any-tag duration facts are not evidence
+    the extractor had its chance. Never raises.
+    """
+    out: dict[str, list[tuple[int, str]]] = {}
+    tags = set(CONCEPTS[Metric.REVENUE].tags)
+    facts = companyfacts.get("facts") or {}
+    for tag, tag_data in ((facts.get("us-gaap") or {}).items()):
+        if tag not in tags:
+            continue
+        for unit_facts in ((tag_data or {}).get("units") or {}).values():
+            for fact in unit_facts or []:
+                start, end = fact.get("start"), fact.get("end")
+                if not start or not end:
+                    continue
+                try:
+                    days = (
+                        dt.date.fromisoformat(end) - dt.date.fromisoformat(start)
+                    ).days
+                except ValueError:
+                    continue
+                out.setdefault(end, []).append((days, tag))
+    return out
+
+
+def _prior_quarter_report_date(submissions: dict, report_date: str) -> str | None:
+    """Greatest quarterly-filing reportDate strictly before ``report_date``."""
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    reports = recent.get("reportDate") or []
+    candidates = [
+        r for f, r in zip(forms, reports)
+        if f in _QUARTERLY_FILING_FORMS and r and r < report_date
+    ]
+    return max(candidates) if candidates else None
+
+
+def _is_structural_gap(
+    revenue_facts: dict[str, list[tuple[int, str]]],
+    submissions: dict,
+    report_date: str,
 ) -> bool:
-    """True when a quarterly filing at-or-before the marker has no stored quarter.
+    """True when the missing quarter is structurally unextractable.
+
+    Two shapes, both observed live (SKYD, batch 48):
+    - 10-Q stub: a sub-quarter (< 70d) revenue fact exists at the reportDate
+      and no 70–100d fact does — the extractor's comparability window
+      deliberately rejects it (SKYD's 53-day merger Q3'25).
+    - 10-K with stub 9M: the annual (340–380d) revenue fact is ingested but
+      the 9M window holds only sub-240d revenue facts, so FY−9M can never
+      derive Q4 (SKYD's FY2025: the merger split 9M into stubs).
+    Anything else — no revenue facts at the reportDate (the batch-37/APLD
+    ingestion lag), or a proper-length fact the extractor should have taken —
+    returns False so the retry loop stays alive.
+    """
+    facts_here = revenue_facts.get(report_date, [])
+    if facts_here and not any(70 <= days <= 100 for days, _ in facts_here):
+        if any(days < 70 for days, _ in facts_here):
+            return True
+    if any(340 <= days <= 380 for days, _ in facts_here):
+        q3 = _prior_quarter_report_date(submissions, report_date)
+        if q3:
+            q3_facts = revenue_facts.get(q3, [])
+            if q3_facts and not any(240 <= d <= 290 for d, _ in q3_facts):
+                return True
+    return False
+
+
+def _missing_in_window_quarters(
+    submissions: dict,
+    stored_ends: list[str],
+    marker: str,
+    skipped: set[str] | tuple = (),
+) -> list[str]:
+    """reportDates of quarterly filings at-or-before ``marker`` with no stored quarter.
 
     Batch 44: ``xbrl_filings_processed`` tracks only the latest *processed*
-    filing, so a 10-Q/10-K older than the marker whose XBRL facts SEC never
-    ingested (SKYD's merger-era Q3'25 10-Q, filed 2025-11-10, report
-    2025-09-30) would otherwise never refire the refresh — newer processed
-    filings keep the marker ahead of it forever. This scans the
+    filing, so a 10-Q/10-K older than the marker whose quarter never made it
+    into the extracted rows would otherwise never refire the refresh — newer
+    processed filings keep the marker ahead of it forever. This scans the
     already-fetched submissions feed for a quarterly filing no newer than the
     marker whose reportDate falls inside the stored window yet has no stored
     quarter. Window-bounded so filings older than the extraction window
-    (legitimately unstored) don't false-positive.
+    (legitimately unstored) don't false-positive. ``skipped`` holds
+    reportDates already acknowledged as ingested-but-unextractable (batch 48:
+    SKYD's 53-day merger-stub Q3'25), which must not refire the refresh.
     """
     if not stored_ends:
-        return False
+        return []
+    skip = set(skipped)
     lo, hi = min(stored_ends), max(stored_ends)
     have = set(stored_ends)
     recent = (submissions.get("filings") or {}).get("recent") or {}
     forms = recent.get("form") or []
     dates = recent.get("filingDate") or []
     reports = recent.get("reportDate") or []
+    missing: list[str] = []
     for form, filing_date, report_date in zip(forms, dates, reports):
         if form not in _QUARTERLY_FILING_FORMS:
             continue
@@ -154,9 +255,23 @@ def _has_unprocessed_quarter_in_window(
             continue  # newer than the marker: the latest>marker path owns it
         if not (lo <= report_date <= hi):
             continue  # outside the extracted window — legitimately unstored
-        if report_date not in have:
-            return True
-    return False
+        if report_date in have or report_date in skip:
+            continue
+        if report_date not in missing:
+            missing.append(report_date)
+    return missing
+
+
+def _has_unprocessed_quarter_in_window(
+    submissions: dict, stored_ends: list[str], marker: str, skipped: set[str] | tuple = ()
+) -> bool:
+    """True when a quarterly filing at-or-before the marker has no stored quarter.
+
+    Thin wrapper over :func:`_missing_in_window_quarters`; see it for the
+    batch-44 rationale. ``skipped`` reportDates (batch 48: acknowledged
+    ingested-but-unextractable stub quarters) never count as unprocessed.
+    """
+    return bool(_missing_in_window_quarters(submissions, stored_ends, marker, skipped))
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -566,6 +681,13 @@ class FinancialsService:
                         Company.cik == cik
                     )
                 )
+                skipped_db = _read_skipped_quarters(
+                    db.scalar(
+                        select(Company.xbrl_skipped_quarters).where(
+                            Company.cik == cik
+                        )
+                    )
+                )
             finally:
                 if self._session is None:
                     db.close()
@@ -582,10 +704,12 @@ class FinancialsService:
                 needs_refresh = latest > known
                 if not needs_refresh:
                     # Middle-gap check (batch 44): a quarterly filing older
-                    # than the marker whose facts SEC never ingested would
-                    # otherwise never refire — see _has_unprocessed_quarter_in_window.
+                    # than the marker whose quarter never made it into the
+                    # extracted rows would otherwise never refire — see
+                    # _has_unprocessed_quarter_in_window. Acknowledged
+                    # stub quarters (batch 48) don't count.
                     needs_refresh = _has_unprocessed_quarter_in_window(
-                        submissions, stored_ends, known
+                        submissions, stored_ends, known, skipped_db
                     )
             else:
                 needs_refresh = latest > max_period_end_iso
@@ -596,6 +720,13 @@ class FinancialsService:
                     # Fill highlights for the new quarter; only touches rows
                     # missing them, never wipes on transient failure.
                     self._enrich_press_release_highlights(db2, ticker, cik)
+                    # Acknowledge ingested-but-unextractable middle gaps (batch
+                    # 48): a refire that still yields no quarter for an
+                    # in-window filing whose facts ARE in companyfacts is
+                    # futile (stub periods) — record it so the middle-gap
+                    # check stops re-pulling every 6h. Filings whose facts are
+                    # still absent keep retrying (the batch-37 ingestion lag).
+                    self._acknowledge_unextractable_quarters(db2, cik, submissions)
                     db2.commit()
                 except Exception:
                     db2.rollback()
@@ -609,6 +740,62 @@ class FinancialsService:
         except Exception:
             logger.warning("filings freshness check failed for %s", ticker, exc_info=True)
             return False
+
+    def _acknowledge_unextractable_quarters(
+        self, db: Session, cik: str, submissions: dict
+    ) -> None:
+        """Record in-window filings whose quarters are structurally unextractable.
+
+        Called after a refire pulled fresh companyfacts. For each in-window
+        quarterly filing still missing its quarter: when the filing's revenue
+        facts are ingested but stub-shaped (a 10-Q stub period, or a 10-K
+        whose 9M is stubbed so FY−9M can never derive Q4), retrying is
+        futile — acknowledge the reportDate in
+        ``Company.xbrl_skipped_quarters`` so the middle-gap check stops
+        re-pulling every 6h. When the revenue facts simply aren't ingested
+        yet (the batch-37/APLD lag — a filing can be partially ingested, so
+        the check is scoped to the revenue chain, not any-tag facts), the
+        retry loop is left alone. Reads the just-warmed disk cache, so no
+        extra EDGAR request. Never raises; runs inside the caller's
+        transaction.
+        """
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                return
+            skipped = _read_skipped_quarters(company.xbrl_skipped_quarters)
+            stored_ends = sorted(
+                r.isoformat()
+                for r in db.scalars(
+                    select(QuarterlyFinancial.period_end).where(
+                        QuarterlyFinancial.cik == cik
+                    )
+                ).all()
+            )
+            marker = company.xbrl_filings_processed
+            if not stored_ends or marker is None:
+                return
+            missing = _missing_in_window_quarters(
+                submissions, stored_ends, marker, skipped
+            )
+            if not missing:
+                return
+            companyfacts = self.edgar_client.companyfacts(cik)
+            revenue_facts = _revenue_duration_facts(companyfacts)
+            new = sorted(
+                {m for m in missing if _is_structural_gap(revenue_facts, submissions, m)}
+                - skipped
+            )
+            if new:
+                company.xbrl_skipped_quarters = json.dumps(sorted(skipped | set(new)))
+                logger.info(
+                    "acknowledged unextractable quarters for %s: %s",
+                    cik, ", ".join(new),
+                )
+        except Exception:
+            logger.warning(
+                "quarter acknowledgment failed for %s", cik, exc_info=True
+            )
 
     def enrich_company(self, ticker: str, session: Session | None = None) -> None:
         """Update description, price, and market cap for an existing company."""

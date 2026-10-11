@@ -39,3 +39,21 @@ def test_ensure_schema_is_idempotent(tmp_path) -> None:
     ensure_schema(engine)
     cols = {c["name"] for c in inspect(engine).get_columns("quarterly_financials")}
     assert "management_guidance" in cols
+
+
+def test_ensure_schema_adds_skipped_quarters_column(tmp_path) -> None:
+    # Batch 48: pre-existing DBs lack Company.xbrl_skipped_quarters; the
+    # startup migration must add it so the middle-gap acknowledgment has
+    # somewhere to persist.
+    db = tmp_path / "old.db"
+    engine = get_engine(f"sqlite:///{db}")
+    create_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE companies DROP COLUMN xbrl_skipped_quarters"))
+    cols_before = {c["name"] for c in inspect(engine).get_columns("companies")}
+    assert "xbrl_skipped_quarters" not in cols_before
+
+    ensure_schema(engine)
+
+    cols_after = {c["name"] for c in inspect(engine).get_columns("companies")}
+    assert "xbrl_skipped_quarters" in cols_after
