@@ -150,9 +150,9 @@
       <span class="text-slate-400 dark:text-gray-500 font-semibold text-[11px] uppercase tracking-wider">Revenue Proportion</span>
       <span class="font-mono text-purple-600 dark:text-purple-400">{{ pct_b_rev }}% :{{ vs.b.ticker }}</span>
     </div>
-    <div class="h-3 w-full bg-slate-100 dark:bg-gray-800 rounded-full overflow-hidden flex border border-slate-200 dark:border-gray-700">
-      <div class="h-full bg-indigo-600 dark:bg-indigo-500 transition-all duration-500" style="width: {{ pct_a_rev }}%;"></div>
-      <div class="h-full bg-purple-500 dark:bg-purple-600 transition-all duration-500" style="width: {{ pct_b_rev }}%;"></div>
+    <div class="h-3 w-full bg-slate-100 dark:bg-gray-800 rounded-full overflow-hidden flex border border-slate-200 dark:border-gray-700 shadow-inner">
+      <div class="h-full bg-gradient-to-r from-indigo-600 to-indigo-500 transition-all duration-500 rounded-l-full" style="width: {{ pct_a_rev }}%;"></div>
+      <div class="h-full bg-gradient-to-r from-purple-500 to-purple-600 transition-all duration-500 rounded-r-full" style="width: {{ pct_b_rev }}%;"></div>
     </div>
     <div class="flex justify-between text-[11px] text-slate-500 dark:text-gray-400 font-mono tabular-nums">
       <span>{{ fmt_large(vs.a.kpi.revenue) }}</span>
@@ -167,9 +167,9 @@
       <span class="text-slate-400 dark:text-gray-500 font-semibold text-[11px] uppercase tracking-wider">Market Cap Proportion</span>
       <span class="font-mono text-purple-600 dark:text-purple-400">{{ pct_b_mc }}% :{{ vs.b.ticker }}</span>
     </div>
-    <div class="h-3 w-full bg-slate-100 dark:bg-gray-800 rounded-full overflow-hidden flex border border-slate-200 dark:border-gray-700">
-      <div class="h-full bg-indigo-600 dark:bg-indigo-500 transition-all duration-500" style="width: {{ pct_a_mc }}%;"></div>
-      <div class="h-full bg-purple-500 dark:bg-purple-600 transition-all duration-500" style="width: {{ pct_b_mc }}%;"></div>
+    <div class="h-3 w-full bg-slate-100 dark:bg-gray-800 rounded-full overflow-hidden flex border border-slate-200 dark:border-gray-700 shadow-inner">
+      <div class="h-full bg-gradient-to-r from-indigo-600 to-indigo-500 transition-all duration-500 rounded-l-full" style="width: {{ pct_a_mc }}%;"></div>
+      <div class="h-full bg-gradient-to-r from-purple-500 to-purple-600 transition-all duration-500 rounded-r-full" style="width: {{ pct_b_mc }}%;"></div>
     </div>
     <div class="flex justify-between text-[11px] text-slate-500 dark:text-gray-400 font-mono tabular-nums">
       <span>{{ fmt_large(vs.a.market_cap) }}</span>

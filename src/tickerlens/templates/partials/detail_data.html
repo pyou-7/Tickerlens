@@ -55,7 +55,7 @@
    rendered and the toggle is hidden by the caller. `caption` overrides the
    "YoY" label next to the badge (range mode passes "vs prior NQ"). #}
 {% macro kpi_card(label, value, yoy_pct, qoq_pct=none, caption="YoY", sub_badge=none) %}
-<div class="group relative rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-200 flex flex-col justify-between">
+<div class="group relative rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-500/50 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-200 flex flex-col justify-between">
   <div>
     <div class="flex items-center justify-between mb-1.5">
       <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400">{{ label }}</div>
