@@ -1986,6 +1986,150 @@ def test_same_split_seen_by_two_filings_rescales_only_once() -> None:
     assert by_end[dt.date(2026, 3, 31)] == 1.23
 
 
+def test_stock_split_25_to_1_forward_detected_and_rescaled() -> None:
+    # Mirror the BKNG case (batch 51): a 25-for-1 split in 2026-04. The 25x
+    # ratio was missing from _SPLIT_RATIOS, so no event ever fired and the
+    # framed-fact selection mixed pre-split quarters (74.34) with restated
+    # post-split ones (0.40) in a single stored series.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2024-07-01", "2024-09-30", 74.34, 2024, "Q3", filed="2024-10-29"),
+                            fact("2025-01-01", "2025-03-31", 10.07, 2025, "Q1", filed="2025-04-29"),
+                            fact("2025-04-01", "2025-06-30", 27.43, 2025, "Q2", filed="2025-07-29"),
+                            fact("2025-01-01", "2025-06-30", 37.38, 2025, "Q2", filed="2025-07-29"),
+                            fact("2025-01-01", "2025-03-31", 0.40, 2026, "Q1", filed="2026-04-28"),
+                            fact("2025-04-01", "2025-06-30", 1.10, 2026, "Q2", filed="2026-08-04"),
+                            fact("2025-01-01", "2025-06-30", 1.50, 2026, "Q2", filed="2026-08-04"),
+                            fact("2025-07-01", "2025-09-30", 84.41, 2025, "Q3", filed="2025-10-28"),
+                            fact("2026-01-01", "2026-03-31", 1.36, 2026, "Q1", filed="2026-04-28"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Pre-split quarters rescaled to the post-split basis (observed ratio,
+    # so within a couple of cents of the ideal /25).
+    assert abs(by_end[dt.date(2024, 9, 30)] - 74.34 / 25) < 0.05
+    assert abs(by_end[dt.date(2025, 9, 30)] - 84.41 / 25) < 0.05
+    # Restated and native post-split facts are untouched (no double rescale).
+    assert by_end[dt.date(2025, 3, 31)] == 0.40
+    assert by_end[dt.date(2025, 6, 30)] == 1.10
+    assert by_end[dt.date(2026, 3, 31)] == 1.36
+
+
+def test_reverse_split_8_to_1_detected_and_rescaled() -> None:
+    # Mirror GE's 1-for-8 reverse split (2021-07-30): the 8x ratio was missing
+    # from _SPLIT_RATIOS alongside BKNG's 25x (batch 51). The never-restated
+    # Q4-2020 quarter is what distinguishes detection from latest-filed-wins.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2020-10-01", "2020-12-31", 0.50, 2020, "Q4", filed="2021-01-26"),
+                            fact("2021-01-01", "2021-03-31", 0.70, 2021, "Q1", filed="2021-04-27"),
+                            fact("2021-04-01", "2021-06-30", 0.80, 2021, "Q2", filed="2021-07-27"),
+                            fact("2021-01-01", "2021-06-30", 1.50, 2021, "Q2", filed="2021-07-27"),
+                            fact("2021-01-01", "2021-03-31", 5.60, 2021, "Q1", filed="2021-10-26"),
+                            fact("2021-04-01", "2021-06-30", 6.40, 2021, "Q2", filed="2021-10-26"),
+                            fact("2021-01-01", "2021-06-30", 12.00, 2021, "Q2", filed="2021-10-26"),
+                            fact("2021-07-01", "2021-09-30", 7.20, 2021, "Q3", filed="2021-10-26"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # The never-restated pre-split quarter rescales 8x to the latest basis.
+    assert by_end[dt.date(2020, 12, 31)] == 4.00
+    # Restated and native post-split facts sit on the latest basis already.
+    assert by_end[dt.date(2021, 3, 31)] == 5.60
+    assert by_end[dt.date(2021, 6, 30)] == 6.40
+    assert by_end[dt.date(2021, 9, 30)] == 7.20
+
+
+def test_reverse_split_rescales_quarters_despite_ytd_same_end_fact() -> None:
+    # Mirror the HON case (batch 51): a 1-for-2 reverse split restated in the
+    # 2026-07-23 10-Q, which filed BOTH a quarterly (4.90) and a 6M YTD (9.34)
+    # fact for end 2025-06-30. The old by-end collapse let the 9.34 win the
+    # tie, so the neighbor check compared quarterly facts against a YTD
+    # reference and silently skipped genuinely pre-split quarters (Q1 stayed
+    # 2.22 instead of 4.44, Q3 stayed 2.86 instead of 5.72).
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 2.22, 2025, "Q1", filed="2025-04-29"),
+                            fact("2025-04-01", "2025-06-30", 2.45, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-01-01", "2025-06-30", 4.67, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-04-01", "2025-06-30", 4.90, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-01-01", "2025-06-30", 9.34, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-07-01", "2025-09-30", 2.86, 2025, "Q3", filed="2025-10-23"),
+                            fact("2026-04-01", "2026-06-30", 17.83, 2026, "Q2", filed="2026-07-23"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Every pre-split quarter doubles to the post-split basis — including Q1
+    # and Q3, whose rescales the YTD-poisoned neighbor check used to skip.
+    assert by_end[dt.date(2025, 3, 31)] == 4.44
+    assert by_end[dt.date(2025, 9, 30)] == 5.72
+    # The restating filing's own facts already sit on the latest basis.
+    assert by_end[dt.date(2025, 6, 30)] == 4.90
+    assert by_end[dt.date(2026, 6, 30)] == 17.83
+
+
+def test_reverse_split_rescales_loss_quarter_and_outlier_neighborhood() -> None:
+    # Follow-on to the HON case (batch 51): the absolute-distance neighbor
+    # check could not rescale (a) a loss quarter, where any interpolated
+    # neighborhood (+11.42 here) has the opposite sign of the fact (−0.18),
+    # so rescaling always moved it "farther away"; or (b) a quarter beside
+    # a gain-inflated reference (Q1 1.29 next to the 17.83 quarter), where
+    # the interpolated neighborhood was garbage. Ratio-distance handles
+    # both: magnitude closeness to the post-split references.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-04-01", "2025-06-30", 2.45, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-01-01", "2025-06-30", 4.67, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-04-01", "2025-06-30", 4.90, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-01-01", "2025-06-30", 9.34, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-10-01", "2025-12-31", -0.18, 2025, "Q4", filed="2026-02-17"),
+                            fact("2026-01-01", "2026-03-31", 1.29, 2026, "Q1", filed="2026-04-23"),
+                            fact("2026-04-01", "2026-06-30", 17.83, 2026, "Q2", filed="2026-07-23"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 12, 31)] == -0.36
+    assert by_end[dt.date(2026, 3, 31)] == 2.58
+    assert by_end[dt.date(2025, 6, 30)] == 4.90
+    assert by_end[dt.date(2026, 6, 30)] == 17.83
+
+
 def test_ifrs_only_filer_raises_unsupported() -> None:
     # Foreign private issuers (e.g. TSM) report under ifrs-full with no
     # us-gaap taxonomy — previously a bare KeyError: 'us-gaap'.

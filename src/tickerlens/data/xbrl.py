@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import calendar
 import logging
+import math
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Any
@@ -384,7 +385,9 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
 # filings whose values differ by an integer split ratio. Restated values are
 # exact divisions (7.19 -> 0.72), so a 3% tolerance is generous; anything
 # coarser risks mistaking an accounting restatement for a split.
-_SPLIT_RATIOS = (2, 3, 4, 5, 10, 20, 100)
+# 8: GE's 1-for-8 reverse split (2021-07-30); 25: BKNG's 25-for-1 split
+# (2026-04) — both multi-corroborated in live companyfacts (batch 51).
+_SPLIT_RATIOS = (2, 3, 4, 5, 8, 10, 20, 25, 100)
 _SPLIT_RATIO_TOLERANCE = 0.03
 # A lone (start, end) pair at a split-like ratio could be a data correction,
 # so an event needs corroboration from a second duration (e.g. the quarterly
@@ -413,27 +416,34 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
     - its period was demonstrably restated at a split ratio → pre-split,
       rescale unconditionally;
     - otherwise (e.g. NFLX's Q3-2025, filed pre-split but never restated
-      since) → rescale only if the rescaled value is clearly closer to the
-      post-split neighborhood (nearest certain-basis quarters) than the
-      original, so genuinely post-split facts (NFLX's Q1-2026, filed
-      2026-04-17, before the restating 10-Q) are left alone.
+      since) → rescale only if the rescaled value is clearly closer, in
+      ratio terms, to some post-split reference than the original is to
+      any (see `_is_pre_split_basis`), so genuinely post-split facts
+      (NFLX's Q1-2026, filed 2026-04-17, before the restating 10-Q) are
+      left alone.
     """
     events = _detect_split_events(facts)
     if not events:
         return
     min_event_date = min(event.date for event in events)
     # Post-split reference values: restated comparatives (latest filed wins)
-    # and any fact filed on/after the first restating filing.
-    latest_by_end: dict[dt.date, XbrlFact] = {}
+    # and any fact filed on/after the first restating filing. Keyed by
+    # (start, end) — not by end alone — because one end date can carry both
+    # a quarterly and a YTD fact (HON's 2025-06-30: Q2 4.90 and 6M 9.34,
+    # both filed 2026-07-23); collapsing by end let the YTD value win the
+    # tie and poison the quarterly neighbor check, silently skipping the
+    # rescale of genuinely pre-split quarters (HON FY2025Q1 stayed 2.22
+    # instead of 4.44 — batch 51).
+    latest_by_period: dict[tuple[dt.date | None, dt.date], XbrlFact] = {}
     for fact in facts:
-        prev = latest_by_end.get(fact.end)
+        key = (fact.start, fact.end)
+        prev = latest_by_period.get(key)
         if prev is None or fact.filed > prev.filed:
-            latest_by_end[fact.end] = fact
-    certain: dict[dt.date, float] = {}
-    for end, fact in latest_by_end.items():
+            latest_by_period[key] = fact
+    certain: dict[tuple[dt.date | None, dt.date], float] = {}
+    for (start, end), fact in latest_by_period.items():
         if end in {e for event in events for e in event.period_ends} or fact.filed >= min_event_date:
-            certain[end] = fact.val
-    certain_ends = sorted(certain)
+            certain[(start, end)] = fact.val
 
     for fact in facts:
         scale = 1.0
@@ -445,27 +455,58 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
         if fact.end in {e for event in events for e in event.period_ends}:
             fact.val *= scale
             continue
-        expected = _neighbor_value(fact.end, certain_ends, certain)
-        if expected is not None and abs(fact.val * scale - expected) < 0.5 * abs(fact.val - expected):
+        if _is_pre_split_basis(fact, scale, certain):
             fact.val *= scale
 
 
-def _neighbor_value(
-    end: dt.date, certain_ends: list[dt.date], certain: dict[dt.date, float]
-) -> float | None:
-    """Interpolate the expected post-split value from certain-basis neighbors."""
-    below = [e for e in certain_ends if e < end]
-    above = [e for e in certain_ends if e > end]
-    if below and above:
-        lo, hi = below[-1], above[0]
-        span = (hi - lo).days or 1
-        w = (end - lo).days / span
-        return certain[lo] * (1 - w) + certain[hi] * w
-    if below:
-        return certain[below[-1]]
-    if above:
-        return certain[above[0]]
-    return None
+# The basis check must only compare like duration classes: a quarterly fact
+# against quarterly references, a YTD fact against YTD references. One end
+# date can carry both (HON's 2025-06-30: Q2 4.90 and 6M 9.34, both filed
+# 2026-07-23), and cross-comparing let the YTD value poison the quarterly
+# check. 120 days separates the classes cleanly (quarterly 70–100d,
+# 6M ~182d, 9M ~273d, FY ~365d).
+_QUARTERLY_MAX_DAYS = 120
+# The rescaled value must be at least this much closer (in log-ratio terms)
+# to guard against borderline flip-flops.
+_BASIS_CHECK_MARGIN = math.log(1.2)
+
+
+def _is_pre_split_basis(
+    fact: XbrlFact,
+    scale: float,
+    certain: dict[tuple[dt.date | None, dt.date], float],
+) -> bool:
+    """Decide whether a pre-event filing's fact is on the pre-split basis.
+
+    Compares the original and rescaled values against the post-split
+    references (same duration class) in *ratio* terms: a pre-split fact's
+    rescaled value lands near the post-split neighborhood, while an
+    already-post-split fact's rescaled value flies far away from it. Ratio
+    distance (not absolute) is what makes this work across the 25x range of
+    split factors — and across loss quarters and outlier-polluted
+    neighborhoods, where absolute interpolation breaks down (HON's
+    FY2025Q4 −0.18 kept its pre-split basis because the interpolated
+    +11.42 neighborhood had the opposite sign; FY2026Q1 1.29 because the
+    neighborhood was inflated by a gain quarter — batch 51).
+    """
+    if fact.start is None:
+        return False
+    quarterly = (fact.end - fact.start).days <= _QUARTERLY_MAX_DAYS
+    refs = [
+        abs(val)
+        for (start, end), val in certain.items()
+        if start is not None
+        and ((end - start).days <= _QUARTERLY_MAX_DAYS) == quarterly
+        and val != 0
+    ]
+    if not refs or fact.val == 0:
+        # No reference to judge by: stay conservative. (A zero fact rescales
+        # to zero anyway.)
+        return fact.val == 0
+    mag = abs(fact.val)
+    orig = min(abs(math.log(mag / ref)) for ref in refs)
+    new = min(abs(math.log(mag * scale / ref)) for ref in refs)
+    return new < orig - _BASIS_CHECK_MARGIN
 
 
 class _SplitEvent:
