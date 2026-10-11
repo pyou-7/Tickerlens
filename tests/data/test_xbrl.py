@@ -692,6 +692,158 @@ def test_dedupe_period_labels_collision_without_sequence_context_walks_earlier_b
     assert by_end[dt.date(2026, 6, 30)] == (2026, "Q2")
 
 
+def test_repair_sequence_breaks_fixes_filer_shifted_year() -> None:
+    """CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q tag their periods by the
+    calendar year the fiscal year *began* (fy=2024/2025); later filings'
+    comparative columns use the standard ending-year convention. No labels
+    collide, but fy decreases across consecutive quarters — impossible for a
+    fiscal calendar. The backbone (5 consistent rows) repairs the 2-row
+    shifted block."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2024, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2027, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2024, 10, 31)] == (2025, "Q3")
+    assert by_end[dt.date(2025, 1, 31)] == (2025, "Q4")
+    assert by_end[dt.date(2025, 4, 30)] == (2026, "Q1")
+    assert by_end[dt.date(2025, 7, 31)] == (2026, "Q2")
+    assert by_end[dt.date(2026, 7, 31)] == (2027, "Q2")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_repair_sequence_breaks_leaves_clean_sequence_alone() -> None:
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_no_strict_majority() -> None:
+    """A 4-vs-4 convention split (e.g. a full missing year) is ambiguous:
+    without a strict-majority backbone nothing is relabeled, even though the
+    walk would otherwise "fix" the earlier block."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q1", dt.date(2024, 3, 31)),
+        _xbrl_row(2024, "Q2", dt.date(2024, 6, 30)),
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2026, "Q4", dt.date(2025, 12, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_short_backbone() -> None:
+    """No run reaches 3 rows: the sparse history is left exactly as filed."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_missing_quarter_walks_to_own_claim() -> None:
+    """A genuine mid-window gap (Q2 missing) walks by calendar steps back to
+    the row's own label — the fp guard alone would not save this, the walk
+    does."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_fp_mismatch_not_repaired() -> None:
+    """Only pure year shifts are repaired: a row whose fp disagrees with the
+    walked expectation keeps its claim."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q2", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_held_target_keeps_claim() -> None:
+    """Two near-duplicate ends walk to the same expectation: the first takes
+    it, the second keeps its claim rather than colliding."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q1", dt.date(2025, 4, 28)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 4, 28)] == (2026, "Q1")
+    assert by_end[dt.date(2025, 4, 30)] == (2025, "Q1")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_repair_sequence_breaks_newest_row_blip() -> None:
+    """The newest filing can mislabel without colliding (the ORCL/Salesforce
+    class in non-colliding form): the backbone repairs the latest row."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2026, 7, 31)] == (2027, "Q2")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
 def _eur_20f_companyfacts() -> dict:
     # ASML: us-gaap revenue facts exist but only in EUR, filed on Form 20-F.
     facts = [

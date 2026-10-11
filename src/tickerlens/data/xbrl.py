@@ -276,7 +276,8 @@ def extract_recent_quarterly_financials(
                 cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
             )
         )
-    return _dedupe_period_labels(rows)
+    rows = _dedupe_period_labels(rows)
+    return _repair_sequence_breaks(rows)
 
 
 def _fill_missing_eps_basic(
@@ -378,6 +379,107 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
             holder[claim] = row
         grounded[id(row)] = expected is not None and (row.fy, row.fp) == expected
         prev = (row.fy, row.fp)
+    return rows
+
+
+def _predecessor_label(fy: int, fp: str) -> tuple[int, str] | None:
+    """The (fy, fp) label the quarter before ``(fy, fp)`` should carry."""
+    order = {"Q1": "Q4", "Q2": "Q1", "Q3": "Q2", "Q4": "Q3"}
+    prev = order.get(fp)
+    if prev is None:
+        return None
+    return (fy - 1, prev) if fp == "Q1" else (fy, prev)
+
+
+def _walk_label(label: tuple[int, str], steps: int) -> tuple[int, str] | None:
+    """Apply ``steps`` signed quarter-steps to a (fy, fp) label."""
+    fy, fp = label
+    for _ in range(abs(steps)):
+        nxt = _successor_label(fy, fp) if steps > 0 else _predecessor_label(fy, fp)
+        if nxt is None:
+            return None
+        fy, fp = nxt
+    return fy, fp
+
+
+def _quarter_steps(earlier: dt.date, later: dt.date) -> int:
+    """Whole quarter-steps between two period ends, for label walking.
+
+    The step count comes from the calendar distance so a genuine coverage gap
+    does not shift the walk: a missing year walks back to the row's own claim
+    and is never "repaired".
+    """
+    return max(1, round((later - earlier).days / 91.3125))
+
+
+def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:
+    """Relabel filer-mislabeled fiscal years that break the quarter sequence.
+
+    ``_dedupe_period_labels`` only arbitrates *collisions* (two ends sharing
+    one label). Some filers tag a consistent-but-wrong ``fy`` on their own
+    filings with no collision — CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q
+    label their periods by the calendar year the fiscal year *began*
+    (fy=2024/2025) while later filings' comparative columns use the standard
+    ending-year convention (fy=2026/2027). The stored series then reads
+    FY2025Q3 → FY2024Q4 → FY2025Q1 → FY2026Q2: ``fy`` *decreases* across
+    consecutive quarters, which a fiscal calendar can never do.
+
+    Repair: the longest run of rows whose labels are mutual successors is the
+    backbone (ties broken toward the run holding the latest row, whose filing
+    carries the filer's most current convention). Only when the backbone is a
+    strict majority of rows and at least 3 long, every other row's expected
+    label is walked from the nearest backbone row by calendar quarter-steps —
+    so a missing quarter or year resolves to the row's own claim. A row is
+    relabeled only when it is a pure year shift (the walked expectation's fp
+    matches its claimed fp) and the target label is unheld. A missing quarter
+    changes fp, so it can never be "repaired" into a wrong label; two rows
+    whose walked expectations coincide keep the first and the second is left
+    alone via the unheld-target guard.
+    """
+    ordered = sorted(rows, key=lambda r: r.end)
+    n = len(ordered)
+    if n < 4:
+        return rows
+    runs: list[tuple[int, int]] = []  # (start index, length)
+    cur_start = 0
+    for i in range(1, n):
+        if _successor_label(ordered[i - 1].fy, ordered[i - 1].fp) != (
+            ordered[i].fy,
+            ordered[i].fp,
+        ):
+            runs.append((cur_start, i - cur_start))
+            cur_start = i
+    runs.append((cur_start, n - cur_start))
+
+    def _run_key(run: tuple[int, int]) -> tuple[int, bool]:
+        start, length = run
+        return (length, start + length == n)
+
+    bstart, blen = max(runs, key=_run_key)
+    if blen < 3 or blen * 2 <= n:
+        return rows
+
+    bend = bstart + blen  # exclusive
+    held = {(r.fy, r.fp) for r in ordered[bstart:bend]}
+    for i, row in enumerate(ordered):
+        if bstart <= i < bend:
+            continue
+        if i < bstart:
+            ref = ordered[bstart]
+            steps = -_quarter_steps(row.end, ref.end)
+        else:
+            ref = ordered[bend - 1]
+            steps = _quarter_steps(ref.end, row.end)
+        expected = _walk_label((ref.fy, ref.fp), steps)
+        claim = (row.fy, row.fp)
+        if (
+            expected is not None
+            and expected != claim
+            and expected[1] == claim[1]
+            and expected not in held
+        ):
+            row.fy, row.fp = expected
+        held.add((row.fy, row.fp))
     return rows
 
 
