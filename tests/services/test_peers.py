@@ -191,3 +191,17 @@ def test_peer_replacements_sic_fallback() -> None:
         got = [p.ticker for p in get_peers_for_company("ZZZ9", sic=sic.rstrip("b"))]
         assert good in got, f"sic {sic}: {good} missing from {got}"
         assert bad not in got, f"sic {sic}: {bad} still present in {got}"
+
+
+# --- Batch 47: medtech peer gap (round-11 seed ISRG/SIC 3842 had zero peers) ---
+
+def test_curated_peers_isrg() -> None:
+    tickers = [p.ticker for p in get_peers_for_company("ISRG")]
+    for expected in ["MDT", "SYK", "BSX", "EW", "ZBH"]:
+        assert expected in tickers, f"ISRG: expected {expected} in {tickers}"
+    assert "ISRG" not in tickers
+
+
+def test_sic_prefix_medtech_instruments() -> None:
+    peers = get_peers_for_company("MED1", sic="3842")
+    assert [p.ticker for p in peers] == ["ISRG", "MDT", "SYK", "BSX", "EW"]

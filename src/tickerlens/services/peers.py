@@ -48,6 +48,7 @@ _CURATED_PEERS: dict[str, list[str]] = {
     "JNJ": ["LLY", "PFE", "ABBV", "MRK", "BMY"],
     "ABBV": ["LLY", "PFE", "JNJ", "MRK", "BIIB"],
     "PFE": ["JNJ", "ABBV", "MRK", "LLY", "BMY"],
+    "ISRG": ["MDT", "SYK", "BSX", "EW", "ZBH"],  # batch 47: medtech (round-11 seed had zero peers)
     # Consumer & Others
     "KO": ["PEP", "MNST", "KDP", "CELH"],
     "NEE": ["DUK", "SO", "AEP", "SRE"],
@@ -111,6 +112,7 @@ _SIC_PREFIX_PEERS: dict[str, list[str]] = {
     "283": ["LLY", "PFE", "JNJ", "ABBV"],  # Pharma
     "284": ["PG", "CL", "KMB", "EL", "CHD"],  # Household/consumer products
     "28": ["LIN", "SHW", "APD", "ECL", "DD"],  # Chemicals (general)
+    "384": ["ISRG", "MDT", "SYK", "BSX", "EW"],  # Medical instruments (batch 47)
     # Consumer / Retail
     "208": ["KO", "PEP", "MNST", "KDP", "STZ"],  # Beverages
     "20": ["KO", "PEP", "HSY", "GIS", "KHC"],  # Food (general)
