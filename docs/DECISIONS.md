@@ -842,3 +842,33 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 **Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. SEC-gapped quarters (V/KO/NEE/PYPL/F/DUK Q2-2026 + SKYD Q3-2025) remain on the 6h retry loop.
 
 ---
+
+## 2026-10-10 — Batch 47: Interactive Valuation Simulator & 5-Year DCF Sensitivity Matrix Suite
+
+**What:** Implemented an institutional-grade valuation sensitivity and intrinsic cash-flow suite on the Company Overview page:
+1. **5-Year DCF Intrinsic Model & 5×5 Sensitivity Matrix (`services/dcf.py`):**
+   - 5-year projected Free Cash Flow schedule using company's historical growth rate (clamped $[2\%, 25\%]$, default $8\%$) with steady growth decay ($1.0 \to 0.9 \to 0.8 \to 0.7 \to 0.6$).
+   - Gordon Growth terminal value at $g_{\text{term}} = 2.5\%$, baseline $WACC = 9.0\%$, with a minimum rate-spread guardrail ($WACC - g_{\text{term}} \ge 1.5\%$).
+   - Generates a 5×5 sensitivity matrix across 5 discount rates ($7.0\% \dots 11.0\%$) and 5 terminal growth rates ($1.5\% \dots 3.5\%$) calculating per-share intrinsic value and upside % for all 25 scenarios, highlighting the base-case cell.
+   - Domain-expert honest suppression for financial institutions (SIC 6000–6999: banking/insurance cash flows reflect deposit/loan and investment portfolio flows rather than enterprise operating cash flow) and filers with negative trailing FCF (e.g. AMZN), providing transparent explanatory context and directing users to multiple-based sensitivity.
+2. **Interactive What-If Sensitivity Simulator (`templates/company/overview.html`):**
+   - High-performance, zero-latency client-side Alpine.js simulator allowing users to drag sliders for:
+     - Forward 12M Growth Rate ($-20\%$ to $+50\%$, step $0.5\%$)
+     - Target Exit Multiple ($5.0\times$ to $60.0\times$ P/E, or $0.5\times$ to $15.0\times$ P/S for sales-path filers)
+     - Annual Hurdle / Discount Rate ($5.0\%$ to $15.0\%$, step $0.25\%$)
+   - Calculates real-time What-If Target Price, 1-Year Discounted PV, Implied Upside/Downside %, and dynamically flips rating pills (`Strong Buy`, `Buy`, `Hold`, `Sell`, `Strong Sell`) with matching theme colors.
+   - Scenario Quick Presets: 🐻 Bear Case (contracted growth & compressed multiple), ⚖️ Base Model (snaps to model baseline), 🐂 Bull Case (boosted growth & expanded multiple), and Reset button.
+3. **Segmented Tab Switcher:** Clean pill tabs (`🎛️ What-If Simulator` and `▦ 5-Year DCF Matrix`) allowing rapid switching without cluttering the overview page.
+4. **Resilience & Testing:** Hardened `fmt_large`, `fmt_price`, and `fmt_eps` macros in `overview.html` against non-numeric mock values. Added 7 new tests (5 unit in `test_dcf.py`, 2 route in `test_company_routes.py`), suite growing from 461 to 468 green tests.
+
+**Why:** Addresses founder/investor need to test sensitivity assumptions beyond fixed static multiples: "What if growth accelerates to 30% and P/E expands to 35x?" or "What is intrinsic fair value under an 8% vs 10% discount rate?" It bridges simple heuristic P/E models with multi-dimensional DCF intrinsic cash-flow analysis while maintaining data integrity for banks and negative-cash-flow companies.
+
+**Blast radius:** Purely additive to overview page; backend changes are isolated to new `services/dcf.py`, `FinancialsService.get_dcf()`, and context passing in `routes/company.py`. Existing valuation heuristics, AI briefings, and detail views unchanged. 468/468 tests green.
+
+**Live:** Verified live on `http://127.0.0.1:8000`:
+- `/company/NVDA` renders both the What-If Simulator with live reactive sliders and the 5×5 DCF Sensitivity Matrix ($112.52 base case).
+- `/company/AAPL` renders both tabs cleanly.
+- `/company/JPM` displays honest DCF suppression context for financial institutions while keeping the What-If Simulator fully interactive.
+- `/company/AMZN` displays honest DCF negative FCF explanation while keeping the What-If Simulator fully interactive.
+
+---

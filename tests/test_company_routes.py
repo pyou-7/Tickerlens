@@ -875,6 +875,7 @@ def test_overview_triggers_refresh_company_quote(client: TestClient, monkeypatch
     mock_svc.get_sibling_tickers.return_value = []
     mock_svc.get_peers.return_value = []
     mock_svc.get_ai_analysis.return_value = None
+    mock_svc.get_dcf.return_value = None
     monkeypatch.setattr(routes.company, "_svc", mock_svc)
 
     resp = client.get("/company/APLD")
@@ -928,6 +929,7 @@ def test_overview_computes_overview_once_after_refresh(client: TestClient, monke
     mock_svc.get_sibling_tickers.return_value = []
     mock_svc.get_peers.return_value = []
     mock_svc.get_ai_analysis.return_value = None
+    mock_svc.get_dcf.return_value = None
     monkeypatch.setattr(routes.company, "_svc", mock_svc)
 
     resp = client.get("/company/APLD")
@@ -1212,3 +1214,133 @@ def test_render_compare_csv_partial_year_notes() -> None:
     full = _yearly_compare_ctx(a_count=4, b_count=4)
     rows_full = list(csv.reader(_io.StringIO(render_compare_csv("Apple Inc.", "AAPL", full))))
     assert not any("note" in r[0] for r in rows_full if r[0].startswith("# Period"))
+
+
+# ── Valuation Sensitivity & DCF Suite rendering ──────────────────────────
+
+def test_overview_renders_valuation_sensitivity_suite(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Overview route renders the Sensitivity Suite with Simulator and DCF matrix."""
+    from tickerlens import routes
+    from tickerlens.services.dcf import compute_dcf
+    from tickerlens.services.financials import CompanyOverview, KPISnapshot, KPIChange
+    from tickerlens.services.valuation import ValuationSignal
+
+    mock_svc = MagicMock()
+    mock_svc.get_overview.return_value = CompanyOverview(
+        cik="0001045810",
+        name="NVIDIA Corp.",
+        ticker="NVDA",
+        description="Semiconductors",
+        sector="Technology",
+        last_price=200.0,
+        market_cap=5_000_000_000_000.0,
+        latest_label="Q3 FY2025",
+        latest_period_end=dt.date(2025, 10, 27),
+        latest_kpi=KPISnapshot(revenue=35000.0, net_income=19000.0, eps_diluted=0.78, free_cash_flow=16000.0),
+        yoy=KPIChange(revenue=94.0, net_income=109.0, eps_diluted=111.0, free_cash_flow=120.0),
+        ttm_kpi=KPISnapshot(revenue=120000.0, net_income=65000.0, eps_diluted=2.65, free_cash_flow=55000.0),
+        ttm_quarters=4,
+    )
+    mock_svc.get_valuation.return_value = ValuationSignal(
+        ticker="NVDA",
+        current_price=200.0,
+        target_price=240.0,
+        upside_pct=20.0,
+        signal="Buy",
+        confidence="High",
+        method="peg",
+        fair_multiple=30.0,
+        current_multiple=25.0,
+        growth_pct=20.0,
+        reasoning=["Strong growth"],
+    )
+    mock_svc.get_dcf.return_value = compute_dcf(
+        ticker="NVDA",
+        ttm_free_cash_flow=55_000_000_000.0,
+        shares_outstanding=25_000_000_000.0,
+        current_price=200.0,
+        eps_growth_pct=20.0,
+        sic="3674",
+    )
+    mock_svc.get_signal_change.return_value = None
+    mock_svc.is_watching.return_value = False
+    mock_svc.get_watchlist_note.return_value = None
+    mock_svc.get_watchlist_tags.return_value = []
+    mock_svc.get_sibling_tickers.return_value = []
+    mock_svc.get_peers.return_value = []
+    mock_svc.get_ai_analysis.return_value = None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/NVDA")
+    assert resp.status_code == 200
+    # Header & Tab Switcher
+    assert "Valuation Sensitivity & Intrinsic DCF Suite" in resp.text
+    assert "What-If Simulator" in resp.text
+    assert "5-Year DCF Matrix" in resp.text
+    # Sliders and controls
+    assert "Forward 12M Growth Rate" in resp.text
+    assert "Target Exit Multiple" in resp.text
+    assert "Annual Hurdle / Discount Rate" in resp.text
+    # DCF Elements
+    assert "5-Year Free Cash Flow Projections" in resp.text
+    assert "5×5 Sensitivity Matrix" in resp.text
+
+
+def test_overview_renders_dcf_fallback_for_finance_companies(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """JPMorgan (financial institution) renders honest DCF suppression context."""
+    from tickerlens import routes
+    from tickerlens.services.dcf import compute_dcf
+    from tickerlens.services.financials import CompanyOverview, KPISnapshot, KPIChange
+    from tickerlens.services.valuation import ValuationSignal
+
+    mock_svc = MagicMock()
+    mock_svc.get_overview.return_value = CompanyOverview(
+        cik="0000019617",
+        name="JPMorgan Chase & Co.",
+        ticker="JPM",
+        description="Banking",
+        sector="Financial Services",
+        last_price=220.0,
+        market_cap=600_000_000_000.0,
+        latest_label="Q3 FY2025",
+        latest_period_end=dt.date(2025, 9, 30),
+        latest_kpi=KPISnapshot(revenue=42000.0, net_income=12000.0, eps_diluted=4.37, free_cash_flow=None),
+        yoy=KPIChange(revenue=6.0, net_income=3.0, eps_diluted=5.0, free_cash_flow=None),
+        ttm_kpi=KPISnapshot(revenue=160000.0, net_income=48000.0, eps_diluted=17.0, free_cash_flow=None),
+        ttm_quarters=4,
+    )
+    mock_svc.get_valuation.return_value = ValuationSignal(
+        ticker="JPM",
+        current_price=220.0,
+        target_price=210.0,
+        upside_pct=-4.5,
+        signal="Hold",
+        confidence="High",
+        method="peg",
+        fair_multiple=12.0,
+        current_multiple=12.9,
+        growth_pct=8.0,
+        reasoning=["Mature financial institution"],
+    )
+    mock_svc.get_dcf.return_value = compute_dcf(
+        ticker="JPM",
+        ttm_free_cash_flow=None,
+        shares_outstanding=2_800_000_000.0,
+        current_price=220.0,
+        eps_growth_pct=8.0,
+        sic="6021",
+    )
+    mock_svc.get_signal_change.return_value = None
+    mock_svc.is_watching.return_value = False
+    mock_svc.get_watchlist_note.return_value = None
+    mock_svc.get_watchlist_tags.return_value = []
+    mock_svc.get_sibling_tickers.return_value = []
+    mock_svc.get_peers.return_value = []
+    mock_svc.get_ai_analysis.return_value = None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/JPM")
+    assert resp.status_code == 200
+    assert "Valuation Sensitivity & Intrinsic DCF Suite" in resp.text
+    assert "DCF Intrinsic Model Context" in resp.text
+    assert "financial institutions" in resp.text

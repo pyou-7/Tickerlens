@@ -36,6 +36,7 @@ from tickerlens.models.database import get_session
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
 from tickerlens.models.valuation_history import ValuationHistory
 from tickerlens.models.watchlist import WatchlistEntry
+from tickerlens.services.dcf import DCFModelResult, compute_dcf
 from tickerlens.services.ir_download import (
     EarningsPeriod,
     discover_earnings_filings,
@@ -906,6 +907,67 @@ class FinancialsService:
                 ttm_net_income=ttm.net_income,
                 ttm_free_cash_flow=ttm.free_cash_flow,
                 market_cap=effective_market_cap,
+            )
+        finally:
+            if session is None and self._session is None:
+                db.close()
+
+    def get_dcf(self, ticker: str, session: Session | None = None) -> DCFModelResult:
+        """Compute the 5-year DCF model and sensitivity matrix for the Overview page."""
+        cik = _resolve_cik(self.edgar_client, ticker)
+        db = session or self._session or get_session()
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                raise CompanyNotFoundError(f"No data for {ticker} — run fetch_and_persist first")
+
+            rows = (
+                db.execute(
+                    select(QuarterlyFinancial)
+                    .where(QuarterlyFinancial.cik == cik)
+                    .order_by(QuarterlyFinancial.period_end.desc())
+                )
+                .scalars()
+                .all()
+            )
+            if not rows:
+                raise CompanyNotFoundError(f"No quarterly data for {ticker}")
+
+            ttm = _compute_ttm(list(rows[:4]))
+            prior_ttm = _compute_ttm(list(rows[4:8])) if len(rows) >= 8 else None
+
+            growth_pct: float | None = None
+            if prior_ttm is not None:
+                growth_pct = _pct_change(ttm.eps_diluted, prior_ttm.eps_diluted)
+            if growth_pct is None:
+                yoy = _compute_yoy(rows[0], list(rows))
+                growth_pct = yoy.eps_diluted
+            if growth_pct is None and prior_ttm is not None:
+                growth_pct = _pct_change(ttm.net_income, prior_ttm.net_income)
+
+            live_quote = peeked_quote(company.ticker or ticker)
+            effective_price = (
+                live_quote.last_price
+                if (live_quote and live_quote.last_price is not None)
+                else company.last_price
+            )
+            effective_market_cap = (
+                live_quote.market_cap
+                if (live_quote and live_quote.market_cap is not None)
+                else company.market_cap
+            )
+
+            shares_outstanding: float | None = None
+            if effective_market_cap and effective_price:
+                shares_outstanding = effective_market_cap / effective_price
+
+            return compute_dcf(
+                ticker=ticker.upper(),
+                ttm_free_cash_flow=ttm.free_cash_flow,
+                shares_outstanding=shares_outstanding,
+                current_price=effective_price,
+                eps_growth_pct=growth_pct,
+                sic=company.sic,
             )
         finally:
             if session is None and self._session is None:

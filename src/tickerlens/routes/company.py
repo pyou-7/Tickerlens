@@ -95,6 +95,7 @@ def company_overview(request: Request, ticker: str) -> HTMLResponse:
             "also_trades_as": _svc.get_sibling_tickers(ticker),
             "peers": _svc.get_peers(ticker),
             "ai_analysis": _svc.get_ai_analysis(ticker),
+            "dcf": _svc.get_dcf(ticker),
         },
     )
 
