@@ -8,12 +8,18 @@ logger = logging.getLogger(__name__)
 
 _API = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 _SEARCH = "https://en.wikipedia.org/w/api.php"
-_MIN_WORDS = 50
+# Stub-rejection floor, not a quality bar: the summary API's extract length
+# varies between fetches (egress caching), and real company summaries land
+# well under the old 50-word floor — Broadcom's live summary measured 48
+# words, Visa's 32, GE's 20. Anything at/above 15 words on a
+# relevance-checked standard-type page is a real description; disambiguation
+# pages are rejected by type, not by length.
+_MIN_WORDS = 15
 _MAX_CHARS = 1800
 _STOP_WORDS = {"inc", "corp", "co", "ltd", "llc", "plc", "the", "and", "of", "group"}
 
 
-def get_description(company_name: str) -> str | None:
+def get_description(company_name: str, ticker: str | None = None) -> str | None:
     """Fetch a company description from Wikipedia.
 
     Returns a description string, or None if no relevant page exists,
@@ -21,31 +27,181 @@ def get_description(company_name: str) -> str | None:
     Callers should treat None as "overwrite with None" — a fresh search
     that finds nothing is preferable to keeping stale/wrong text.
     """
-    title = _search_title(company_name)
-    if not title or not _title_relevant(title, company_name):
+    title = _best_title(company_name, ticker)
+    if not title:
         return None
     return _fetch_extract(title)
 
 
-def _title_relevant(title: str, company_name: str) -> bool:
-    """Return True if the title's first significant word matches the company name's."""
-    def significant_words(text: str) -> list[str]:
-        return [
-            w.lower().strip(".,")
-            for w in text.split()
-            if w.lower().strip(".,") not in _STOP_WORDS and len(w.strip(".,")) > 2
-        ]
+def _relevance_overlap(title: str, company_name: str, ticker: str | None = None) -> int:
+    """Shared-word overlap between a candidate title and the company name.
 
-    title_words = set(significant_words(title))
-    name_words = significant_words(company_name)
-    if not name_words:
+    An exact ticker-title match ("AMD") always wins.
+    """
+    if ticker and title.strip().lower() == ticker.strip().lower():
+        return 100
+    return len(set(_normalize_words(title)) & set(_normalize_words(company_name)))
+
+
+def _name_word_set(company_name: str, ticker: str | None = None) -> set[str]:
+    words = set(_normalize_words(company_name))
+    if ticker:
+        words.add(ticker.strip().lower())
+    return words
+
+
+def _bare_title_words(title: str) -> set[str]:
+    """Title words with any parenthetical removed ("Amazon (company)" ->
+    {amazon}), for overlap scoring."""
+    start, end = title.find("("), title.rfind(")")
+    bare = title[:start] + " " + title[end + 1 :] if 0 <= start < end else title
+    return set(_normalize_words(bare))
+
+
+def _squashed(text: str) -> str:
+    """Lowercase alphanumeric-only form, stop words retained.
+
+    Used for exact-name comparison, where stop-word removal would be lossy:
+    "Domino's Pizza Group plc" must not equal "DOMINOS PIZZA INC".
+    """
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _bare_title(title: str) -> str:
+    """Title with any parenthetical removed."""
+    start, end = title.find("("), title.rfind(")")
+    return (title[:start] + " " + title[end + 1 :]) if 0 <= start < end else title
+
+
+def _best_title(company_name: str, ticker: str | None = None) -> str | None:
+    """Best relevant title from the top search results.
+
+    Wikipedia's ranking leads: the top hit wins when relevant. Three narrow
+    exceptions, all verified against live data (batch 47):
+    - Exact-name match: a relevant hit whose squashed form (lowercase
+      alphanumeric, stop words retained, parenthetical stripped) equals the
+      squashed company name ("Tesla, Inc." for "TESLA INC") wins
+      immediately — it is the canonical article. Stop words are retained
+      here so "Domino's Pizza Group plc" can't equal "DOMINOS PIZZA INC".
+    - Predecessor override: a lower hit with strictly higher name overlap
+      that is name-contained and no more verbose replaces the top hit
+      ("Lockheed Martin" over "Lockheed Corporation"). The containment +
+      brevity requirements are what keep this from promoting subsidiaries
+      ("Domino's Pizza Group plc") or museums ("Wells Fargo History
+      Museum") above the company page. (Lawsuit articles never reach this
+      point — excluded from relevance.)
+    - Top hit irrelevant: take the best name-contained relevant lower hit;
+      otherwise None.
+    Ties keep Wikipedia's ranking (first max wins).
+    """
+    results = _search_titles(company_name, limit=5)
+    if not results:
+        return None
+    allowed = _name_word_set(company_name, ticker)
+    squashed_name = _squashed(company_name)
+    for cand in results:
+        if _title_relevant(cand, company_name, ticker) and _squashed(_bare_title(cand)) == squashed_name:
+            return cand
+    top = results[0]
+    if _title_relevant(top, company_name, ticker):
+        top_overlap = _relevance_overlap(top, company_name, ticker)
+        top_len = len(set(_normalize_words(top)))
+        for cand in results[1:]:
+            if not _title_relevant(cand, company_name, ticker):
+                continue
+            cand_words = set(_normalize_words(cand))
+            if (
+                _relevance_overlap(cand, company_name, ticker) > top_overlap
+                and cand_words <= allowed
+                and len(cand_words) <= top_len
+            ):
+                return cand
+        return top
+    best: str | None = None
+    best_score = 0
+    for cand in results[1:]:
+        if not _title_relevant(cand, company_name, ticker):
+            continue
+        if not set(_normalize_words(cand)) <= allowed:
+            continue
+        score = _relevance_overlap(cand, company_name, ticker)
+        if score > best_score:
+            best, best_score = cand, score
+    return best
+
+
+def _normalize_words(text: str) -> list[str]:
+    """Significant words, normalized for company-name/title comparison.
+
+    Hyphens split into words ("Kimberly-Clark" -> kimberly, clark),
+    apostrophes and punctuation are stripped ("Domino's" -> dominos), so
+    SEC-style names ("COCA COLA CO", "DOMINOS PIZZA INC") match their
+    Wikipedia titles ("The Coca-Cola Company", "Domino's").
+    """
+    words: list[str] = []
+    for chunk in text.replace("-", " ").split():
+        # Interior apostrophes ("Domino's" -> dominos) as well as edge punctuation
+        w = chunk.lower().replace("'", "").replace("’", "").strip(".,;:!?\"()")
+        if w and w not in _STOP_WORDS and len(w) > 2:
+            words.append(w)
+    return words
+
+
+def _paren_content(title: str) -> str | None:
+    """Text inside the title's parenthetical, if any."""
+    start, end = title.find("("), title.rfind(")")
+    if 0 <= start < end:
+        return title[start + 1 : end].strip().lower()
+    return None
+
+
+def _title_relevant(title: str, company_name: str, ticker: str | None = None) -> bool:
+    """Return True if the Wikipedia title plausibly names the company.
+
+    Never relevant:
+    - Lawsuit articles ("United States v. Microsoft Corp.") — the " v. "
+      citation convention never names the company article.
+    - List articles ("List of mergers and acquisitions by Microsoft") —
+      the "List of " prefix marks a Wikipedia list, never the company.
+    - Parenthetical-disambiguated pages other than "(company)":
+      "William Procter (industrialist)" and "Procter & Gamble (P&G)
+      Pakistan" are not the company; "Amazon (company)" is (bare "Amazon"
+      is the river/mythology).
+
+    Otherwise, three rules in order:
+    1. Acronym pages: the article is literally the ticker ("AMD", "BNY").
+    2. First-word agreement between the SEC name and the title.
+    3. Fallback: the SEC name's lead word appears anywhere in the title —
+       covers "John Deere" for "DEERE & CO", "The Coca-Cola Company" for
+       "COCA COLA CO", "Domino's" for "DOMINOS PIZZA INC", and
+       "Kimberly-Clark" for "KIMBERLY CLARK CORP".
+    """
+    lowered = title.lower()
+    if " v. " in lowered or " vs. " in lowered or " vs " in lowered:
         return False
-    return name_words[0] in title_words
+    if lowered.startswith("list of "):
+        return False
+    paren = _paren_content(title)
+    if paren is not None and paren != "company":
+        return False
+    if ticker and title.strip().lower() == ticker.strip().lower():
+        return True
+    title_words = _normalize_words(title)
+    name_words = _normalize_words(company_name)
+    if not name_words or not title_words:
+        return False
+    if title_words[0] == name_words[0]:
+        return True
+    if name_words[0] in title_words:
+        return True
+    return False
 
 
-def _search_title(query: str) -> str | None:
-    """Return the Wikipedia title, empty string if no results, None on network error.
-    Callers treat both falsy values identically — no distinction is enforced upstream."""
+def _search_titles(query: str, limit: int = 5) -> list[str]:
+    """Return up to ``limit`` Wikipedia search-result titles, [] on error.
+
+    Callers treat [] identically to no results — no distinction is enforced
+    upstream."""
     try:
         resp = httpx.get(
             _SEARCH,
@@ -54,21 +210,27 @@ def _search_title(query: str) -> str | None:
                 "list": "search",
                 "srsearch": f"{query} company",
                 "format": "json",
-                "srlimit": 1,
+                "srlimit": limit,
             },
             timeout=10,
             headers={"User-Agent": "Tickerlens/1.0 (personal research tool)"},
         )
         resp.raise_for_status()
         results = resp.json().get("query", {}).get("search", [])
-        return results[0]["title"] if results else ""
+        return [r["title"] for r in results if r.get("title")]
     # NOTE: httpx.InvalidURL is NOT an HTTPError subclass (inherits directly
     # from Exception); it can be raised from broken proxy/env config before
     # any request is made. Treat it as a network failure, per this module's
     # None-on-error contract.
     except (httpx.HTTPError, httpx.InvalidURL, OSError):
         logger.warning("Wikipedia search failed for %r", query, exc_info=True)
-        return None
+        return []
+
+
+def _search_title(query: str) -> str | None:
+    """Return the top Wikipedia search-result title, None when absent/error."""
+    titles = _search_titles(query, limit=1)
+    return titles[0] if titles else None
 
 
 def _fetch_extract(title: str) -> str | None:
@@ -79,7 +241,12 @@ def _fetch_extract(title: str) -> str | None:
             headers={"User-Agent": "Tickerlens/1.0 (personal research tool)"},
         )
         resp.raise_for_status()
-        extract: str = resp.json().get("extract", "")
+        data = resp.json()
+        # Disambiguation pages ("O", "T") carry short extracts that would
+        # otherwise pass the stub floor — reject by type, not by length.
+        if data.get("type") == "disambiguation":
+            return None
+        extract: str = data.get("extract", "") or ""
         if len(extract.split()) < _MIN_WORDS:
             return None
         return extract[:_MAX_CHARS]

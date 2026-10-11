@@ -620,7 +620,7 @@ class FinancialsService:
                 raise ValueError(f"Company with CIK {cik} not in DB — run fetch_and_persist first")
 
             quote = get_quote(ticker)
-            description = get_description(company.name)
+            description = get_description(company.name, ticker=ticker)
 
             # Price and market cap are point-in-time snapshots; never wipe a
             # previously-good value when a transient quote failure returns None
