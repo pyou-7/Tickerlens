@@ -174,3 +174,44 @@ def test_supplement_loses_to_narrative_release():
 def test_supplement_picked_when_only_option():
     links = ["ex991supplement.htm", "R1.htm"]
     assert _pick_release_doc(links) == "ex991supplement.htm"
+
+
+def test_mastercard_doubled_x_ex99():
+    # Mastercard names exhibits ma06302026-exx991xearnings.htm (doubled x).
+    links = [
+        "/Archives/edgar/data/1141391/000114139126000081/ma-20260730.htm",
+        "/Archives/edgar/data/1141391/000114139126000081/ma06302026-exx991xearnings.htm",
+        "/Archives/edgar/data/1141391/000114139126000081/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "ma06302026-exx991xearnings.htm"
+
+
+def test_starbucks_truncated_earningsrele():
+    # Starbucks truncates "release": sbux-06282026xearningsrele.htm.
+    links = [
+        "/Archives/edgar/data/829224/000082922426000129/sbux-20260729.htm",
+        "/Archives/edgar/data/829224/000082922426000129/sbux-06282026xearningsrele.htm",
+        "/Archives/edgar/data/829224/000082922426000129/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "sbux-06282026xearningsrele.htm"
+
+
+def test_amd_bare_991_suffix():
+    # AMD names the exhibit q22026991.htm (quarter + 99.1, no "ex").
+    links = [
+        "/Archives/edgar/data/2488/000000248826000121/amd-20260804.htm",
+        "/Archives/edgar/data/2488/000000248826000121/amdq22026earningsslidesf.htm",
+        "/Archives/edgar/data/2488/000000248826000121/q22026991.htm",
+        "/Archives/edgar/data/2488/000000248826000121/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "q22026991.htm"
+
+
+def test_amgen_truncated_earningsrelea():
+    # Amgen truncates differently: amgn-20260630earningsrelea.htm.
+    links = [
+        "/Archives/edgar/data/318154/000031815426000000/amgn-20260804.htm",
+        "/Archives/edgar/data/318154/000031815426000000/amgn-20260630earningsrelea.htm",
+        "/Archives/edgar/data/318154/000031815426000000/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "amgn-20260630earningsrelea.htm"

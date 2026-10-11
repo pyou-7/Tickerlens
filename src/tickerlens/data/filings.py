@@ -70,17 +70,36 @@ _ADMIN_LINE_RE = re.compile(
     r"|^ex-?99\.1\b"  # EX-99.1
     r"|^exhibit\s+99\b"  # Exhibit 99.1
     r"|^\d{1,3}$"  # page numbers
-    r"|^\S+\.html?$",  # exhibit filename lines
+    r"|^\S+\.html?$"  # exhibit filename lines
+    r"|^\(furnished herewith\)$",  # SEC exhibit parenthetical (Deere-style)
     re.IGNORECASE,
 )
 
 # An explicit "Highlights" / "Financial Highlights" section heading.
 _HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
 
+# Contact lines (media/investor contacts + email addresses) that some filers
+# (e.g. JNJ, Deere) place *before* the release headline. They are neither headline nor
+# lede content: skipping them keeps "Media contact:" / "Media Inquiries:" from
+# becoming the headline and keeps a leading "Investor contact:" from terminating
+# the lede fallback before any real content is collected.
+_CONTACT_LINE_RE = re.compile(
+    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)|[\w.\-+]+@[\w.\-]+\.\w+",
+    re.IGNORECASE,
+)
+
 # Guidance and Outlook section headings in earnings releases
 _GUIDANCE_HEADING_RE = re.compile(
     r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
-    r"(?:first|second|third|fourth|q[1-4]|fiscal|\d{4})\s+(?:quarter|year|\d{4})?\s*(?:financial\s+)?(?:guidance|outlook)|"
+    # Quarter-prefixed long forms: "Fourth Quarter Fiscal Year 2026 Business
+    # Outlook" (AVGO), "Full Year Fiscal 2027 Guidance" / "First Quarter Fiscal
+    # 2027 Guidance" (INTU), "Full-year 2026 guidance:" (JNJ). Up to five
+    # intervening words (quarter/fiscal/year/digits, hyphen- or space-separated)
+    # are allowed between the prefix and the guidance/outlook tail.
+    r"(?:first|second|third|fourth|full|q[1-4]|fiscal|\d{4})"
+    r"(?:[\s\-]+(?:quarter|fiscal|year|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
+    # "Forward-Looking Guidance" section intros (INTU).
+    r"forward[- ]looking\s+(?:business\s+)?(?:guidance|outlook)|"
     r"cfo\s+outlook(?: commentary)?|outlook\s+summary|guidance\s+summary|outlook|guidance)\b",
     re.IGNORECASE,
 )
@@ -191,7 +210,7 @@ def extract_press_release_highlights(
     headline: str | None = None
     body_start = 0
     for i, ln in enumerate(lines):
-        if _ADMIN_LINE_RE.match(ln):
+        if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline = ln
@@ -209,6 +228,8 @@ def extract_press_release_highlights(
         for ln in body_lines:
             if _ADMIN_LINE_RE.match(ln):
                 continue  # stray exhibit headers / page numbers mid-document
+            if _CONTACT_LINE_RE.search(ln):
+                continue  # contact blocks some filers put before the headline
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)
@@ -333,6 +354,11 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = _html.unescape(text).replace("\xa0", " ")
+    # Zero-width / BOM characters are invisible junk that some filers' exhibits
+    # sprinkle between blocks (Deere's release pads sections with \u200b
+    # lines). Left in, they count as "content" lines and can fill the lede
+    # line-cap with invisible text, starving real highlights.
+    text = text.replace("\u200b", "").replace("\ufeff", "")
     text = re.sub(r"[ \t]+", " ", text)          # collapse runs of spaces
     text = re.sub(r" *\n *", "\n", text)          # trim spaces around newlines
     text = re.sub(r"\n{3,}", "\n\n", text)        # cap blank-line runs

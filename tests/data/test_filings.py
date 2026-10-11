@@ -332,3 +332,87 @@ def test_extract_transcript_excerpts_finds_attribution_with_phrase_before_colon(
     assert excerpts is not None
     assert "Jamie Dimon" in excerpts
     assert "very strong results" in excerpts
+
+
+def test_extract_management_guidance_quarter_prefixed_long_headings() -> None:
+    # Batch-50: long-form quarter-prefixed headings seen in the wild.
+    for heading in (
+        "Fourth Quarter Fiscal Year 2026 Business Outlook",  # AVGO
+        "Full Year Fiscal 2027 Guidance",  # INTU
+        "First Quarter Fiscal 2027 Guidance",  # INTU
+        "Forward-Looking Guidance",  # INTU
+        "Full-year 2026 guidance:",  # JNJ
+    ):
+        html = f"""<html><body>
+        <h1>Acme Corp Q3 Results</h1>
+        <h2>{heading}</h2>
+        <p>Revenue is expected to be between $11.5 billion and $12.0 billion next quarter, with strong growth across all segments and continued momentum.</p>
+        <p>GAAP gross margin is expected to be approximately 45.0% on the strength of the product mix.</p>
+        <h2>Condensed Consolidated Statements of Operations</h2>
+        <p>Revenue: $10,000</p>
+        </body></html>"""
+        guidance = extract_management_guidance(html)
+        assert guidance is not None, heading
+        assert heading in guidance
+        assert "$11.5 billion" in guidance
+        assert "Condensed Consolidated" not in guidance
+
+
+def test_extract_press_release_highlights_skips_leading_contact_block() -> None:
+    # Batch-50: JNJ's ex-99 puts media/investor contacts before the headline and
+    # has no "Highlights" section. The old code picked "Media contact:" as the
+    # headline and let "Investor contact:" terminate the lede fallback, yielding
+    # None for the whole release.
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>a2026q2exhibit991.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>Media contact:</p><p>media-relations@its.jnj.com</p>
+    <p>Investor contact:</p><p>investor-relations@its.jnj.com</p>
+    <p>For immediate release</p>
+    <p>Johnson &amp; Johnson reports Q2 2026 results, raises 2026 outlook</p>
+    <p>• 2026 Second-Quarter reported sales growth of 6.6% to $25.3 billion with operational growth of 5.6% and adjusted operational growth of 7.1%.</p>
+    <p>• 2026 Second-Quarter earnings per share (EPS) of $2.27 and adjusted EPS of $2.90, reflecting strong operational performance across the portfolio.</p>
+    <p>• Strong operational performance results in the Company increasing 2026 guidance with estimated reported sales growth now expected at the high end.</p>
+    <p>New Brunswick, N.J. (July 15, 2026) – Johnson &amp; Johnson today announced results for second-quarter 2026, delivering another quarter of strong growth.</p>
+    <h2>About Johnson &amp; Johnson</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "Johnson & Johnson reports Q2 2026 results" in hl
+    assert "$25.3 billion" in hl
+    assert "media-relations@its.jnj.com" not in hl
+    assert "Media contact" not in hl
+    assert "About Johnson" not in hl
+
+
+def test_extract_highlights_ignores_zwsp_and_furnished_parenthetical() -> None:
+    # Batch-50: Deere's ex-99 pads sections with zero-width-space lines and
+    # opens with "(Furnished herewith)". The zwsp lines filled the 6-line lede
+    # cap with invisible text and the parenthetical became the headline,
+    # yielding None for the whole release.
+    zwsp = "​"
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>2</p><p>de-20260820xex99d1.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>(Furnished herewith)</p>
+    <p>{zwsp}</p><p>{zwsp}</p><p>{zwsp}</p>
+    <p>News Release</p>
+    <p>{zwsp}</p>
+    <p>Media Inquiries:</p><p>PublicRelations@JohnDeere.com</p>
+    <p>{zwsp}</p>
+    <p>Deere Reports Third Quarter Net Income of $1.379 Billion</p>
+    <p>● Disciplined execution drives stronger-than-expected results across the enterprise, with net sales and revenues of $12.018 billion for the quarter.</p>
+    <p>● Net income guidance improved to $4.75 billion to $5.00 billion for fiscal 2026, reflecting resilient demand in production agriculture.</p>
+    <p>MOLINE, Illinois (August 20, 2026) – Deere &amp; Company reported net income of $1.379 billion for the third quarter ended July 26, 2026.</p>
+    <p>● Production and precision agriculture net sales rose 12 percent on strong order books and improved factory efficiency across all major product lines.</p>
+    <p>● Small agriculture and turf net sales increased 4 percent as retail demand stabilized and dealer inventories reached healthier levels entering the season.</p>
+    <p>● Construction and forestry net sales grew 7 percent, supported by infrastructure spending and a recovering North American rental channel.</p>
+    <h2>About Deere</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "Deere Reports Third Quarter Net Income" in hl
+    assert "$4.75 billion to $5.00 billion" in hl
+    assert "Furnished herewith" not in hl
+    assert "Media Inquiries" not in hl
+    assert zwsp not in hl

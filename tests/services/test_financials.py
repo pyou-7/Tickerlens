@@ -2795,3 +2795,50 @@ def test_render_period_csv_partial_year_note() -> None:
         period(label="Q2 FY2025", fiscal_period="Q2", quarters_count=1),
     )
     assert "# Period note" not in quarterly_csv
+
+
+def test_get_detail_backfill_triggers_when_only_guidance_missing(session: Session) -> None:
+    """Batch-50 regression: the lazy disclosure backfill trigger covered only
+    press_release_highlights, so rows with highlights filled but guidance NULL
+    (AVGO/INTU in the wild) never got their guidance backfilled."""
+    from unittest.mock import MagicMock, patch
+
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    q3.press_release_highlights = "Highlights already filled."
+    q3.press_release_source = "Earnings release Q3 FY2025"
+    session.add(q3)
+    session.commit()
+
+    html_with_guidance = (
+        "<html><head><title>EX-99.1</title></head><body>"
+        "<h1>Acme Corp Reports Third Quarter 2025 Results</h1>"
+        "<h2>Full Year Fiscal 2026 Guidance</h2>"
+        "<p>Revenue is expected to be between $45.0 billion and $46.5 billion for fiscal 2026, "
+        "with operating margin expansion across every segment of the business portfolio.</p>"
+        "<p>GAAP gross margin is expected to be approximately 47.0 percent for the full year.</p>"
+        "<h2>Condensed Consolidated Statements of Operations</h2>"
+        "<p>Revenue: $40,100</p>"
+        "</body></html>"
+    )
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, discover_mock = _enrich_mocks(
+        mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))]
+    )
+    # _enrich_mocks sets a highlights-only fixture; override with a release
+    # that also carries a guidance section.
+    mock_edgar.fetch_text.return_value = html_with_guidance
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    assert discover_mock.called, "backfill must trigger when guidance is missing"
+    assert ctx.management_guidance is not None
+    assert "$45.0 billion" in ctx.management_guidance
+    # Previously-good highlights must not be wiped or overwritten.
+    assert ctx.press_release_highlights == "Highlights already filled."

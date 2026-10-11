@@ -1861,7 +1861,17 @@ class FinancialsService:
             # lazily on first detail view — best-effort and never raising; the
             # enrichment short-circuits once rows are filled and SEC responses
             # are disk-cached, so repeat visits stay cheap.
-            if any(r.press_release_highlights is None for r in all_rows):
+            # NOTE: the trigger must cover all three disclosure fields, not
+            # just highlights — rows can have highlights filled while guidance
+            # is still missing (e.g. AVGO/INTU before the batch-50 guidance
+            # extractor fix); a highlights-only trigger would never backfill
+            # them.
+            if any(
+                r.press_release_highlights is None
+                or r.management_guidance is None
+                or r.transcript_excerpts is None
+                for r in all_rows
+            ):
                 try:
                     self._enrich_press_release_highlights(db, ticker, cik)
                     if owns_session:

@@ -209,9 +209,12 @@ def _pick_release_doc(links: list[str]) -> str | None:
     """Pick the earnings-release exhibit filename from 8-K filing-index links.
 
     Pure (no network) so it can be unit-tested. Priority order:
-      1. ex99-style names (ex99, ex-99, ex991, EX-99.1) — AAPL/MSFT/PLUG style.
-      2. Press-release naming: *pressrelease*, *earningsrelease*, *-pr/_pr
-         suffixes, or a quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
+      1. ex99-style names (ex99, ex-99, ex991, EX-99.1, exx99) —
+         AAPL/MSFT/PLUG style, plus Mastercard's doubled-x
+         "ma06302026-exx991xearnings.htm" convention.
+      2. Press-release naming: *pressrelease*, *earningsrelease* (or the
+         truncated *earningsrele* Starbucks uses), *-pr/_pr suffixes, or a
+         quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
     Within a tier, a "supplement" exhibit (tables/appendix material, e.g.
     JPMorgan's *erfex992supplement.htm) loses to the narrative release
     (e.g. *exhibit991narrative.htm) — the supplement has no guidance section
@@ -230,9 +233,18 @@ def _pick_release_doc(links: list[str]) -> str | None:
     def _rank(name: str) -> tuple[int, int] | None:
         stem = re.sub(r"\.html?$", "", name, flags=re.IGNORECASE)
         base: int | None = None
-        if re.search(r"ex(hibit)?[^a-z0-9]?99", name, re.IGNORECASE):
+        # ex99 / ex-99 / ex991 / EX-99.1 / exx99 (Mastercard's doubled-x
+        # "exx991xearnings" convention, e.g. ma06302026-exx991xearnings.htm),
+        # or a bare "991" exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1).
+        if re.search(r"ex(?:hibit)?x?[^a-z0-9]?99", name, re.IGNORECASE) or re.search(
+            r"991$", stem, re.IGNORECASE
+        ):
             base = 0
-        elif re.search(r"(press|earnings)[-_]?release", stem, re.IGNORECASE):
+        # Press-release naming: *pressrelease*, *earningsrelease* (or the
+        # truncated *earningsrele* / *earningsrelea* Starbucks and Amgen use,
+        # e.g. sbux-06282026xearningsrele.htm), *-pr/_pr suffixes, or a
+        # quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
+        elif re.search(r"(press|earnings)[-_ ]?rele[a-z]*\b", stem, re.IGNORECASE):
             base = 1
         elif re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
             base = 1
