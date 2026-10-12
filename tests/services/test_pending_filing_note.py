@@ -556,3 +556,105 @@ def test_tearsheet_omits_note_when_none() -> None:
     html = _render_tearsheet(None)
     assert "data feed yet" not in html
     assert "Latest Quarter Data" not in html
+
+
+# ── vs page (batch 57) ───────────────────────────────────────────────────────
+
+def _seed_vs_company(session: Session, cik: str, ticker: str, name: str,
+                     note: str | None) -> None:
+    c = _company(cik=cik, ticker=ticker)
+    c.name = name
+    c.last_price = 200.0
+    c.market_cap = 3e12
+    c.pending_filing_note = note
+    session.add(c)
+    ends = [dt.date(2024, 6, 30), dt.date(2024, 9, 30), dt.date(2024, 12, 31),
+            dt.date(2025, 3, 31), dt.date(2025, 6, 30)]
+    fps = ["Q2", "Q3", "Q4", "Q1", "Q2"]
+    fys = [2024, 2024, 2024, 2025, 2025]
+    revs = [80_000, 91_000, 119_575, 95_359, 85_777]
+    nis = [20_000, 21_000, 33_917, 24_780, 21_448]
+    epss = [1.30, 1.38, 2.18, 1.64, 1.40]
+    fcfs = [20_000, 20_000, 26_600, 30_300, 22_700]
+    for end, fy, fp, rev, ni, eps, fcf in zip(ends, fys, fps, revs, nis, epss, fcfs):
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, net_income=ni, eps_diluted=eps,
+                         free_cash_flow=fcf))
+    session.commit()
+
+
+def _svc_two(session: Session) -> FinancialsService:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.side_effect = lambda t: {
+        "AAPL": "0000320193", "MSFT": "0000789019",
+    }[t.upper()]
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_get_company_vs_surfaces_pending_notes(session: Session) -> None:
+    _seed_vs_company(session, "0000320193", "AAPL", "Apple Inc.",
+                     "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet")
+    _seed_vs_company(session, "0000789019", "MSFT", "Microsoft Corp.", None)
+    vs = _svc_two(session).get_company_vs("AAPL", "MSFT")
+    assert vs.a.pending_filing_note == (
+        "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet")
+    assert vs.b.pending_filing_note is None
+
+
+def test_get_company_vs_note_none_by_default(session: Session) -> None:
+    _seed_vs_company(session, "0000320193", "AAPL", "Apple Inc.", None)
+    _seed_vs_company(session, "0000789019", "MSFT", "Microsoft Corp.", None)
+    vs = _svc_two(session).get_company_vs("AAPL", "MSFT")
+    assert vs.a.pending_filing_note is None
+    assert vs.b.pending_filing_note is None
+
+
+def _render_vs(a_note: str | None, b_note: str | None) -> str:
+    from tickerlens.routes.company import templates
+    from tickerlens.services.financials import (
+        CompanyVs, KPIChange, KPISnapshot, VsCompany,
+    )
+
+    def side(ticker: str, name: str, note: str | None) -> VsCompany:
+        return VsCompany(
+            ticker=ticker, name=name, sector="Technology",
+            period_label="Q2 FY2025",
+            kpi=KPISnapshot(revenue=85_777.0, net_income=21_448.0,
+                            eps_basic=1.40, eps_diluted=1.40,
+                            free_cash_flow=22_700.0),
+            yoy=KPIChange(revenue=7.2, net_income=None, eps_basic=None,
+                          eps_diluted=None, free_cash_flow=None),
+            last_price=200.0, market_cap=3e12,
+            signal="Buy", upside_pct=12.5,
+            pending_filing_note=note,
+        )
+
+    vs = CompanyVs(a=side("AAPL", "Apple Inc.", a_note),
+                   b=side("MSFT", "Microsoft Corp.", b_note))
+    t = templates.get_template("company/vs.html")
+    return t.render({"request": MagicMock(), "vs": vs})
+
+
+def test_vs_page_renders_pending_note_for_one_side() -> None:
+    html = _render_vs(
+        "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet",
+        None)
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in html or "aren't in EDGAR's data feed yet" in html
+    assert "amber-950/40" in html
+    # The ticker label disambiguates which side the note belongs to.
+    assert ">AAPL:</span>" in html
+
+
+def test_vs_page_renders_notes_for_both_sides() -> None:
+    html = _render_vs("A note", "B note")
+    assert ">AAPL:</span> A note" in html
+    assert ">MSFT:</span> B note" in html
+    assert "amber-950/40" in html
+
+
+def test_vs_page_omits_note_when_none() -> None:
+    html = _render_vs(None, None)
+    assert "data feed yet" not in html
+    # The amber note block is the only amber-950/40 on the vs page (the Hold
+    # signal badge uses amber-950/50).
+    assert "amber-950/40" not in html

@@ -737,6 +737,37 @@ def test_company_vs_refreshes_filings_for_both_tickers(
     assert refreshed == ["AAPL", "MSFT"]
 
 
+def test_company_vs_renders_pending_filing_note(client: TestClient, monkeypatch) -> None:
+    """The vs page renders the amber honesty note per side (batch 57)."""
+    from tickerlens import routes
+
+    ctx = _vs_ctx()
+    ctx.a.pending_filing_note = "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet"
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = ctx
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in resp.text or "aren't in EDGAR's data feed yet" in resp.text
+    assert ">AAPL:</span>" in resp.text
+    assert "amber-950/40" in resp.text
+
+
+def test_company_vs_omits_note_when_none(client: TestClient, monkeypatch) -> None:
+    """No note block when neither side has anything pending (batch 57)."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = _vs_ctx()  # pending_filing_note=None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    assert "data feed yet" not in resp.text
+    assert "amber-950/40" not in resp.text
+
+
 def test_earnings_calendar_route(client: TestClient, monkeypatch) -> None:
     from tickerlens import routes
     from tickerlens.data.calendar import EarningsEvent

@@ -539,6 +539,11 @@ class VsCompany(BaseModel):
     market_cap: float | None
     signal: str  # valuation signal: Strong Buy … Strong Sell | Watch
     upside_pct: float | None  # implied upside to target, in percent
+    # Batch 57: same amber honesty note as overview/detail (Company.pending_filing_note)
+    # — this side's 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't
+    # ingested its figures yet, so the side shows the prior quarter. None when
+    # nothing is pending. Wired from DetailContext in _vs_company.
+    pending_filing_note: str | None = None
 
 
 class CompanyVs(BaseModel):
@@ -1676,6 +1681,7 @@ class FinancialsService:
             market_cap=detail.market_cap,
             signal=val.signal,
             upside_pct=val.upside_pct,
+            pending_filing_note=detail.pending_filing_note,  # batch 57
         )
 
     def get_company_vs(

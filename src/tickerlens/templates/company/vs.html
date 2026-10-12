@@ -105,6 +105,16 @@
 </div>
 
 <!-- Swap/Change Companies Toolbar -->
+{% if vs.a.pending_filing_note or vs.b.pending_filing_note %}
+<div class="mb-8">
+  {% if vs.a.pending_filing_note %}
+  <p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-2 font-medium max-w-4xl mb-2"><span class="font-semibold">{{ vs.a.ticker }}:</span> {{ vs.a.pending_filing_note }}</p>
+  {% endif %}
+  {% if vs.b.pending_filing_note %}
+  <p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-2 font-medium max-w-4xl"><span class="font-semibold">{{ vs.b.ticker }}:</span> {{ vs.b.pending_filing_note }}</p>
+  {% endif %}
+</div>
+{% endif %}
 <div class="mb-8 rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs" x-data="{ a: '{{ vs.a.ticker }}', b: '{{ vs.b.ticker }}' }">
   <form @submit.prevent="if (a.trim() && b.trim()) location = '/company/' + a.trim().toUpperCase() + '/vs/' + b.trim().toUpperCase()"
         class="flex items-center gap-2.5 flex-wrap">
