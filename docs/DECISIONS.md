@@ -987,3 +987,17 @@ Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.
 **What:** `refresh_financials_if_stale` now computes a plain-language `Company.pending_filing_note` whenever a 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its figures (the batch-37 ingestion lag); the overview page renders it as an amber note under Latest Quarter and it clears automatically once the quarter lands.
 **Why:** 12 tickers showed stale quarters for ~3 months with no explanation while their 10-Qs sat filed — the retry loop was correctly armed, so the defect was user-facing silence, not pipeline failure. The note distinguishes three states precisely: ingestion lag (note), facts-ingested-but-unextracted (no note — a defect-hunt question, never mislabeled as lag), and structural stubs (no note — batch-48 acknowledgment owns those).
 **Alternatives considered:** A backoff on the futile 6h re-pulls (rejected — the lag resolves unpredictably and the retry is what picks it up; the note makes the waiting legible instead); computing the note live in the route on every view (rejected — the check is TTL-gated, so persisting on the company row keeps the note valid between checks with zero extra EDGAR traffic beyond the existing companyfacts read, which reuses the already-fetched submissions feed).
+
+---
+
+## 2026-10-12 — Pending-filing note on compare + tearsheet (batch 56)
+
+**What:** The batch-53 EDGAR-ingestion-lag honesty note now renders on the compare page (both quarterly and yearly modes) and the printable institutional tearsheet, completing the rollout across overview (batch 53), detail (batch 55), compare, and tearsheet. `CompareContext.pending_filing_note` is wired through `get_compare`'s shared `common` dict; the compare template reuses the exact amber classes from overview/detail; the tearsheet gets a print-proof "LATEST QUARTER DATA" block (`page-break-inside-avoid`, matching the batch-30 valuation×fundamentals callout) so a printed PDF can't be read as current when it isn't.
+
+**Why:** A stale latest quarter is most dangerous where comparison and print amplify it: the compare page compares two stale-labeled periods without the overview's caveat, and a printed tearsheet outlives the page — the note self-clears once EDGAR ingests, so the print carries the freshness date it deserves. Wiring through the shared `common` dict rather than both `CompareContext(...)` constructions keeps the field impossible to forget in one mode.
+
+**Alternatives considered:** Reusing the overview's `max-w-4xl mb-3` classes verbatim on the tearsheet (rejected — the tearsheet is a full-bleed light document where the bordered amber-50 callout matches the existing institutional tone, and `mb-3` inside the `space-y-8` container would collapse inconsistently); placing the note after the valuation bar instead of the header banner (rejected — freshness is a precondition for interpreting everything below it, so it belongs first).
+
+**Blast radius:** `CompareContext` + `get_compare` wiring only; no extraction, valuation, briefing, or calendar changes. Templates: two additive conditional blocks, no redesign. 6 new tests. Suite 560 green, `git diff --check` clean. Screenshot gate passed (V note shown on both pages, AAPL control unchanged).
+
+**Follow-ups (not this batch):** the same note on the vs page (the only remaining company data page without it); DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
