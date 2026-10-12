@@ -384,3 +384,95 @@ def test_best_title_fallback_skipped_when_nothing_to_strip() -> None:
     ) as mock_search:
         assert _best_title("Atlassian", ticker="TEAM") is None
         assert mock_search.call_count == 1
+
+
+def test_best_title_alias_rescues_dba() -> None:
+    """Batch 58 (live CART case): the legal-name search's top hit IS
+    'Instacart' but word-agreement against 'Maplebear Inc.' rejects it;
+    the curated alias retries with the DBA name and takes the exact
+    article."""
+    mapping = {
+        "Maplebear Inc.": ["Instacart", "AppFolio"],
+        "Maplebear": [],
+        "Instacart": ["Instacart", "Instacart (disambiguation)"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("Maplebear Inc.", ticker="CART") == "Instacart"
+
+
+def test_best_title_alias_rescues_spelling_drift() -> None:
+    """Batch 58 (live SHOO case): 'steve' vs 'steven' defeats every
+    word-agreement path for 'STEVEN MADDEN, LTD.'; the alias retries with
+    the exact company-article title."""
+    mapping = {
+        "STEVEN MADDEN, LTD.": ["Steve Madden, Ltd.", "Steve Madden"],
+        "STEVEN MADDEN": ["Steve Madden, Ltd.", "Steve Madden"],
+        "Steve Madden, Ltd.": ["Steve Madden, Ltd.", "Steve Madden"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("STEVEN MADDEN, LTD.", ticker="SHOO") == "Steve Madden, Ltd."
+
+
+def test_best_title_alias_declines_person_page() -> None:
+    """Batch 58: the alias retry demands an exact squashed-title match, so
+    when the company article is absent the founder's 'Steve Madden' page
+    is declined instead of misattributed (batch-47 class). A fuzzy
+    relevance path would have accepted it on first-word agreement."""
+    mapping = {
+        "STEVEN MADDEN, LTD.": [],
+        "STEVEN MADDEN": [],
+        "Steve Madden, Ltd.": ["Steve Madden"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("STEVEN MADDEN, LTD.", ticker="SHOO") is None
+
+
+def test_best_title_alias_not_consulted_when_primary_hits() -> None:
+    """Batch 58: the alias fires last, so companies that already resolve
+    via the legal name are untouched — the 'Instacart' query is never
+    issued."""
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        return_value=["Maplebear (company)"],
+    ) as mock_search:
+        assert _best_title("Maplebear Inc.", ticker="CART") == "Maplebear (company)"
+        assert mock_search.call_count == 1
+
+
+def test_best_title_alias_ticker_lookup_case_insensitive() -> None:
+    """Batch 58: the map is keyed by canonical ticker regardless of the
+    caller's casing."""
+    mapping = {
+        "Maplebear Inc.": [],
+        "Maplebear": [],
+        "Instacart": ["Instacart"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("Maplebear Inc.", ticker="cart") == "Instacart"
+
+
+def test_best_title_alias_stays_none_without_article() -> None:
+    """Batch 58 (live AGNC case): no Wikipedia article exists, so no alias
+    is curated and None stays None — the map must never point at a parent
+    or subsidiary as a consolation prize."""
+    mapping = {
+        "AGNC Investment Corp.": ["American Capital", "List of S&P 400 companies"],
+        "AGNC Investment": [],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("AGNC Investment Corp.", ticker="AGNC") is None

@@ -31,6 +31,24 @@ _CORP_SUFFIXES = frozenset(
         "holdings", "holding", "group", "trust", "bancorp", "bancshares",
     }
 )
+# Curated DBA/nickname aliases (batch 58): ticker -> the exact Wikipedia
+# article title, for companies whose SEC legal name cannot reach the right
+# article on its own. Human-verified only — never guess an entry:
+# - CART: "Maplebear Inc." does business as Instacart; the legal-name
+#   search's top hit IS "Instacart" but word-agreement against "Maplebear"
+#   rejects it. The article's first line is "Maplebear Inc., doing business
+#   as Instacart..." (verified).
+# - SHOO: "STEVEN MADDEN, LTD." — the article is "Steve Madden, Ltd." and
+#   "steve" vs "steven" defeats first-word agreement. The ", Ltd." is
+#   load-bearing: the bare title "Steve Madden" is the founder's page, so
+#   the alias must be the exact company-article title (verified).
+# Tickers with no Wikipedia article at all (AGNC, APLD, MPLX) stay
+# out — an alias can't fix a missing article, and pointing at a parent or
+# subsidiary would be a batch-47-class misattribution.
+_DBA_ALIASES = {
+    "CART": "Instacart",
+    "SHOO": "Steve Madden, Ltd.",
+}
 
 
 def get_description(company_name: str, ticker: str | None = None) -> str | None:
@@ -114,6 +132,16 @@ def _best_title(company_name: str, ticker: str | None = None) -> str | None:
     "Atlassian company" hits the article). Acceptance is strict — the
     candidate must be an article *named* the stripped company name — so
     merely similar articles are declined, never misattributed.
+
+    Alias retry (batch 58): when the fallback also yields nothing and the
+    ticker has a curated entry in _DBA_ALIASES, search the alias and accept
+    only the article whose squashed full title equals the squashed alias
+    (exact, parenthetical included). This is the escape hatch for
+    DBA/nickname companies ("Maplebear Inc." -> Instacart) and spelling
+    drift ("STEVEN MADDEN, LTD." -> the "Steve Madden, Ltd." article). The
+    exact-match requirement is what keeps SHOO off the founder's "Steve
+    Madden" page — a fuzzy relevance path would accept it on first-word
+    agreement. Fires last, so the 130 described companies are untouched.
     """
     results = _search_titles(company_name, limit=5)
     if results:
@@ -161,6 +189,18 @@ def _best_title(company_name: str, ticker: str | None = None) -> str | None:
         for cand in _search_titles(stripped, limit=5):
             if _strict_title_match(cand, stripped):
                 return cand
+    # Alias retry (batch 58): last resort, exact title match only. The map
+    # is keyed by ticker so no recursion guard is needed — this is a flat
+    # search of the alias, not a re-entry into _best_title.
+    if ticker:
+        alias = _DBA_ALIASES.get(ticker.strip().upper())
+        if alias and alias != company_name:
+            squashed_alias = _squashed(alias)
+            for cand in _search_titles(alias, limit=5):
+                if _never_relevant(cand):
+                    continue
+                if _squashed(cand) == squashed_alias:
+                    return cand
     return None
 
 
