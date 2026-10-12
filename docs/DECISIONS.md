@@ -16,6 +16,15 @@ Format:
 
 ---
 
+## 2026-10-12 — Batch 55: pending-filing honesty note on the detail page
+
+**What:** `DetailContext` gains `pending_filing_note` (wired from `Company.pending_filing_note` in `get_detail`), and `partials/detail_data.html` renders the same amber honesty note as the overview, below the period label and above the hero KPI cards — for tickers whose latest 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its figures yet.
+**Why:** Batch 53 put the note on the Overview page, but the Detail/Time Slicer page is where the user stares at the quarters and the YoY selectors — a stale latest quarter there had the same unexplained-silence defect. The partial is server-rendered on the initial page load too, so one block covers both the full detail page and every HTMX `/detail/data` swap; no route changes were needed.
+**Alternatives considered:** Passing the note as a separate template variable instead of a context field (rejected — the partial's contract is `ctx`, and the overview already carries it on its context, so parity keeps both templates reading `*.pending_filing_note`); gating the note on the selected period being the latest (rejected — the note describes the app's latest-data state, which is true regardless of which period the slicer shows, and the overview behaves the same way); extending to compare/tearsheet in the same batch (deferred — the batch-54 follow-up named the detail page specifically; one batch, one item).
+**Blast radius:** `financials.py` (one dataclass field + one constructor kwarg), `partials/detail_data.html` (one conditional block). No extraction, valuation, briefing, peers, calendar, or query-path changes. 6 new tests (2 get_detail plumbing incl. None-by-default, 2 partial render/omit, 2 route-level render/omit). Suite at 554 green (548 + 6). `git diff --check` clean.
+**Live:** Server restarted via the launcher script (kill by explicit PID — the standing lesson). 7/7 routes 200 (V/CB/AAPL detail, V detail/data, CB overview, /calendar, /api/search?q=visa). Styled screenshots via `scripts/screenshot.py` (local Tailwind build; plotly CDN blank in the sandbox is the known artifact): V shows "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet — showing Q2 FY2026…", CB shows its Q2 FY2026 variant, AAPL (no-note control) unchanged with no amber block. Screenshot gate passed.
+**Follow-ups (not this batch):** DBA/nickname alias map for descriptions (CART->Instacart, SHOO->Steve Madden); pending-filing note on the compare and tearsheet pages.
+
 ## 2026-10-11 — Batch 54: Wikipedia corporate-suffix fallback search (1 defect class)
 
 **What:** `_best_title` now retries with the corporate suffix stripped from the query when the full-legal-name search yields nothing relevant; the fallback accepts only an article *named* the stripped name (order-insensitive word-set equality, suffix-stripped both sides, never-relevant exclusions kept). New `_strip_corp_suffix` (trailing /MA/ state tags + one suffix token), `_word_set` (keeps short words like "3M"/"D. R."), `_never_relevant` (exclusions extracted from `_title_relevant`, shared).
