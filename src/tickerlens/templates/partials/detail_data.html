@@ -145,6 +145,12 @@
     {% endif %}
   </div>
 
+  <!-- Batch 55: pending-filing honesty note (same as the overview's) — a 10-Q/10-K
+       is filed but EDGAR's companyfacts feed hasn't ingested its figures yet. -->
+  {% if ctx.pending_filing_note %}
+  <p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-2 font-medium max-w-4xl mb-4">{{ ctx.pending_filing_note }}</p>
+  {% endif %}
+
   <!-- Hero KPI row with Margin and Conversion Context -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
     {% if ctx.range_kpi %}

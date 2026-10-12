@@ -666,6 +666,11 @@ class DetailContext(BaseModel):
     # Transcript excerpts / prepared remarks for the *selected* period (None = not available)
     transcript_excerpts: str | None = None
     transcript_source: str | None = None
+    # Batch 55: same honesty note as the overview's (Company.pending_filing_note)
+    # — a 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its
+    # figures yet, so the page still shows the prior quarter. None when nothing
+    # is pending.
+    pending_filing_note: str | None = None
 
 
 class MetricDelta(BaseModel):
@@ -2219,6 +2224,7 @@ class FinancialsService:
                 management_guidance_source=pr_row.management_guidance_source if pr_row else None,
                 transcript_excerpts=pr_row.transcript_excerpts if pr_row else None,
                 transcript_source=pr_row.transcript_source if pr_row else None,
+                pending_filing_note=company.pending_filing_note,
             )
         finally:
             if session is None and self._session is None:

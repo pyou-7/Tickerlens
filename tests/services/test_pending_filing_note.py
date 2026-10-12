@@ -370,3 +370,93 @@ def test_template_renders_pending_note() -> None:
 def test_template_omits_note_when_none() -> None:
     html = _render_overview(None)
     assert "data feed yet" not in html
+
+
+# ── get_detail plumbing + detail partial (batch 55) ───────────────────────────
+
+def _detail_ctx_kwargs(**over):
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        KPIChange,
+        KPISnapshot,
+        PeriodData,
+    )
+    cur = PeriodData(
+        label="Q1 FY2026",
+        period_end=dt.date(2026, 3, 31),
+        fiscal_year=2026,
+        fiscal_period="Q1",
+        kpi=KPISnapshot(revenue=1_000.0, net_income=100.0, eps_diluted=1.0,
+                        free_cash_flow=50.0),
+        yoy=KPIChange(),
+        qoq=None,
+        balance_sheet=BalanceSheet(),
+        balance_sheet_yoy=BalanceSheetChange(),
+        balance_sheet_qoq=None,
+    )
+    kw = dict(
+        cik="0000896159", name="Chubb Ltd", ticker="CB", sector="Insurance",
+        last_price=295.0, market_cap=68e9,
+        granularity="quarterly", quarter_options=["Q1 FY2026"],
+        year_options=[2026], selected_quarter="Q1 FY2026", selected_year=2026,
+        current=cur, chart_labels=["Q1 FY2026"], chart_revenue=[1_000.0],
+        chart_eps=[1.0],
+    )
+    kw.update(over)
+    return kw
+
+
+def test_get_detail_surfaces_pending_note(session: Session) -> None:
+    cik = "0000896159"
+    company = _company(cik=cik)
+    company.pending_filing_note = "Q2 FY2026 results pending"
+    session.add(company)
+    session.add(_row(cik=cik, period_end=dt.date(2026, 3, 31),
+                     fiscal_year=2026, fiscal_period="Q1",
+                     revenue=1_000.0, net_income=100.0,
+                     eps_diluted=1.0, free_cash_flow=50.0))
+    session.commit()
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    from tickerlens.services.financials import FinancialsService
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    ctx = svc.get_detail("CB")
+    assert ctx.pending_filing_note == "Q2 FY2026 results pending"
+
+
+def test_get_detail_note_none_by_default(session: Session) -> None:
+    cik = "0000896159"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2026, 3, 31),
+                     fiscal_year=2026, fiscal_period="Q1",
+                     revenue=1_000.0, net_income=100.0,
+                     eps_diluted=1.0, free_cash_flow=50.0))
+    session.commit()
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    from tickerlens.services.financials import FinancialsService
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    assert svc.get_detail("CB").pending_filing_note is None
+
+
+def _render_detail_partial(note: str | None) -> str:
+    from tickerlens.routes.company import templates
+    from tickerlens.services.financials import DetailContext
+    ctx = DetailContext(**_detail_ctx_kwargs(pending_filing_note=note))
+    t = templates.get_template("partials/detail_data.html")
+    return t.render({"request": MagicMock(), "ctx": ctx})
+
+
+def test_detail_partial_renders_pending_note() -> None:
+    html = _render_detail_partial(
+        "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet")
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in html or "aren't in EDGAR's data feed yet" in html
+    assert "amber-950/40" in html
+
+
+def test_detail_partial_omits_note_when_none() -> None:
+    html = _render_detail_partial(None)
+    assert "data feed yet" not in html
+    # The amber note block is the only amber-950/40 in the partial.
+    assert "amber-950/40" not in html

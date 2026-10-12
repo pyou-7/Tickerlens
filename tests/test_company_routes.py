@@ -1212,3 +1212,35 @@ def test_render_compare_csv_partial_year_notes() -> None:
     full = _yearly_compare_ctx(a_count=4, b_count=4)
     rows_full = list(csv.reader(_io.StringIO(render_compare_csv("Apple Inc.", "AAPL", full))))
     assert not any("note" in r[0] for r in rows_full if r[0].startswith("# Period"))
+
+
+# ── pending-filing note on the detail page (batch 55) ─────────────────────────
+
+def test_detail_data_renders_pending_filing_note(client: TestClient, monkeypatch) -> None:
+    """The detail partial renders the same amber honesty note as the overview."""
+    from tickerlens import routes
+
+    ctx = _detail_ctx()
+    ctx.pending_filing_note = "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet"
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = ctx
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data")
+    assert resp.status_code == 200
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in resp.text or "aren't in EDGAR's data feed yet" in resp.text
+    assert "amber-950/40" in resp.text
+
+
+def test_detail_data_omits_note_when_none(client: TestClient, monkeypatch) -> None:
+    """No note block when the company has nothing pending."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _detail_ctx()  # pending_filing_note=None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data")
+    assert resp.status_code == 200
+    assert "data feed yet" not in resp.text
+    assert "amber-950/40" not in resp.text
