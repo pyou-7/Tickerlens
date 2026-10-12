@@ -900,3 +900,29 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 **Why:** Elevates Tickerlens to institutional-grade financial intelligence standards (Stripe/Linear aesthetic quality), improving readability, visual hierarchy, feedback microinteractions, and presentation consistency across both light and dark themes.
 
 **Blast radius:** Pure UI/UX styling enhancements; zero data schema, calculation, or route API contract changes.
+
+---
+
+## 2026-10-11 — Batch 49: Decluttering & Unified Company Sub-Navigation Architecture
+
+**What:** Comprehensive decluttering and navigation elevation based on user mandate:
+1. **Homepage Streamline (`templates/index.html`):**
+   - Removed marketing feature cards (Bento Grid) and redundant bottom keyboard hints bar from the bottom of the home screen.
+   - Streamlined the Popular Active Stocks marquee header by removing tiny manual jog buttons in favor of smooth automatic continuous flow with pause-on-hover.
+   - Clean, focused workflow: Hero Search $\to$ Trending Stocks $\to$ Upcoming Earnings Catalysts $\to$ Pinned Watchlist & Market Benchmarks.
+2. **Unified Company Sub-Navigation Bar (`templates/partials/company_subnav.html`):**
+   - Added a unified, horizontal sub-navigation tab bar situated below company headers across `overview.html`, `detail.html`, and `compare.html`:
+     - **Overview & Valuation** (`/company/{ticker}`)
+     - **Financial Statements** (`/company/{ticker}/detail`)
+     - **Compare Periods** (`/company/{ticker}/compare`)
+     - **Tearsheet** (`/company/{ticker}/tearsheet` with direct popup link)
+     - SEC EDGAR primary source CIK badge with direct verified filing link.
+   - Eliminates dead ends and allows immediate 1-click exploration of quarterly 10-Q / annual 10-K statements and multi-period deltas.
+3. **Verification & Testing:**
+   - Unit & route tests verified: `tests/test_company_routes.py` and `tests/test_schema_migration.py` 100% green.
+   - All Jinja template syntax verified and route regression tests passed.
+
+**Why:** Addresses user request to "keep it like a very clean product and easy to navigate and use so complicated stuff can be deleted."
+
+**Blast radius:** Template presentation and navigation enhancements. Zero database or backend breaking changes.
+

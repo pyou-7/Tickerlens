@@ -115,6 +115,12 @@
   </div>
 </div>
 
+<!-- Company Sub-Navigation -->
+{% set current_ticker = ctx.ticker %}
+{% set active_tab = 'statements' %}
+{% set cik = ctx.cik %}
+{% include "partials/company_subnav.html" %}
+
 <!-- Peer Intelligence & Head-to-Head Benchmarks -->
 {% if peers %}
 <div class="mb-6 flex items-center gap-2 flex-wrap">
