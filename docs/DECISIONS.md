@@ -1015,3 +1015,17 @@ Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.
 **Blast radius:** `VsCompany` model + one `_vs_company` pass-through line; one additive template block, no redesign. 7 new tests (2 service plumbing, 3 template render, 2 route-level). Suite 567 green, `git diff --check` clean. Screenshot gate passed (styled shots: V/vs/AAPL shows the V-labeled amber note, AAPL/vs/MSFT control unchanged).
 
 **Follow-ups (not this batch):** DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
+
+---
+
+## 2026-10-12 — DBA/nickname alias map for Wikipedia descriptions (batch 58)
+
+**What:** A curated `_DBA_ALIASES` map (ticker → exact Wikipedia article title) and a last-resort alias retry at the end of `_best_title`: when the legal-name search and the batch-54 suffix-stripped fallback both yield nothing, the alias is searched and only the article whose squashed full title exactly equals the squashed alias is accepted. Entries: CART "Maplebear Inc." → "Instacart"; SHOO "STEVEN MADDEN, LTD." → "Steve Madden, Ltd.". AGNC/APLD/MPLX deliberately excluded — no articles exist for them (both "AGNC Investment" and "Applied Digital" 404 on the summary API; MPLX searches surface only Marathon Petroleum/lists), and an alias can't fix a missing article. Live backfill: CART→Instacart ("Maplebear Inc., doing business as Instacart..."), SHOO→Steve Madden, Ltd. ("...publicly traded company that designs and markets shoes..."), both verified correct.
+
+**Why:** This closes the last carried follow-up (batch 54→57). The two cases needed different treatments: CART's legal-name search already surfaced the right article as the top hit but word-agreement against "Maplebear" rejected it (DBA case); SHOO's "steve" vs "steven" defeated every agreement path including the suffix-stripped fallback (spelling-drift case).
+
+**Alternatives considered:** A fuzzy relevance path for the alias retry (rejected — the founder's "Steve Madden" page would win on first-word agreement against an alias of "Steve Madden"; exactness is what makes the ", Ltd." load-bearing and keeps the batch-47 IBM/Commodore class closed); firing the alias before the suffix-stripped fallback (rejected — last-resort ordering guarantees the 130 already-described companies are provably untouched, covered by the not-consulted test); pointing AGNC at "American Capital" or MPLX at "Marathon Petroleum" (rejected — consolation attributions are misattributions).
+
+**Blast radius:** One map + one retry block in `src/tickerlens/data/wikipedia.py`; 6 new tests. Suite 573 green, `git diff --check` clean. No template change, so no screenshot gate. Live on :8123: /company/{CART,SHOO,AGNC} all 200 with correct descriptions rendering.
+
+**Follow-ups (not this batch):** none — the description alias map closes the last open follow-up from the batch-54 series.
