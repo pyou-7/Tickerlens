@@ -1001,3 +1001,17 @@ Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.
 **Blast radius:** `CompareContext` + `get_compare` wiring only; no extraction, valuation, briefing, or calendar changes. Templates: two additive conditional blocks, no redesign. 6 new tests. Suite 560 green, `git diff --check` clean. Screenshot gate passed (V note shown on both pages, AAPL control unchanged).
 
 **Follow-ups (not this batch):** the same note on the vs page (the only remaining company data page without it); DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
+
+---
+
+## 2026-10-12 — Pending-filing note on the vs page (batch 57)
+
+**What:** The batch-53 EDGAR-ingestion-lag honesty note now renders on the vs page, completing the rollout across overview (53), detail (55), compare (56), tearsheet (56), and vs. `VsCompany.pending_filing_note` is wired from `DetailContext.pending_filing_note` in `_vs_company` (which already carried it from batch 55 — no new service plumbing beyond the one-line pass-through); the vs template renders one amber note per affected side, prefixed with the ticker (`V: …`) since two sides make an unprefixed note ambiguous. Same amber classes as overview/detail/compare.
+
+**Why:** The vs page was the only company data page left without the note, and it's the most dangerous surface for it: V's column reads "Q2 FY2026" while AAPL's reads "Q3 FY2026" with no explanation — exactly the silent asymmetry the note was built to call out.
+
+**Alternatives considered:** A single shared note block for both sides (rejected — each side can have a different lagged quarter; per-side notes with ticker prefixes stay precise); putting the note inside each side's column header (rejected — the block belongs above the comparison, like the compare page's placement, where freshness reads as a precondition).
+
+**Blast radius:** `VsCompany` model + one `_vs_company` pass-through line; one additive template block, no redesign. 7 new tests (2 service plumbing, 3 template render, 2 route-level). Suite 567 green, `git diff --check` clean. Screenshot gate passed (styled shots: V/vs/AAPL shows the V-labeled amber note, AAPL/vs/MSFT control unchanged).
+
+**Follow-ups (not this batch):** DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
