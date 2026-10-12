@@ -6,12 +6,22 @@ Git history has the WHAT; this file has the reasoning.
 
 Format:
 ```
+
 ## YYYY-MM-DD — <short title>
 
 **What:** One sentence on what changed or was decided.
 **Why:** The motivation — constraint, tradeoff, incident, or requirement.
 **Alternatives considered:** What else was evaluated, or "None recorded."
 ```
+
+---
+
+## 2026-10-11 — Batch 54: Wikipedia corporate-suffix fallback search (1 defect class)
+
+**What:** `_best_title` now retries with the corporate suffix stripped from the query when the full-legal-name search yields nothing relevant; the fallback accepts only an article *named* the stripped name (order-insensitive word-set equality, suffix-stripped both sides, never-relevant exclusions kept). New `_strip_corp_suffix` (trailing /MA/ state tags + one suffix token), `_word_set` (keeps short words like "3M"/"D. R."), `_never_relevant` (exclusions extracted from `_title_relevant`, shared).
+**Why:** `_search_titles` queries "{legal name} company", and Wikipedia's ranking degrades on suffixed names — "Atlassian Corp company" returned '8x8' and '2026 Formula One World Championship' while "Atlassian company" hits the article — leaving 10 of 132 companies description-less. The strict acceptance rule exists because the naive fallback misattributes: the stripped "Applied Digital" search surfaces "Applied Digital Data Systems", a 1969 terminal maker, which word-set equality declines (batch-47 IBM/Commodore class). CART ("Maplebear Inc." -> article "Instacart") and SHOO ("STEVEN MADDEN" -> "Steve Madden") are deliberately left unmatched — DBA/nickname aliasing needs a curated map, not fuzzy matching.
+**Alternatives considered:** Merging primary+fallback candidates into one pool and re-running the batch-47 selection (rejected — more candidates raise misattribution risk; the strict rule on a separate fallback path is safer); accepting name-contained fallback titles (rejected — "Applied Digital Data Systems" *is* name-contained and wrong); also retrying with the bare ticker as query (rejected — adds nothing under the strict equality rule and risks word-tickers matching unrelated articles).
+**Blast radius:** `data/wikipedia.py` only (new helpers + ~10-line fallback in `_best_title`; `_title_relevant` behavior unchanged — exclusions extracted verbatim). Fallback fires only when the primary returns nothing relevant, so the 122 described companies are untouched by construction. 8 new tests. Suite at 548 green. Live: 5 descriptions backfilled (TEAM, AMT, DHI, MMM, WFC), verified correct; server restarted.
 
 ---
 
