@@ -80,6 +80,15 @@
       </div>
     </div>
 
+    <!-- 1b. Data-freshness honesty note (batch 56) — prints on the PDF so a
+         stale latest-quarter figure can't be read as current. -->
+    {% if overview.pending_filing_note %}
+    <div class="p-4 rounded-xl border border-amber-300 bg-amber-50 page-break-inside-avoid">
+      <div class="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1">Latest Quarter Data</div>
+      <p class="text-xs leading-relaxed text-slate-800">{{ overview.pending_filing_note }}</p>
+    </div>
+    {% endif %}
+
     <!-- 2. Market & Valuation Overview Bar -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5 rounded-xl bg-slate-50 border border-slate-200 page-break-inside-avoid">
       <div>

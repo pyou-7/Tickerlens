@@ -701,6 +701,7 @@ class CompareContext(BaseModel):
     cik: str
     name: str
     ticker: str | None
+    pending_filing_note: str | None = None  # batch 56: amber honesty note, same as overview/detail
     sector: str | None
     last_price: float | None
     market_cap: float | None
@@ -2297,6 +2298,7 @@ class FinancialsService:
                 cik=cik,
                 name=company.name,
                 ticker=company.ticker,
+                pending_filing_note=company.pending_filing_note,
                 sector=sector_for_sic(company.sic),
                 last_price=effective_price,
                 market_cap=effective_market_cap,

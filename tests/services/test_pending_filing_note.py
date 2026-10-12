@@ -460,3 +460,99 @@ def test_detail_partial_omits_note_when_none() -> None:
     assert "data feed yet" not in html
     # The amber note block is the only amber-950/40 in the partial.
     assert "amber-950/40" not in html
+
+
+# ── get_compare plumbing + compare page (batch 56) ────────────────────────────
+
+def _seed_two_quarters(session: Session, cik: str = "0000896159") -> None:
+    session.add(_row(cik=cik, period_end=dt.date(2026, 3, 31),
+                     fiscal_year=2026, fiscal_period="Q1",
+                     revenue=1_000.0, net_income=100.0,
+                     eps_diluted=1.0, free_cash_flow=50.0))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 12, 31),
+                     fiscal_year=2025, fiscal_period="Q4",
+                     revenue=900.0, net_income=90.0,
+                     eps_diluted=0.9, free_cash_flow=45.0))
+    session.commit()
+
+
+def _svc(session: Session, cik: str = "0000896159") -> FinancialsService:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_get_compare_surfaces_pending_note(session: Session) -> None:
+    cik = "0000896159"
+    company = _company(cik=cik)
+    company.pending_filing_note = "Q2 FY2026 results pending"
+    session.add(company)
+    _seed_two_quarters(session, cik)
+    ctx = _svc(session).get_compare("CB")
+    assert ctx.pending_filing_note == "Q2 FY2026 results pending"
+
+
+def test_get_compare_note_none_by_default(session: Session) -> None:
+    cik = "0000896159"
+    session.add(_company(cik=cik))
+    _seed_two_quarters(session, cik)
+    ctx = _svc(session).get_compare("CB")
+    assert ctx.pending_filing_note is None
+
+
+def _render_compare(note: str | None) -> str:
+    from tickerlens.routes.company import templates
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    s = factory()
+    cik = "0000896159"
+    company = _company(cik=cik)
+    company.pending_filing_note = note
+    s.add(company)
+    _seed_two_quarters(s, cik)
+    ctx = _svc(s).get_compare("CB")
+    t = templates.get_template("company/compare.html")
+    return t.render({"request": MagicMock(), "ctx": ctx, "also_trades_as": []})
+
+
+def test_compare_page_renders_pending_note() -> None:
+    html = _render_compare(
+        "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet")
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in html or "aren't in EDGAR's data feed yet" in html
+    assert "amber-950/40" in html
+
+
+def test_compare_page_omits_note_when_none() -> None:
+    html = _render_compare(None)
+    assert "data feed yet" not in html
+    # The amber note block is the only amber-950/40 on the compare page.
+    assert "amber-950/40" not in html
+
+
+# ── tearsheet page (batch 56) ────────────────────────────────────────────────
+
+def _render_tearsheet(note: str | None) -> str:
+    from tickerlens.routes.company import templates
+    from tickerlens.services.financials import CompanyOverview, DetailContext
+    ov = CompanyOverview(**_overview_kwargs(pending_filing_note=note))
+    detail = DetailContext(**_detail_ctx_kwargs())
+    t = templates.get_template("company/tearsheet.html")
+    return t.render({
+        "request": MagicMock(), "overview": ov, "detail": detail,
+        "valuation": None, "rows": [], "ai_analysis": None,
+        "as_of_date": "October 12, 2026 at 12:00 UTC",
+    })
+
+
+def test_tearsheet_renders_pending_note() -> None:
+    html = _render_tearsheet(
+        "Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet")
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in html or "aren't in EDGAR's data feed yet" in html
+    assert "Latest Quarter Data" in html
+
+
+def test_tearsheet_omits_note_when_none() -> None:
+    html = _render_tearsheet(None)
+    assert "data feed yet" not in html
+    assert "Latest Quarter Data" not in html
