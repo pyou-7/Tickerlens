@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -17,6 +18,19 @@ _SEARCH = "https://en.wikipedia.org/w/api.php"
 _MIN_WORDS = 15
 _MAX_CHARS = 1800
 _STOP_WORDS = {"inc", "corp", "co", "ltd", "llc", "plc", "the", "and", "of", "group"}
+# Trailing corporate-suffix tokens stripped for the fallback search query
+# (batch 54): Wikipedia's ranking degrades when the full legal name plus
+# " company" is queried ("Atlassian Corp company" returns junk while
+# "Atlassian company" hits the article). Only ONE trailing token is
+# stripped, and only for the fallback query — relevance scoring still uses
+# the full legal name.
+_CORP_SUFFIXES = frozenset(
+    {
+        "corp", "corporation", "inc", "incorporated", "co", "company", "ltd",
+        "limited", "llc", "plc", "lp", "l.p.", "sa", "ag", "nv", "pty",
+        "holdings", "holding", "group", "trust", "bancorp", "bancshares",
+    }
+)
 
 
 def get_description(company_name: str, ticker: str | None = None) -> str | None:
@@ -93,41 +107,113 @@ def _best_title(company_name: str, ticker: str | None = None) -> str | None:
     - Top hit irrelevant: take the best name-contained relevant lower hit;
       otherwise None.
     Ties keep Wikipedia's ranking (first max wins).
+
+    Fallback (batch 54): when the primary search yields nothing relevant
+    (or nothing at all), retry with the corporate suffix stripped from the
+    query ("Atlassian Corp company" poisons Wikipedia's ranking while
+    "Atlassian company" hits the article). Acceptance is strict — the
+    candidate must be an article *named* the stripped company name — so
+    merely similar articles are declined, never misattributed.
     """
     results = _search_titles(company_name, limit=5)
-    if not results:
-        return None
-    allowed = _name_word_set(company_name, ticker)
-    squashed_name = _squashed(company_name)
-    for cand in results:
-        if _title_relevant(cand, company_name, ticker) and _squashed(_bare_title(cand)) == squashed_name:
-            return cand
-    top = results[0]
-    if _title_relevant(top, company_name, ticker):
-        top_overlap = _relevance_overlap(top, company_name, ticker)
-        top_len = len(set(_normalize_words(top)))
+    if results:
+        allowed = _name_word_set(company_name, ticker)
+        squashed_name = _squashed(company_name)
+        for cand in results:
+            if _title_relevant(cand, company_name, ticker) and _squashed(_bare_title(cand)) == squashed_name:
+                return cand
+        top = results[0]
+        if _title_relevant(top, company_name, ticker):
+            top_overlap = _relevance_overlap(top, company_name, ticker)
+            top_len = len(set(_normalize_words(top)))
+            for cand in results[1:]:
+                if not _title_relevant(cand, company_name, ticker):
+                    continue
+                cand_words = set(_normalize_words(cand))
+                if (
+                    _relevance_overlap(cand, company_name, ticker) > top_overlap
+                    and cand_words <= allowed
+                    and len(cand_words) <= top_len
+                ):
+                    return cand
+            return top
+        best: str | None = None
+        best_score = 0
         for cand in results[1:]:
             if not _title_relevant(cand, company_name, ticker):
                 continue
-            cand_words = set(_normalize_words(cand))
-            if (
-                _relevance_overlap(cand, company_name, ticker) > top_overlap
-                and cand_words <= allowed
-                and len(cand_words) <= top_len
-            ):
+            if not set(_normalize_words(cand)) <= allowed:
+                continue
+            score = _relevance_overlap(cand, company_name, ticker)
+            if score > best_score:
+                best, best_score = cand, score
+        if best is not None:
+            return best
+    # Fallback (batch 54): the full legal name can poison Wikipedia's
+    # ranking ("Atlassian Corp company" -> junk). Retry with the corporate
+    # suffix stripped. Acceptance is strict on purpose — the candidate must
+    # be an article *named* the stripped company name (word-set equality,
+    # suffix-stripped on both sides), so a merely similar article like
+    # "Applied Digital Data Systems" for "Applied Digital Corp." is
+    # declined rather than misattributed (batch-47 IBM/Commodore class).
+    stripped = _strip_corp_suffix(company_name)
+    if stripped and stripped != company_name:
+        for cand in _search_titles(stripped, limit=5):
+            if _strict_title_match(cand, stripped):
                 return cand
-        return top
-    best: str | None = None
-    best_score = 0
-    for cand in results[1:]:
-        if not _title_relevant(cand, company_name, ticker):
-            continue
-        if not set(_normalize_words(cand)) <= allowed:
-            continue
-        score = _relevance_overlap(cand, company_name, ticker)
-        if score > best_score:
-            best, best_score = cand, score
-    return best
+    return None
+
+
+def _strip_corp_suffix(name: str) -> str:
+    """Strip a trailing SEC state tag ("/MA/") and one corporate suffix token.
+
+    "AMERICAN TOWER CORP /MA/" -> "AMERICAN TOWER"; "3M CO" -> "3M".
+    Never returns an empty string.
+    """
+    n = re.sub(r"\s*/[A-Z]{2}/?\s*$", "", name).strip()
+    n = re.sub(r"[\s,&]+$", "", n)
+    toks = n.split()
+    if len(toks) > 1 and toks[-1].rstrip(".,").lower() in _CORP_SUFFIXES:
+        n = re.sub(r"[\s,&]+$", "", " ".join(toks[:-1]))
+    return n or name
+
+
+def _word_set(text: str) -> set[str]:
+    """Word set for strict title comparison — keeps short words.
+
+    Unlike _normalize_words (which drops <=2-char tokens for relevance
+    scoring), "3M" and "D. R." must survive here for exact-name matching.
+    """
+    words: set[str] = set()
+    for chunk in _bare_title(text).replace("-", " ").split():
+        w = chunk.lower().replace("'", "").replace("’", "").strip(".,;:!?\"()&")
+        if w and w not in _STOP_WORDS:
+            words.add(w)
+    return words
+
+
+def _never_relevant(title: str) -> bool:
+    """Titles that can never name the company, regardless of overlap."""
+    lowered = title.lower()
+    if " v. " in lowered or " vs. " in lowered or " vs " in lowered:
+        return True
+    if lowered.startswith("list of "):
+        return True
+    paren = _paren_content(title)
+    return paren is not None and paren != "company"
+
+
+def _strict_title_match(title: str, stripped_name: str) -> bool:
+    """True when the article is *named* the suffix-stripped company name.
+
+    Word-set equality (order-insensitive, suffix-stripped on both sides)
+    with the never-relevant exclusions. "Atlassian" matches "Atlassian";
+    "D. R. Horton" matches "HORTON D R"; "Applied Digital Data Systems"
+    does NOT match "Applied Digital".
+    """
+    if _never_relevant(title):
+        return False
+    return _word_set(_strip_corp_suffix(title)) == _word_set(stripped_name)
 
 
 def _normalize_words(text: str) -> list[str]:
@@ -176,13 +262,7 @@ def _title_relevant(title: str, company_name: str, ticker: str | None = None) ->
        "COCA COLA CO", "Domino's" for "DOMINOS PIZZA INC", and
        "Kimberly-Clark" for "KIMBERLY CLARK CORP".
     """
-    lowered = title.lower()
-    if " v. " in lowered or " vs. " in lowered or " vs " in lowered:
-        return False
-    if lowered.startswith("list of "):
-        return False
-    paren = _paren_content(title)
-    if paren is not None and paren != "company":
+    if _never_relevant(title):
         return False
     if ticker and title.strip().lower() == ticker.strip().lower():
         return True

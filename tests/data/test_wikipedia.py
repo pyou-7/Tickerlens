@@ -10,7 +10,10 @@ from tickerlens.data.wikipedia import (
     _relevance_overlap,
     _search_title,
     _search_titles,
+    _strict_title_match,
+    _strip_corp_suffix,
     _title_relevant,
+    _word_set,
     get_description,
 )
 
@@ -262,3 +265,122 @@ def test_relevance_overlap_scores() -> None:
     assert _relevance_overlap("Lockheed Martin", "LOCKHEED MARTIN CORP") == 2
     assert _relevance_overlap("Lockheed Corporation", "LOCKHEED MARTIN CORP") == 1
     assert _relevance_overlap("AMD", "ADVANCED MICRO DEVICES INC", ticker="AMD") == 100
+
+
+# ---- Batch 54: corporate-suffix fallback search ----
+
+
+def test_strip_corp_suffix() -> None:
+    """Batch 54: trailing state tags and one corporate-suffix token are
+    stripped for the fallback query; anything else is untouched."""
+    assert _strip_corp_suffix("Atlassian Corp") == "Atlassian"
+    assert _strip_corp_suffix("AMERICAN TOWER CORP /MA/") == "AMERICAN TOWER"
+    assert _strip_corp_suffix("WELLS FARGO & COMPANY/MN") == "WELLS FARGO"
+    assert _strip_corp_suffix("HORTON D R INC /DE/") == "HORTON D R"
+    assert _strip_corp_suffix("STEVEN MADDEN, LTD.") == "STEVEN MADDEN"
+    assert _strip_corp_suffix("MPLX LP") == "MPLX"
+    assert _strip_corp_suffix("3M CO") == "3M"
+    assert _strip_corp_suffix("Maplebear Inc.") == "Maplebear"
+    assert _strip_corp_suffix("Atlassian") == "Atlassian"
+    assert _strip_corp_suffix("3M") == "3M"
+    # Never empties the name.
+    assert _strip_corp_suffix("Inc") == "Inc"
+
+
+def test_word_set_keeps_short_words() -> None:
+    """Batch 54: strict matching needs '3M' and 'D. R.' to survive, unlike
+    _normalize_words which drops <=2-char tokens for relevance scoring."""
+    assert _word_set("3M") == {"3m"}
+    assert _word_set("D. R. Horton") == {"d", "r", "horton"}
+    assert _word_set("Wells Fargo") == {"wells", "fargo"}
+
+
+def test_strict_title_match() -> None:
+    """Batch 54: the fallback only accepts an article *named* the stripped
+    company name — a merely similar article is declined, not misattributed
+    (batch-47 IBM/Commodore class)."""
+    assert _strict_title_match("Atlassian", "Atlassian") is True
+    assert _strict_title_match("American Tower", "AMERICAN TOWER") is True
+    assert _strict_title_match("D. R. Horton", "HORTON D R") is True
+    assert _strict_title_match("3M", "3M") is True
+    assert _strict_title_match("Wells Fargo", "WELLS FARGO") is True
+    # Suffix on the title side is stripped before comparing.
+    assert _strict_title_match("American Tower Corporation", "AMERICAN TOWER") is True
+    # Similar but not the same entity: declined.
+    assert _strict_title_match("Applied Digital Data Systems", "Applied Digital") is False
+    assert _strict_title_match("Wells Fargo History Museum", "WELLS FARGO") is False
+    assert _strict_title_match("Steve Madden", "STEVEN MADDEN") is False
+    # Never-relevant exclusions still apply.
+    assert _strict_title_match("Atlassian (company)", "Atlassian") is True
+    assert _strict_title_match("List of Atlassian products", "Atlassian") is False
+
+
+def _search_by_query(mapping: dict) -> object:
+    def _fake(query: str, limit: int = 5):
+        return mapping.get(query, [])
+
+    return _fake
+
+
+def test_best_title_fallback_rescues_suffix_poisoned_search() -> None:
+    """Batch 54 (live TEAM case): 'Atlassian Corp company' returns junk with
+    zero relevance; the stripped-name fallback finds the article."""
+    mapping = {
+        "Atlassian Corp": ["8x8", "Dragoneer Investment Group"],
+        "Atlassian": ["Atlassian", "Confluence (software)"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("Atlassian Corp", ticker="TEAM") == "Atlassian"
+
+
+def test_best_title_fallback_declines_similar_article() -> None:
+    """Batch 54 (live APLD case): the stripped search surfaces the 1969
+    terminal maker 'Applied Digital Data Systems' — strict matching
+    declines it instead of misattributing (None stays None)."""
+    mapping = {
+        "Applied Digital Corp.": [],
+        "Applied Digital": ["Applied Digital Data Systems", "Applied Materials"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("Applied Digital Corp.", ticker="APLD") is None
+
+
+def test_best_title_fallback_accepts_reordered_initials() -> None:
+    """Batch 54 (live DHI case): word-set equality is order-insensitive so
+    'D. R. Horton' matches 'HORTON D R'."""
+    mapping = {
+        "HORTON D R INC /DE/": ["D.R. Horton (disambiguation)"],
+        "HORTON D R": ["D. R. Horton"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("HORTON D R INC /DE/", ticker="DHI") == "D. R. Horton"
+
+
+def test_best_title_fallback_not_consulted_when_primary_hits() -> None:
+    """Batch 54: the fallback only fires when the primary search yields no
+    relevant title — the 122 companies with descriptions are untouched."""
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        return_value=["Block, Inc."],
+    ) as mock_search:
+        assert _best_title("Block, Inc.", ticker="XYZ") == "Block, Inc."
+        assert mock_search.call_count == 1
+
+
+def test_best_title_fallback_skipped_when_nothing_to_strip() -> None:
+    """Batch 54: no second search when the name has no corporate suffix."""
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        return_value=["8x8", "Dragoneer Investment Group"],
+    ) as mock_search:
+        assert _best_title("Atlassian", ticker="TEAM") is None
+        assert mock_search.call_count == 1
