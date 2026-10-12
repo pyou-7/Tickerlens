@@ -199,6 +199,9 @@
       <span class="font-normal text-slate-400 dark:text-gray-500 ml-1">(ended {{ overview.latest_period_end }})</span>
     </h2>
   </div>
+  {% if overview.pending_filing_note %}
+  <p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-2 font-medium max-w-4xl mb-3">{{ overview.pending_filing_note }}</p>
+  {% endif %}
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
     {{ kpi_card("Revenue", fmt_large(overview.latest_kpi.revenue), overview.yoy.revenue, "Total top-line recognized sales under GAAP ASC 606") }}
     {{ kpi_card("Net Income", fmt_large(overview.latest_kpi.net_income), overview.yoy.net_income, "Bottom-line GAAP net earnings after taxes and expenses") }}

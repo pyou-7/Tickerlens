@@ -30,6 +30,14 @@ class Company(Base):
     # so an acknowledged quarter appears then if it ever becomes
     # extractable. NULL/empty = none. Added by ensure_schema on old DBs.
     xbrl_skipped_quarters: Mapped[str | None] = mapped_column(Text)
+    # Plain-language note shown on the company page when a 10-Q/10-K has been
+    # filed but EDGAR's companyfacts feed hasn't ingested its figures yet
+    # (batch-37/APLD ingestion lag — e.g. CB's Q2'26 10-Q filed 2026-07-28
+    # with no revenue facts by Oct 2026), so the page still shows the prior
+    # quarter with no explanation. Computed by refresh_financials_if_stale
+    # (TTL-gated) and cleared automatically once the quarter lands. NULL =
+    # nothing pending. Added by ensure_schema on old DBs.
+    pending_filing_note: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(String(2000))
     last_price: Mapped[float | None] = mapped_column()
     market_cap: Mapped[float | None] = mapped_column()

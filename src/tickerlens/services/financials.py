@@ -26,7 +26,10 @@ from tickerlens.data.xbrl import (
     CONCEPTS,
     Metric,
     QuarterlyFinancials,
+    _quarter_steps,
+    _walk_label,
     extract_recent_quarterly_financials,
+    infer_fiscal_year,
 )
 from tickerlens.data.yahoo import (
     QuoteSnapshot,
@@ -274,6 +277,157 @@ def _has_unprocessed_quarter_in_window(
     return bool(_missing_in_window_quarters(submissions, stored_ends, marker, skipped))
 
 
+# ── pending-filing note (batch 53) ──────────────────────────────────────────
+# Twelve DB tickers (CB, V, F, PLD, C, …) sat through Oct 2026 showing Q1'26
+# quarters with no explanation while their Q2'26 10-Qs had been filed since
+# July — EDGAR's companyfacts feed simply hadn't ingested the figures
+# (the batch-37/APLD ingestion lag). The retry loop was correctly armed the
+# whole time; the user-facing gap was silence. These helpers detect the
+# "filed but not yet in EDGAR's data" state and render it as a one-line
+# honesty note on the company page, cleared automatically once the quarter
+# lands. Never raises.
+
+_MONTH_ABBR = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def _mdy(iso_date: str) -> str:
+    """'2026-07-28' -> 'Jul 28, 2026'. Falls back to the raw string."""
+    try:
+        d = dt.date.fromisoformat(iso_date)
+    except ValueError:
+        return iso_date
+    return f"{_MONTH_ABBR[d.month - 1]} {d.day}, {d.year}"
+
+
+def _join_and(items: list[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _quarter_label_for_report_date(
+    report_date: dt.date,
+    fiscal_year_end: str | None,
+    newest_end: dt.date | None,
+    newest_label: tuple[int, str] | None,
+) -> str | None:
+    """Best-effort 'Q2 FY2026' label for a filing's reportDate.
+
+    Walks from the newest stored row's (fy, fp) label by calendar
+    quarter-steps so the note matches the labels already on the page
+    (batch-52 repairs can move labels off the naive calendar math).
+    Falls back to infer_fiscal_year + month arithmetic when there is no
+    stored row; None when labeling is unsafe.
+    """
+    if newest_end is not None and newest_label is not None:
+        walked = _walk_label(newest_label, _quarter_steps(newest_end, report_date))
+        if walked is not None:
+            return f"{walked[1]} FY{walked[0]}"
+    if fiscal_year_end and len(fiscal_year_end) == 4 and fiscal_year_end.isdigit():
+        try:
+            fy = infer_fiscal_year(report_date, fiscal_year_end)
+        except Exception:
+            return None
+        months_after = (report_date.month - int(fiscal_year_end[:2])) % 12
+        quarter = months_after // 3 or 4
+        return f"Q{quarter} FY{fy}"
+    return None
+
+
+def _pending_filing_candidates(
+    submissions: dict,
+    stored_ends: list[str],
+    marker: str | None,
+    skipped: set[str] | tuple = (),
+) -> list[tuple[str, str, str]]:
+    """(form, filing_date, report_date) for quarterly filings with no stored quarter.
+
+    Covers filings newer than the processed marker (the latest>marker path
+    owns these) plus in-window filings at-or-before the marker with no
+    stored quarter (batch-44 middle-gap). Acknowledged stub quarters (batch
+    48) never count. Dedupes by reportDate, keeping the newest filing
+    (EDGAR's recent feed is reverse-chronological).
+    """
+    if marker is None or not stored_ends:
+        return []
+    skip = set(skipped)
+    have = set(stored_ends)
+    in_window = set(_missing_in_window_quarters(submissions, stored_ends, marker, skip))
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    reports = recent.get("reportDate") or []
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for form, filing_date, report_date in zip(forms, dates, reports):
+        if form not in _QUARTERLY_FILING_FORMS or not filing_date or not report_date:
+            continue
+        if report_date in have or report_date in skip or report_date in seen:
+            continue
+        if filing_date > marker or report_date in in_window:
+            seen.add(report_date)
+            out.append((form, filing_date, report_date))
+    return out
+
+
+def _pending_filing_note(
+    submissions: dict,
+    companyfacts: dict,
+    stored_ends: list[str],
+    marker: str | None,
+    skipped: set[str] | tuple,
+    *,
+    fiscal_year_end: str | None,
+    newest_end: dt.date | None,
+    newest_label: tuple[int, str] | None,
+) -> str | None:
+    """Plain-language note for the 'filed but EDGAR hasn't ingested' state.
+
+    Returns None when nothing is pending (so the caller clears any stale
+    note), when the missing quarter's revenue facts ARE ingested (not lag —
+    an extraction question for the defect hunts, never mislabeled as lag),
+    or when the gap is structural (batch-48 acknowledged stubs own those).
+    """
+    candidates = _pending_filing_candidates(submissions, stored_ends, marker, skipped)
+    if not candidates:
+        return None
+    revenue_facts = _revenue_duration_facts(companyfacts)
+    lagged: list[tuple[str, str, str]] = []
+    for form, filing_date, report_date in sorted(candidates, key=lambda c: c[2]):
+        if report_date in revenue_facts:
+            # Facts ingested but no quarter extracted: the extractor had its
+            # chance. Not EDGAR lag — leave it to the defect hunts.
+            continue
+        lagged.append((form, filing_date, report_date))
+    if not lagged:
+        return None
+    shown = (
+        f"{newest_label[1]} FY{newest_label[0]}"
+        if newest_label is not None
+        else "the latest reported quarter"
+    )
+    bits: list[str] = []
+    for form, filing_date, report_date in lagged:
+        rd = dt.date.fromisoformat(report_date)
+        label = _quarter_label_for_report_date(
+            rd, fiscal_year_end, newest_end, newest_label
+        )
+        bits.append((label or f"quarter ended {_mdy(report_date)}", form, filing_date))
+    quarters = _join_and([b[0] for b in bits])
+    filings = _join_and([f"{b[1]} filed {_mdy(b[2])}" for b in bits])
+    return (
+        f"{quarters} results ({filings}) aren't in EDGAR's data feed yet — "
+        f"showing {shown}. This page updates automatically once EDGAR "
+        f"publishes the figures."
+    )
+
+
 # ── public output models ───────────────────────────────────────────────────────
 
 class KPISnapshot(BaseModel):
@@ -410,6 +564,10 @@ class CompanyOverview(BaseModel):
     # TTM
     ttm_kpi: KPISnapshot
     ttm_quarters: int  # number of quarters summed (< 4 means partial)
+    # Batch 53: set when a 10-Q/10-K has been filed but EDGAR's companyfacts
+    # feed hasn't ingested its figures yet, so the page still shows the prior
+    # quarter. None when nothing is pending.
+    pending_filing_note: str | None = None
 
 
 class PeriodData(BaseModel):
@@ -735,11 +893,73 @@ class FinancialsService:
                         db2.close()
                 with _filings_check_lock:
                     _filings_check_state[cik] = (now, latest)
+                # Batch 53: the pull just settled — (re)compute the
+                # "filed but EDGAR hasn't ingested" note so the page explains
+                # any still-missing quarter instead of silently showing stale
+                # data. Clears automatically once the quarter lands.
+                self._update_pending_filing_note(ticker, cik, submissions)
                 return True
+            # No refresh needed, but the pending-filing note is TTL-gated
+            # with this check: a lagging filing may have newly appeared in
+            # submissions, or a previously pending quarter may have landed.
+            self._update_pending_filing_note(ticker, cik, submissions)
             return False
         except Exception:
             logger.warning("filings freshness check failed for %s", ticker, exc_info=True)
             return False
+
+    def _update_pending_filing_note(
+        self, ticker: str, cik: str, submissions: dict
+    ) -> None:
+        """Persist or clear the 'filed but EDGAR hasn't ingested' note.
+
+        Takes the submissions feed already fetched by the caller (never
+        re-fetches it), reads the TTL-cached companyfacts, detects quarterly
+        filings whose quarters are still absent because EDGAR hasn't
+        ingested their figures, and stores a plain-language note on the
+        company row for the overview page. Writes only when the note
+        changed. Never raises.
+        """
+        try:
+            companyfacts = self.edgar_client.companyfacts(cik)
+            db = self._session or get_session()
+            try:
+                company = db.get(Company, cik)
+                if company is None:
+                    return
+                rows = (
+                    db.execute(
+                        select(QuarterlyFinancial)
+                        .where(QuarterlyFinancial.cik == cik)
+                        .order_by(QuarterlyFinancial.period_end.desc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                if not rows:
+                    return
+                stored_ends = sorted(r.period_end.isoformat() for r in rows)
+                newest = rows[0]
+                note = _pending_filing_note(
+                    submissions,
+                    companyfacts,
+                    stored_ends,
+                    company.xbrl_filings_processed,
+                    _read_skipped_quarters(company.xbrl_skipped_quarters),
+                    fiscal_year_end=company.fiscal_year_end,
+                    newest_end=newest.period_end,
+                    newest_label=(newest.fiscal_year, newest.fiscal_period),
+                )
+                if (company.pending_filing_note or None) != (note or None):
+                    company.pending_filing_note = note
+                    db.commit()
+            finally:
+                if self._session is None:
+                    db.close()
+        except Exception:
+            logger.warning(
+                "pending filing note update failed for %s", ticker, exc_info=True
+            )
 
     def _acknowledge_unextractable_quarters(
         self, db: Session, cik: str, submissions: dict
@@ -1014,6 +1234,7 @@ class FinancialsService:
                 yoy=yoy,
                 ttm_kpi=ttm_kpi,
                 ttm_quarters=len(ttm_rows),
+                pending_filing_note=company.pending_filing_note,
             )
         finally:
             if session is None and self._session is None:
