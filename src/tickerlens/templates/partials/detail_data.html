@@ -373,7 +373,8 @@
     {% else %}
     {% set bs = ctx.current.balance_sheet %}
     {% if bs.total_assets is none and bs.total_liabilities is none
-          and bs.total_equity is none and bs.cash_and_equivalents is none %}
+          and bs.total_equity is none and bs.cash_and_equivalents is none
+          and bs.redeemable_nci is none %}
       <p class="text-slate-500 dark:text-gray-400 text-sm py-6 text-center">Not available for this period.</p>
     {% else %}
     <div class="overflow-x-auto">
@@ -403,6 +404,14 @@
             <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.total_liabilities) }}</td>
             {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.total_liabilities) }}</td>{% endif %}
           </tr>
+          {% if bs.redeemable_nci is not none %}
+          <tr x-show="!filter || 'redeemable nci mezzanine'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Redeemable NCI <span class="text-xs text-slate-400 dark:text-gray-500 font-normal">(mezzanine)</span></td>
+            <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.redeemable_nci) }}</td>
+            <td class="py-3 pr-4 text-right">{{ change_badge(bs_yoy.redeemable_nci) }}</td>
+            {% if bs_qoq %}<td class="py-3 text-right">{{ change_badge(bs_qoq.redeemable_nci) }}</td>{% endif %}
+          </tr>
+          {% endif %}
           <tr x-show="!filter || 'total equity stockholders'.includes(filter.toLowerCase().trim())" class="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition">
             <td class="py-3 pr-4 text-slate-700 dark:text-gray-300 font-medium">Total Equity</td>
             <td class="py-3 pr-4 text-right text-slate-900 dark:text-white font-semibold tabular-nums">{{ fmt_large(bs.total_equity) }}</td>

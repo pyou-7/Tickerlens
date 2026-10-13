@@ -50,6 +50,7 @@ def _row(
     total_liabilities: float | None = None,
     total_equity: float | None = None,
     cash_and_equivalents: float | None = None,
+    redeemable_nci: float | None = None,
 ) -> QuarterlyFinancial:
     r = QuarterlyFinancial()
     r.cik = cik
@@ -65,6 +66,7 @@ def _row(
     r.total_liabilities = total_liabilities
     r.total_equity = total_equity
     r.cash_and_equivalents = cash_and_equivalents
+    r.redeemable_nci = redeemable_nci
     r.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     return r
 
@@ -2842,3 +2844,77 @@ def test_get_detail_backfill_triggers_when_only_guidance_missing(session: Sessio
     assert "$45.0 billion" in ctx.management_guidance
     # Previously-good highlights must not be wiped or overwritten.
     assert ctx.press_release_highlights == "Highlights already filled."
+
+
+# ── redeemable NCI mezzanine row (batch 59) ───────────────────────────────────
+
+def test_range_table_includes_mezzanine_row_when_any_quarter_has_value(session: Session) -> None:
+    session.add(_company())
+    for end, fy, fp, rev, mezz in [
+        (dt.date(2024, 9, 30), 2024, "Q3", 91_000, None),
+        (dt.date(2024, 12, 31), 2024, "Q4", 119_575, None),
+        (dt.date(2025, 3, 31), 2025, "Q1", 95_359, 4_917.0),
+        (dt.date(2025, 6, 30), 2025, "Q2", 85_777, 4_920.0),
+    ]:
+        session.add(_row(period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, redeemable_nci=mezz))
+    session.commit()
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    rt = ctx.range_table
+    assert rt is not None
+    mezz_rows = [r for r in rt.rows if r.label == "Redeemable NCI (mezzanine)"]
+    assert len(mezz_rows) == 1
+    assert mezz_rows[0].values == [None, 4_917.0, 4_920.0]
+    # Mezzanine sits between liabilities and equity, like the balance sheet.
+    labels = [r.label for r in rt.rows if r.section == "balance"]
+    assert labels.index("Redeemable NCI (mezzanine)") == labels.index("Total Liabilities") + 1
+
+
+def test_range_table_drops_mezzanine_row_when_all_none(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    rt = ctx.range_table
+    assert rt is not None
+    assert all(r.label != "Redeemable NCI (mezzanine)" for r in rt.rows)
+    assert len([r for r in rt.rows if r.section == "balance"]) == 4
+
+
+def test_to_bs_carries_redeemable_nci(session: Session) -> None:
+    from tickerlens.services.financials import _to_bs
+    r = _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
+             total_assets=60_792.0, total_liabilities=24_587.0,
+             total_equity=31_288.0, redeemable_nci=4_917.0)
+    bs = _to_bs(r)
+    assert bs.redeemable_nci == 4_917.0
+    assert bs.total_liabilities + bs.redeemable_nci + bs.total_equity == bs.total_assets
+
+
+def test_compare_deltas_include_redeemable_nci() -> None:
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        KPISnapshot,
+        KPIChange,
+        PeriodData,
+        _compare_periods,
+    )
+
+    def _pd(mezz: float | None) -> PeriodData:
+        return PeriodData(
+            label="Q1 FY2026", period_end=dt.date(2026, 3, 31),
+            fiscal_year=2026, fiscal_period="Q1",
+            kpi=KPISnapshot(), yoy=KPIChange(), qoq=None,
+            balance_sheet=BalanceSheet(redeemable_nci=mezz),
+            balance_sheet_yoy=BalanceSheetChange(), balance_sheet_qoq=None,
+        )
+
+    deltas = _compare_periods(_pd(4_917.0), _pd(4_000.0))
+    assert deltas.redeemable_nci.absolute == 917.0
+    # None on either side -> empty delta, never a crash.
+    assert _compare_periods(_pd(None), _pd(4_000.0)).redeemable_nci.absolute is None

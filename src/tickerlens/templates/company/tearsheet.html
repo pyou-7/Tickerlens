@@ -236,6 +236,16 @@
               <td class="py-1.5 px-2 text-right">{{ fmt_large(row.total_liabilities) }}</td>
               {% endfor %}
             </tr>
+            {% set mezz_ns = namespace(show=false) %}
+            {% for row in rows[-8:] %}{% if row.redeemable_nci is not none %}{% set mezz_ns.show = true %}{% endif %}{% endfor %}
+            {% if mezz_ns.show %}
+            <tr class="bg-slate-50/50">
+              <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Redeemable NCI <span class="text-xs font-normal text-slate-400">(mezzanine)</span></td>
+              {% for row in rows[-8:] %}
+              <td class="py-1.5 px-2 text-right">{{ fmt_large(row.redeemable_nci) }}</td>
+              {% endfor %}
+            </tr>
+            {% endif %}
             <tr class="bg-slate-50/50">
               <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Stockholders' Equity</td>
               {% for row in rows[-8:] %}

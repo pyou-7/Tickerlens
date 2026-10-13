@@ -206,6 +206,9 @@
         {{ cmp_row("Free Cash Flow", ctx.a.kpi.free_cash_flow, ctx.b.kpi.free_cash_flow, ctx.deltas.free_cash_flow) }}
         {{ cmp_row("Total Assets", ctx.a.balance_sheet.total_assets, ctx.b.balance_sheet.total_assets, ctx.deltas.total_assets) }}
         {{ cmp_row("Total Liabilities", ctx.a.balance_sheet.total_liabilities, ctx.b.balance_sheet.total_liabilities, ctx.deltas.total_liabilities) }}
+        {% if ctx.a.balance_sheet.redeemable_nci is not none or ctx.b.balance_sheet.redeemable_nci is not none %}
+        {{ cmp_row("Redeemable NCI (mezzanine)", ctx.a.balance_sheet.redeemable_nci, ctx.b.balance_sheet.redeemable_nci, ctx.deltas.redeemable_nci) }}
+        {% endif %}
         {{ cmp_row("Total Equity", ctx.a.balance_sheet.total_equity, ctx.b.balance_sheet.total_equity, ctx.deltas.total_equity) }}
         {{ cmp_row("Cash & Equivalents", ctx.a.balance_sheet.cash_and_equivalents, ctx.b.balance_sheet.cash_and_equivalents, ctx.deltas.cash_and_equivalents) }}
       </tbody>

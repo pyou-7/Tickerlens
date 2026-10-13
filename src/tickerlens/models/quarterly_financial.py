@@ -25,6 +25,10 @@ class QuarterlyFinancial(Base):
     total_liabilities: Mapped[float | None] = mapped_column(Float)
     total_equity: Mapped[float | None] = mapped_column(Float)
     cash_and_equivalents: Mapped[float | None] = mapped_column(Float)
+    # Mezzanine equity: redeemable noncontrolling interest (between
+    # liabilities and equity, part of neither). Auto-migrated by
+    # ensure_schema(); backfilled by batch 59.
+    redeemable_nci: Mapped[float | None] = mapped_column(Float)
     # Earnings-release highlights, extracted from the period's 8-K ex-99 exhibit.
     # Owned by enrich_company (best-effort); never wiped on transient failure.
     press_release_highlights: Mapped[str | None] = mapped_column(Text)

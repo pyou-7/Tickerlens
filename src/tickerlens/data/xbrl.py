@@ -25,6 +25,11 @@ class Metric(StrEnum):
     TOTAL_LIABILITIES = "total_liabilities"
     TOTAL_EQUITY = "total_equity"
     CASH_AND_EQUIVALENTS = "cash_and_equivalents"
+    # Redeemable noncontrolling interest sits in *mezzanine* equity — between
+    # liabilities and permanent equity on the balance sheet, part of neither.
+    # Filers that carry it (e.g. S&P Global's $4.9B, AT&T's $2.0B) otherwise
+    # render Assets != Liabilities + Equity.
+    REDEEMABLE_NCI = "redeemable_nci"
 
 
 class ConceptSpec(BaseModel):
@@ -71,6 +76,10 @@ class QuarterlyFinancials(BaseModel):
     total_liabilities: float | None = None
     total_equity: float | None = None
     cash_and_equivalents: float | None = None
+    # Mezzanine equity (redeemable NCI) — between liabilities and equity,
+    # part of neither. Rendered as its own balance-sheet line; subtracted
+    # when the accounting identity derives a missing leg.
+    redeemable_nci: float | None = None
 
     @property
     def period(self) -> str:
@@ -163,6 +172,13 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         ),
         unit="USD",
     ),
+    # Redeemable NCI is filed under the carrying-amount tag on every live
+    # filer checked (SPGI, T, UNH, APLD, OTIS, ICE, CI, SNPS — 2026-10-12);
+    # the bare tag has no facts on any of them, so the chain is one tag.
+    Metric.REDEEMABLE_NCI: ConceptSpec(
+        tags=("RedeemableNoncontrollingInterestEquityCarryingAmount",),
+        unit="USD",
+    ),
 }
 
 BALANCE_SHEET_METRICS: tuple[Metric, ...] = (
@@ -170,6 +186,7 @@ BALANCE_SHEET_METRICS: tuple[Metric, ...] = (
     Metric.TOTAL_LIABILITIES,
     Metric.TOTAL_EQUITY,
     Metric.CASH_AND_EQUIVALENTS,
+    Metric.REDEEMABLE_NCI,
 )
 
 
@@ -274,6 +291,7 @@ def extract_recent_quarterly_financials(
                 total_liabilities=balance_sheet[Metric.TOTAL_LIABILITIES].get(item.end),
                 total_equity=balance_sheet[Metric.TOTAL_EQUITY].get(item.end),
                 cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
+                redeemable_nci=balance_sheet[Metric.REDEEMABLE_NCI].get(item.end),
             )
         )
     rows = _dedupe_period_labels(rows)
@@ -1370,14 +1388,22 @@ def _derive_missing_balance_sheet(
     filing's other two instants; only ends where both components exist are
     filled, and an explicitly filed value is never overwritten. Assets is
     never derived (it is the anchor the identity is checked against).
+
+    The identity is really Assets = Liabilities + Mezzanine + Equity:
+    redeemable noncontrolling interest sits between liabilities and equity,
+    part of neither. When the mezzanine instant is known for an end it is
+    subtracted from the derived leg — otherwise a filer carrying mezzanine
+    (e.g. S&P Global's $4.9B) would get a derived leg overstated by exactly
+    the mezzanine amount. Unknown mezzanine keeps the old two-leg formula.
     """
     liabilities = balance_sheet[Metric.TOTAL_LIABILITIES]
     assets = balance_sheet[Metric.TOTAL_ASSETS]
     equity = balance_sheet[Metric.TOTAL_EQUITY]
+    mezz = balance_sheet.get(Metric.REDEEMABLE_NCI, {})
     for end in sorted(set(assets) & set(equity)):
-        liabilities.setdefault(end, assets[end] - equity[end])
+        liabilities.setdefault(end, assets[end] - equity[end] - mezz.get(end, 0.0))
     for end in sorted(set(assets) & set(liabilities)):
-        equity.setdefault(end, assets[end] - liabilities[end])
+        equity.setdefault(end, assets[end] - liabilities[end] - mezz.get(end, 0.0))
 
 
 # SEC's fiscalYearEnd is a fixed MMDD, but 52/53-week filers use floating

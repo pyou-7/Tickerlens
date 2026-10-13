@@ -550,10 +550,11 @@ def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -
         bs.total_liabilities = 250_000.0
         bs.total_equity = 100_000.0
         bs.cash_and_equivalents = 50_000.0
+        bs.redeemable_nci = None  # no mezzanine: the row stays hidden
         getattr(mock_ctx, side).quarters_count = 4  # full fiscal years (batch 39)
     for field in ("revenue", "net_income", "eps_basic", "eps_diluted",
                   "free_cash_flow", "total_assets", "total_liabilities",
-                  "total_equity", "cash_and_equivalents"):
+                  "total_equity", "cash_and_equivalents", "redeemable_nci"):
         getattr(mock_ctx.deltas, field).absolute = 1_000.0
         getattr(mock_ctx.deltas, field).pct = 5.0
     mock_svc.get_compare.return_value = mock_ctx
