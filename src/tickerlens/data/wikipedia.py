@@ -48,6 +48,13 @@ _CORP_SUFFIXES = frozenset(
 _DBA_ALIASES = {
     "CART": "Instacart",
     "SHOO": "Steve Madden, Ltd.",
+    # Batch 64 (live ORLY case): "O REILLY AUTOMOTIVE INC" — Wikipedia's top
+    # hit IS the right article, but the apostrophe-join ("o"+"reilly" vs
+    # normalized "oreilly") zeroes the word-overlap relevance score, so every
+    # relevance path rejects it. The company does business as O'Reilly Auto
+    # Parts (SEC 10-K cover page: "O'Reilly Automotive, Inc." dba O'Reilly
+    # Auto Parts; verified 2026-10-13). Exact-match guarded like the rest.
+    "ORLY": "O'Reilly Auto Parts",
 }
 
 

@@ -380,7 +380,10 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
     mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
 
     svc = FinancialsService(edgar_client=mock_edgar, session=session)
-    rows = svc.fetch_and_persist("AAPL", periods=4, session=session)
+    # Seed-time enrichment (batch 64) would hit Wikipedia/Yahoo; patch it out.
+    with patch("tickerlens.services.financials.get_quote"), \
+         patch("tickerlens.services.financials.get_description", return_value=None):
+        rows = svc.fetch_and_persist("AAPL", periods=4, session=session)
 
     assert len(rows) >= 1
 
@@ -392,6 +395,58 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
 
     financials = session.query(QuarterlyFinancial).all()
     assert any(f.revenue == pytest.approx(95_000) for f in financials)
+
+
+def _seed_service(session: Session) -> FinancialsService:
+    """A FinancialsService whose EDGAR client is mocked (batch 64)."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    mock_edgar.submissions.return_value = _SUBMISSIONS
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_fetch_and_persist_seed_time_enrichment_fills_blanks(session: Session) -> None:
+    """Batch 64: a fresh seed backfills description + price/market-cap so the
+    company is presentable without waiting for a page view."""
+    svc = _seed_service(session)
+    quote = MagicMock(last_price=250.0, market_cap=3_800_000_000_000)
+    with patch("tickerlens.services.financials.get_quote", return_value=quote), \
+         patch("tickerlens.services.financials.get_description", return_value="An iPhone maker"):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    company = session.get(Company, "0000320193")
+    assert company is not None
+    assert company.description == "An iPhone maker"
+    assert company.last_price == 250.0
+    assert company.market_cap == 3_800_000_000_000
+
+
+def test_fetch_and_persist_seed_time_enrichment_never_overwrites(session: Session) -> None:
+    """Batch 64: seed-time enrichment is blank-only — a re-seed must not
+    wipe a populated description or price on a transient fetch failure."""
+    svc = _seed_service(session)
+    quote = MagicMock(last_price=250.0, market_cap=3_800_000_000_000)
+    with patch("tickerlens.services.financials.get_quote", return_value=quote), \
+         patch("tickerlens.services.financials.get_description", return_value="An iPhone maker"):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    with patch("tickerlens.services.financials.get_quote", side_effect=Exception("down")), \
+         patch("tickerlens.services.financials.get_description", side_effect=Exception("down")):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    company = session.get(Company, "0000320193")
+    assert company is not None
+    assert company.description == "An iPhone maker"
+    assert company.last_price == 250.0
+
+
+def test_fetch_and_persist_enrich_false_stays_hermetic(session: Session) -> None:
+    """Batch 64: ``enrich=False`` skips the seed-time network calls entirely,
+    keeping the test suite hermetic."""
+    svc = _seed_service(session)
+    with patch("tickerlens.services.financials.get_quote") as q, \
+         patch("tickerlens.services.financials.get_description") as d:
+        svc.fetch_and_persist("AAPL", periods=4, session=session, enrich=False)
+    q.assert_not_called()
+    d.assert_not_called()
 
 
 def test_fetch_and_persist_defaults_to_eight_quarters() -> None:

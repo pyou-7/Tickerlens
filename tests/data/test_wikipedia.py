@@ -476,3 +476,37 @@ def test_best_title_alias_stays_none_without_article() -> None:
         side_effect=_search_by_query(mapping),
     ):
         assert _best_title("AGNC Investment Corp.", ticker="AGNC") is None
+
+
+def test_best_title_alias_rescues_apostrophe_join() -> None:
+    """Batch 64 (live ORLY case): 'O REILLY AUTOMOTIVE INC' — Wikipedia's
+    top hit IS the right article, but the apostrophe-join ('o'+'reilly'
+    normalizes to 'oreilly', not the company's 'o'+'reilly' pair) zeroes
+    the word-overlap relevance score, so every relevance path rejects it
+    and the DBA alias retries with the exact company-article title."""
+    mapping = {
+        "O REILLY AUTOMOTIVE INC": ["O'Reilly Auto Parts", "Terex"],
+        "O REILLY AUTOMOTIVE": [],
+        "O'Reilly Auto Parts": ["O'Reilly Auto Parts", "NASCAR O'Reilly Auto Parts Series"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("O REILLY AUTOMOTIVE INC", ticker="ORLY") == "O'Reilly Auto Parts"
+
+
+def test_best_title_alias_rejects_series_page() -> None:
+    """Batch 64: the alias retry demands an exact squashed-title match, so
+    when only the NASCAR series page (sponsored by O'Reilly) comes back,
+    it is declined instead of misattributed."""
+    mapping = {
+        "O REILLY AUTOMOTIVE INC": ["Terex"],
+        "O REILLY AUTOMOTIVE": [],
+        "O'Reilly Auto Parts": ["NASCAR O'Reilly Auto Parts Series"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("O REILLY AUTOMOTIVE INC", ticker="ORLY") is None

@@ -733,6 +733,36 @@ class CompareContext(BaseModel):
 
 # ── service ───────────────────────────────────────────────────────────────────
 
+def _seed_time_enrichment(db: Session, cik: str, ticker: str) -> None:
+    """Backfill description + price at seed time so newly seeded companies
+    don't wait for a page view to become presentable (batch 64: 18 seeded
+    companies had no description and 6 had no price, because seeding never
+    ran enrichment — it only happened inside ``enrich_company`` on views).
+
+    Blank-only (never overwrites a populated field, unlike
+    ``enrich_company``'s clear-on-None policy) and never raises: a transient
+    Wikipedia or Yahoo failure just leaves the field blank for
+    ``enrich_company`` to fill on the next page view.
+    """
+    company = db.get(Company, cik)
+    if company is None:
+        return
+    if not (company.description or "").strip():
+        try:
+            company.description = get_description(company.name, ticker=ticker)
+        except Exception:
+            logger.warning("seed-time description fetch failed for %s", ticker, exc_info=True)
+    if company.last_price is None:
+        try:
+            quote = get_quote(ticker)
+            if quote.last_price is not None:
+                company.last_price = quote.last_price
+            if quote.market_cap is not None:
+                company.market_cap = quote.market_cap
+        except Exception:
+            logger.warning("seed-time quote fetch failed for %s", ticker, exc_info=True)
+
+
 class FinancialsService:
     """Financial statement extraction, persistence, and enrichment service."""
 
@@ -764,6 +794,7 @@ class FinancialsService:
         ticker: str,
         periods: int = 8,
         session: Session | None = None,
+        enrich: bool = True,
     ) -> list[QuarterlyFinancials]:
         """Fetch XBRL financials from EDGAR and upsert into SQLite.
 
@@ -772,6 +803,11 @@ class FinancialsService:
         PYPL — batch 44) with half a window and NULL freshness markers,
         degrading YoY comparisons and the valuation card until a page view
         happened to trigger the refresh.
+
+        ``enrich`` (batch 64): also backfill the company description and
+        price/market-cap at seed time, blank-only and never-raising, so a
+        newly seeded company is presentable without waiting for a page
+        view. Pass ``enrich=False`` for fully hermetic unit tests.
         """
         cik = _resolve_cik(self.edgar_client, ticker)
         # Deliberate pull: always read live EDGAR, never a cached snapshot.
@@ -801,6 +837,8 @@ class FinancialsService:
             )
             for row in rows:
                 _upsert_financial(db, cik, row)
+            if enrich:
+                _seed_time_enrichment(db, cik, ticker)
             db.commit()
             if processed_filing is not None:
                 # The pull just incorporated this filing: record it so a
