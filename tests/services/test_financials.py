@@ -2887,11 +2887,13 @@ def test_range_table_drops_mezzanine_row_when_all_none(session: Session) -> None
 
 def test_to_bs_carries_redeemable_nci(session: Session) -> None:
     from tickerlens.services.financials import _to_bs
+    # Realistic dollar magnitudes: the third-leg gate's $2M rounding floor
+    # is calibrated for real filings (values in dollars), not toy scales.
     r = _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
-             total_assets=60_792.0, total_liabilities=24_587.0,
-             total_equity=31_288.0, redeemable_nci=4_917.0)
+             total_assets=60_792_000_000.0, total_liabilities=24_587_000_000.0,
+             total_equity=31_288_000_000.0, redeemable_nci=4_917_000_000.0)
     bs = _to_bs(r)
-    assert bs.redeemable_nci == 4_917.0
+    assert bs.redeemable_nci == 4_917_000_000.0
     assert bs.total_liabilities + bs.redeemable_nci + bs.total_equity == bs.total_assets
 
 

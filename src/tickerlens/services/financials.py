@@ -42,7 +42,10 @@ from tickerlens.data.yahoo import (
 )
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
-from tickerlens.models.quarterly_financial import QuarterlyFinancial
+from tickerlens.models.quarterly_financial import (
+    QuarterlyFinancial,
+    mezzanine_is_third_leg,
+)
 from tickerlens.models.valuation_history import ValuationHistory
 from tickerlens.models.watchlist import WatchlistEntry
 from tickerlens.services.ir_download import (
@@ -2646,6 +2649,23 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
     def _row(
         label: str, section: str, kind: str, attr: str
     ) -> RangeTableRow:
+        if label == "Redeemable NCI (mezzanine)":
+            # Same third-leg gate as the detail/compare tables: a stored
+            # mezzanine value only renders where it explains an identity gap.
+            values = [
+                r.redeemable_nci
+                if mezzanine_is_third_leg(
+                    r.total_assets,
+                    r.total_liabilities,
+                    r.total_equity,
+                    r.redeemable_nci,
+                )
+                else None
+                for r in window_rows
+            ]
+            return RangeTableRow(
+                label=label, section=section, kind=kind, values=values
+            )
         return RangeTableRow(
             label=label,
             section=section,
@@ -2728,12 +2748,25 @@ def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
 
 
 def _to_bs(row: QuarterlyFinancial) -> BalanceSheet:
+    # The mezzanine row is only a real third leg when it explains an
+    # identity gap (batch 60): filers like AT&T carry a redeemable-NCI tag
+    # while their extracted total equity already includes it, so rendering
+    # it as an additional leg would double-count it.
     return BalanceSheet(
         total_assets=row.total_assets,
         total_liabilities=row.total_liabilities,
         total_equity=row.total_equity,
         cash_and_equivalents=row.cash_and_equivalents,
-        redeemable_nci=row.redeemable_nci,
+        redeemable_nci=(
+            row.redeemable_nci
+            if mezzanine_is_third_leg(
+                row.total_assets,
+                row.total_liabilities,
+                row.total_equity,
+                row.redeemable_nci,
+            )
+            else None
+        ),
     )
 
 
