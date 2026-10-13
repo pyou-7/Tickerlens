@@ -600,9 +600,20 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
 # against quarterly references, a YTD fact against YTD references. One end
 # date can carry both (HON's 2025-06-30: Q2 4.90 and 6M 9.34, both filed
 # 2026-07-23), and cross-comparing let the YTD value poison the quarterly
-# check. 120 days separates the classes cleanly (quarterly 70–100d,
+# check. 120 days separates the classes cleanly (quarterly 70–115d,
 # 6M ~182d, 9M ~273d, FY ~365d).
 _QUARTERLY_MAX_DAYS = 120
+
+
+# Standalone quarterly-fact classification: 13-week quarters run 70–100
+# days, but 52/53-week 4-4-5 retailers (Kroger — batch 61) file 16-week
+# (112-day) quarters. The old 100-day ceiling silently dropped Kroger's Q1
+# every year, deleting 3 of its 8 stored quarters. 115 covers the 16-week
+# quarter with slack while staying below the 120-day class boundary, so no
+# 6M/9M/FY fact can enter as a quarter.
+_QUARTERLY_FACT_MIN_DAYS = 70
+_QUARTERLY_FACT_MAX_DAYS = 115
+_QUARTERLY_FACT_WINDOW = (_QUARTERLY_FACT_MIN_DAYS, _QUARTERLY_FACT_MAX_DAYS)
 # The rescaled value must be at least this much closer (in log-ratio terms)
 # to guard against borderline flip-flops.
 _BASIS_CHECK_MARGIN = math.log(1.2)
@@ -761,7 +772,7 @@ def quarterly_income_metric(
     if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
         try:
             _, ni_facts = concept_facts(
-                companyfacts, Metric.NET_INCOME, staleness_window=(70, 100)
+                companyfacts, Metric.NET_INCOME, staleness_window=_QUARTERLY_FACT_WINDOW
             )
         except KeyError:
             ni_facts = None
@@ -771,7 +782,7 @@ def quarterly_income_metric(
             companyfacts,
             spec.tags,
             spec.unit,
-            staleness_window=(70, 100),
+            staleness_window=_QUARTERLY_FACT_WINDOW,
             metric_name=metric.value,
         )
     except KeyError:
@@ -809,7 +820,7 @@ def _income_series_for_tag(
     ni_facts: list[XbrlFact] | None = None,
 ) -> list[PeriodMetric]:
     """Quarterly series from one tag: standalone quarters + derived Q4s."""
-    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end, ni_facts=ni_facts)
     return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
 
@@ -837,7 +848,7 @@ def _merge_standalone_with_q4(
 ) -> list[PeriodMetric]:
     """Merge quarterly facts with derived Q4 rows, fixing mislabeled Q4 stubs.
 
-    A 70–100-day fact is quarterly by duration, so any non-"Q4" fp label on
+    A 70–115-day fact is quarterly by duration, so any non-"Q4" fp label on
     one that coincides with a derivable Q4 is a filer mislabeling of its 10-K
     Q4 stub (ABBV's 10-K tags the 91-day Q4 Revenues fact fp="FY"; BNY's
     2024 10-K tags its 92-day Q4 NoninterestIncome/InterestIncomeExpenseNet
@@ -885,7 +896,7 @@ def _cash_flow_series_for_tag(
     fiscal_year_end: str | None,
 ) -> list[PeriodMetric]:
     """Uncumulative quarterly cash-flow series from one tag's YTD facts."""
-    q1s = _dedup_by_end(facts, 75, 105, fiscal_year_end)
+    q1s = _dedup_by_end(facts, 75, _QUARTERLY_FACT_MAX_DAYS, fiscal_year_end)
     h1s = _dedup_by_end(facts, 165, 200, fiscal_year_end)
     # 52/53-week filers (e.g. Costco's 36-week 9M = 251 days) run shorter than
     # a nominal 273-day 9M; the 240-day floor covers them without touching the
@@ -953,7 +964,7 @@ def concept_facts(
     in 2020 while ``Revenues`` runs through 2026). Such stale tags are skipped
     so the tool never presents years-old data as current. ``staleness_window``
     optionally restricts which facts count toward a tag's "newest" to a
-    duration range in days — the quarterly path passes its 70–100 day window
+    duration range in days — the quarterly path passes its 70–115 day window
     so a tag kept alive only by half-year facts still counts as abandoned.
     If no tag is fresh enough, falls back to the first non-empty tag
     (previous behavior).
@@ -1195,14 +1206,14 @@ def _finance_total_revenue(
     """
     try:
         source_tag, facts = _select_tag_facts(
-            companyfacts, ("Revenues",), "USD", staleness_window=(70, 100)
+            companyfacts, ("Revenues",), "USD", staleness_window=_QUARTERLY_FACT_WINDOW
         )
     except KeyError:
         return []
-    newest = _newest_in_window(facts, (70, 100))
+    newest = _newest_in_window(facts, _QUARTERLY_FACT_WINDOW)
     if newest is None or (dt.date.today() - newest).days > _MAX_TAG_STALENESS_DAYS:
         return []
-    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
@@ -1223,14 +1234,14 @@ def _bdc_quarterly_revenue(
     """
     try:
         source_tag, facts = _select_tag_facts(
-            companyfacts, _BDC_REVENUE_TAGS, "USD", staleness_window=(70, 100)
+            companyfacts, _BDC_REVENUE_TAGS, "USD", staleness_window=_QUARTERLY_FACT_WINDOW
         )
     except KeyError:
         logger.warning(
             "BDC revenue tag %s missing — composite skipped", _BDC_REVENUE_TAGS[0]
         )
         return []
-    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
@@ -1263,14 +1274,14 @@ def _bank_quarterly_revenue(
     for tags in _BANK_REVENUE_COMPONENTS:
         try:
             source_tag, facts = _select_tag_facts(
-                companyfacts, tags, "USD", staleness_window=(70, 100)
+                companyfacts, tags, "USD", staleness_window=_QUARTERLY_FACT_WINDOW
             )
         except KeyError:
             logger.warning(
                 "bank revenue component %s missing — composite skipped", tags[0]
             )
             return []
-        standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+        standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
         q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
         component_series.append(
             _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
@@ -1319,7 +1330,7 @@ def _mreit_quarterly_revenue(
     """
     try:
         source_tag, facts = _select_tag_facts(
-            companyfacts, _MREIT_REVENUE_TAGS, "USD", staleness_window=(70, 100)
+            companyfacts, _MREIT_REVENUE_TAGS, "USD", staleness_window=_QUARTERLY_FACT_WINDOW
         )
     except KeyError:
         logger.warning(
@@ -1327,7 +1338,7 @@ def _mreit_quarterly_revenue(
             _MREIT_REVENUE_TAGS[0],
         )
         return []
-    standalone = _dedup_by_end(facts, 70, 100, fiscal_year_end)
+    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
     q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 

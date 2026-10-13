@@ -2366,3 +2366,110 @@ def test_mislabeled_q4_stub_not_doubled_on_bank_composite() -> None:
     assert q4.value == 3_653_000_000 + 1_194_000_000  # summed once, not doubled
     q3 = metrics[dt.date(2024, 9, 30)]
     assert (q3.fp, q3.value) == ("Q3", 3_600_000_000 + 1_048_000_000)
+
+
+# Batch 61: 16-week (112-day) quarters were silently dropped by the 70–100
+# day standalone-quarter window — Kroger files 16-week Q1s (4-4-5 retail
+# calendar), so 3 of its 8 stored quarters were missing entirely.
+
+
+def _kroger_shaped_companyfacts() -> dict:
+    """Kroger-shaped revenue facts: 16-week Q1s, 10-Qs on begin-year fy."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {
+                        "USD": [
+                            # Q1: 111 days (16 weeks) — dropped before batch 61.
+                            fact("2024-02-04", "2024-05-25", 45_269_000_000, 2024, "Q1", filed="2024-06-28"),
+                            fact("2024-05-26", "2024-08-17", 33_912_000_000, 2024, "Q2", filed="2024-09-06"),
+                            fact("2024-08-18", "2024-11-09", 33_634_000_000, 2024, "Q3", filed="2024-12-05"),
+                            # 10-K comparative column uses end-year fy for the same quarter.
+                            fact("2024-11-10", "2025-02-01", 34_308_000_000, 2025, "Q4", filed="2025-03-27"),
+                            fact("2025-02-02", "2025-05-24", 45_118_000_000, 2025, "Q1", filed="2025-06-27"),
+                            fact("2025-05-25", "2025-08-16", 33_940_000_000, 2025, "Q2", filed="2025-09-05"),
+                            fact("2025-08-17", "2025-11-08", 33_859_000_000, 2025, "Q3", filed="2025-12-04"),
+                            fact("2025-11-09", "2026-01-31", 34_725_000_000, 2025, "Q4", filed="2026-03-26"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+def test_sixteen_week_quarters_are_kept_in_income_series() -> None:
+    cf = _kroger_shaped_companyfacts()
+    series = quarterly_income_metric(cf, Metric.REVENUE, "0130", sic="5411")
+    by_end = {m.end: m for m in series}
+    assert dt.date(2024, 5, 25) in by_end
+    assert dt.date(2025, 5, 24) in by_end
+    assert by_end[dt.date(2024, 5, 25)].value == 45_269_000_000
+    assert by_end[dt.date(2024, 5, 25)].fp == "Q1"
+
+
+def test_sixteen_week_quarters_survive_full_extraction_with_monotonic_labels() -> None:
+    cf = _kroger_shaped_companyfacts()
+    rows = extract_recent_quarterly_financials(
+        cf, fiscal_year_end="0130", periods=8, sic="5411"
+    )
+    assert len(rows) == 8
+    labels = [(r.fy, r.fp) for r in sorted(rows, key=lambda r: r.end)]
+    # Every quarter present, labels monotonic, no absurd multi-year walk-back
+    # (the pre-fix pipeline dropped the Q1s and rendered 2025-02-01 "FY2023Q4").
+    assert labels == [
+        (2024, "Q1"), (2024, "Q2"), (2024, "Q3"), (2024, "Q4"),
+        (2025, "Q1"), (2025, "Q2"), (2025, "Q3"), (2025, "Q4"),
+    ]
+    q1 = [r for r in rows if r.fp == "Q1"]
+    assert [r.revenue for r in sorted(q1, key=lambda r: r.end)] == [
+        45_269_000_000, 45_118_000_000,
+    ]
+
+
+def test_sixteen_week_cash_flow_q1_is_kept() -> None:
+    cf = make_companyfacts(
+        revenue_values=[],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[
+            ("2024-02-04", "2024-05-25", 1_900_000_000, 2024, "Q1"),
+            ("2024-02-04", "2024-08-17", 3_100_000_000, 2024, "Q2"),
+        ],
+        capex_values=[],
+    )
+    rows = quarterly_cash_flow_metric(cf, Metric.OPERATING_CASH_FLOW, "0130")
+    by_end = {r.end: r for r in rows}
+    # The 111-day Q1 YTD fact (75–115d q1s window) un-cumulates instead of
+    # being dropped; Q2 = H1 − Q1.
+    assert by_end[dt.date(2024, 5, 25)].value == 1_900_000_000
+    assert by_end[dt.date(2024, 8, 17)].value == 1_200_000_000
+
+
+def test_tag_kept_alive_only_by_sixteen_week_facts_counts_as_fresh() -> None:
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2024-02-04", "2024-05-25", 45_269_000_000, 2024, "Q1"),
+                        ]
+                    }
+                },
+                "SalesRevenueNet": {
+                    "units": {
+                        "USD": [
+                            fact("2024-05-26", "2024-08-17", 33_912_000_000, 2024, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    # The first-chain tag's only quarterly fact is 111 days — before batch 61
+    # the 70–100d staleness window judged it abandoned and the second tag won.
+    source_tag, _ = concept_facts(cf, Metric.REVENUE)
+    assert source_tag == "Revenues"
