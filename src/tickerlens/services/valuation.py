@@ -229,6 +229,7 @@ def compute_valuation(
     ttm_free_cash_flow: float | None = None,
     market_cap: float | None = None,
     ten_year_yield_pct: float | None = None,
+    is_reit: bool = False,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
@@ -299,6 +300,74 @@ def compute_valuation(
                 "business's earning power.",
                 "A growth multiple on that EPS would value accounting noise, "
                 "not the company — no target until earnings reflect operations.",
+            ],
+        )
+
+    # ── Design-envelope guards (batch 62) ─────────────────────────────────
+    # Two input classes the PEG curve was never built for. Both produced
+    # fabricated triple-digit signals in the round-19 fresh-ticker hunt, so
+    # both return Watch/unavailable with honest copy instead of a target —
+    # the same doctrine as the batch-36 margin guard above. Placed after it
+    # so its copy still owns the margin-absurdity cases (e.g. NLY).
+    #
+    # 1. REITs: GAAP EPS is structurally the wrong earnings base — the
+    #    industry values REITs on funds from operations (FFO), which the
+    #    pipeline doesn't extract. Depreciation on property makes GAAP EPS
+    #    understate a REIT's cash earning power, so a P/E on it misprices
+    #    every REIT (WELL rendered Strong Sell −79% at a 114× P/E on
+    #    depreciation-depressed EPS; SPG Strong Buy +163%; PLD Strong Sell
+    #    −75%). The sales fallback is no rescue — GAAP net margin is
+    #    depressed by the same depreciation — so the guard sits before both
+    #    paths.
+    # 2. Hyper-growth: EPS growth above the 40% model maximum. Beyond it the
+    #    multiple is clamped fiction, and the TTM base usually reflects a
+    #    one-off snapback rather than sustainable earning power — a trough
+    #    recovery (MU Strong Buy +167% on 877% growth), investment gains
+    #    (ALL Strong Buy +697% on 135%), or a cyclical rebound (HON Strong
+    #    Buy +359% on 47%). The model's own documentation calls 40% the
+    #    maximum: inputs beyond it get Watch, not a clamped Strong Buy.
+    if is_reit:
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(eps_growth_pct, 1) if eps_growth_pct is not None else None,
+            reasoning=[
+                "This is a real estate investment trust (REIT) — the industry "
+                "values REITs on funds from operations (FFO), not GAAP net "
+                "income. Depreciation on property makes GAAP EPS structurally "
+                "understate a REIT's cash earning power, so neither a P/E "
+                "multiple nor a margin-anchored sales multiple applies.",
+                "No target until FFO-based valuation is modeled — Watch the "
+                "FFO trend instead.",
+            ],
+        )
+    if eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT:
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(eps_growth_pct, 1),
+            reasoning=[
+                f"TTM EPS growth of {eps_growth_pct:.1f}% is outside the model's "
+                f"{_MAX_GROWTH_PCT:.0f}% design range — beyond it the PEG curve "
+                "is clamped fiction, and triple-digit growth usually reflects "
+                "a one-off snapback (trough recovery, asset sales, investment "
+                "gains) rather than sustainable earning power.",
+                "A growth multiple on that base would fabricate a target — no "
+                "target until growth normalizes into the model's range.",
             ],
         )
 

@@ -54,11 +54,16 @@ def test_peg_buy_threshold():
 
 
 def test_growth_clamped():
-    # 100% growth is clamped to 40% -> fair P/E clamped to 40x -> target 200.
-    # Pin a low 10y yield so the batch-12 rate guardrail stays dormant here.
+    # Batch 62: 100% growth is OUTSIDE the 40% model maximum — the old
+    # behavior clamped the multiple and printed a target; the honest
+    # behavior is Watch/unavailable (the clamped multiple was fiction and
+    # the TTM base usually a one-off snapback, e.g. ALL +697%).
     v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.fair_multiple == pytest.approx(40.0)
-    assert v.target_price == pytest.approx(200.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("outside the model's 40% design range" in p for p in v.reasoning)
 
 
 def test_rate_guardrail_binds_at_high_yield():
@@ -72,14 +77,16 @@ def test_rate_guardrail_binds_at_high_yield():
 
 def test_rate_guardrail_dormant_at_low_yield():
     # 10y at 2% -> cap at 83x; the 40x clamp binds first, no rate note.
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    # (Batch 62: growth must stay within the 40% model maximum — 100%
+    # growth now declines to Watch before the PEG path runs.)
+    v = _base(eps_growth_pct=30.0, ten_year_yield_pct=2.0)
     assert v.fair_multiple == pytest.approx(40.0)
     assert not any("10-year Treasury" in p for p in v.reasoning)
 
 
 def test_rate_guardrail_default_yield():
     # None -> 4.5% default benchmark -> cap at ~37.0x.
-    v = _base(eps_growth_pct=100.0)
+    v = _base(eps_growth_pct=30.0)
     assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
     assert any("10-year Treasury" in p for p in v.reasoning)
 
@@ -87,7 +94,7 @@ def test_rate_guardrail_default_yield():
 def test_rate_guardrail_ignores_nonsense_yield():
     # Zero/negative yields fall back to the default benchmark, never crash.
     for bad in (0.0, -2.0):
-        v = _base(eps_growth_pct=100.0, ten_year_yield_pct=bad)
+        v = _base(eps_growth_pct=30.0, ten_year_yield_pct=bad)
         assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
 
 
@@ -254,9 +261,14 @@ def test_guardrail_caps_confidence_and_names_bound():
 
 
 def test_guardrail_cap_on_growth_cap_side():
+    # Batch 62: 95% growth exceeds the 40% model maximum — no "hit the 40%
+    # cap" note anymore; the input is outside the design envelope, so the
+    # card is Watch/unavailable with the design-range copy.
     v = _base(eps_growth_pct=95.0)
-    assert v.confidence == "Medium"
-    assert any("hit the 40% cap" in p for p in v.reasoning)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert not any(p.startswith("Note:") for p in v.reasoning)
 
 
 def test_no_guardrail_keeps_high_confidence():
@@ -327,6 +339,68 @@ def test_margin_at_boundary_still_valued():
               ten_year_yield_pct=2.0)
     assert v.method == "peg"
     assert v.target_price == pytest.approx(150.0)
+
+
+# ── Batch 62: design-envelope guards — REITs and hyper-growth ─────────────
+def test_reit_is_watch_on_peg_path():
+    # Mirror the WELL case: GAAP EPS $2.02 growing 16% printed Strong Sell
+    # −79% at a 114× P/E — depreciation-depressed EPS mispriced by a P/E
+    # multiple. REITs are valued on FFO, which we don't extract: Watch.
+    v = _base(ttm_eps_diluted=2.02, eps_growth_pct=16.0, current_price=230.29,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("funds from operations (FFO)" in r for r in v.reasoning)
+
+
+def test_reit_blocks_sales_path_too():
+    # No per-share data either: the margin-anchored sales fallback must not
+    # step in where the PEG path was refused — GAAP net margin is depressed
+    # by the same depreciation, so a P/S would fabricate just as badly.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=51.13,
+              ttm_revenue=1_000_000_000.0, ttm_net_income=120_000_000.0,
+              revenue_growth_pct=10.0, shares_outstanding=10_000_000.0,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+
+
+def test_reit_guard_sits_after_margin_guard():
+    # Mirror the NLY case: a REIT whose margin is ALSO absurd (186%) keeps
+    # the batch-36 margin copy — the margin guard owns margin absurdity.
+    v = _base(ttm_eps_diluted=4.11, eps_growth_pct=257.0, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert any("non-operating" in r for r in v.reasoning)
+
+
+def test_hyper_growth_is_watch():
+    # Mirror the ALL case: 135.4% growth printed Strong Buy +697% — the
+    # multiple was clamped fiction on an investment-gain-inflated base.
+    # Growth beyond the 40% model maximum is outside the design envelope.
+    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=232.60,
+              ten_year_yield_pct=2.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("outside the model's 40% design range" in r for r in v.reasoning)
+    assert v.growth_pct == pytest.approx(135.4)
+
+
+def test_hyper_growth_boundary():
+    # The guard is strictly > 40%: exactly 40% keeps the PEG path (capped
+    # multiple, Medium confidence via the cap guardrail); 40.1% declines.
+    v = _base(eps_growth_pct=40.0, ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.fair_multiple == pytest.approx(40.0)
+    v2 = _base(eps_growth_pct=40.1, ten_year_yield_pct=2.0)
+    assert v2.signal == "Watch"
+    assert v2.method == "unavailable"
 
 
 # ── Batch 40: honest floor copy when the 8x P/E floor binds on positive growth
@@ -406,15 +480,15 @@ def test_high_growth_cap_plus_rate_copy_honest():
 
 
 def test_growth_clamped_names_model_maximum():
-    # Mirror the COF case: 100% growth is clamped to the 40% model maximum
-    # before the PEG math runs — the bullet must not claim 1.5 x 100%
-    # implies 60x without naming the clamp.
+    # Batch 62: 100% growth is outside the 40% model maximum — the card no
+    # longer clamps and names the cap; it declines with the design-range
+    # copy (mirror the ALL case: +697% Strong Buy on 135% growth).
     v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.fair_multiple == pytest.approx(40.0)
-    assert v.target_price == pytest.approx(200.0)  # math unchanged
-    assert any("100.0% growth (above the 40% model maximum)" in p for p in v.reasoning)
-    assert any("implies a fair P/E of 60.0× — above the 40× cap" in p for p in v.reasoning)
-    assert any("hit the 40% cap" in p for p in v.reasoning)  # growth-clamp note intact
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("outside the model's 40% design range" in p for p in v.reasoning)
+    assert any("until growth normalizes into the model's range" in p for p in v.reasoning)
 
 
 def test_rate_only_band_copy_honest():
