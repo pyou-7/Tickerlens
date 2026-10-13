@@ -1029,3 +1029,17 @@ Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.
 **Blast radius:** One map + one retry block in `src/tickerlens/data/wikipedia.py`; 6 new tests. Suite 573 green, `git diff --check` clean. No template change, so no screenshot gate. Live on :8123: /company/{CART,SHOO,AGNC} all 200 with correct descriptions rendering.
 
 **Follow-ups (not this batch):** none — the description alias map closes the last open follow-up from the batch-54 series.
+
+---
+
+## 2026-10-12 — Redeemable-NCI mezzanine extraction (batch 59)
+
+**What:** New `Metric.REDEEMABLE_NCI` (`us-gaap:RedeemableNoncontrollingInterestEquityCarryingAmount` — the tag every live filer checked uses; the bare tag has no facts on any of them, so the chain is one tag), extracted per quarter as an instant balance-sheet metric, persisted in a new nullable `quarterly_financials.redeemable_nci` column (auto-migrated by `ensure_schema()`, backfilled DB-wide from cached companyfacts: 20 companies, 130 quarter-rows), and rendered as a conditional "Redeemable NCI (mezzanine)" row between liabilities and equity on the detail balance-sheet table, the tearsheet trends matrix, the compare table, the per-period CSV export, and the range table (row hidden when every quarter is None). `_derive_missing_balance_sheet` now subtracts the known mezzanine instant when deriving a missing leg (A = L + mezz + E); unknown mezzanine keeps the old two-leg formula.
+
+**Why:** Round-16 hunt (CI, CCI, SNPS, OTIS, SPGI, ICE) found A ≠ L + E on four of six seeds — SPGI's balance sheet showed a $4.92B gap, OTIS $106M, ICE $32M, SNPS $30M (one quarter) — each exactly equal to the filer's redeemable noncontrolling interest, which sits in mezzanine equity (between liabilities and equity, part of neither). A scan of all 138 DB companies found 20 carriers (SPGI $4.92B, UNH $4.57B, APLD $2.01B, T $2.00B, ET $1.80B among them). `total_equity` is deliberately NOT inflated with the mezzanine amount — the filing's permanent-equity value stays filing-faithful (batch-49 BlackRock precedent: mezzanine gaps are in the filing itself, not extraction bugs); the fix makes the app *display* the third leg instead of hiding the imbalance.
+
+**Alternatives considered:** Folding redeemable NCI into `total_equity` so A=L+E closes with two legs (rejected — misstates the filing's total equity; S&P's 10-Q reports total equity $31.288B, not $36.2B); leaving the gap unexplained with a footnote (rejected — a $4.9B unexplained gap reads as a data bug to the exact user who audits these pages); deriving the mezzanine instant via the identity (rejected — mezzanine is only ever filed explicitly; deriving it would fabricate it).
+
+**Blast radius:** `data/xbrl.py` (metric + concept + wiring + derivation), `models/quarterly_financial.py` (one column), `services/financials.py` (upsert, BalanceSheet/Change/CompareDeltas models, CSV, range table), three templates (one conditional row each — additive, no redesign). 13 new tests. Suite 586 green, `git diff --check` clean. Screenshot gate passed (styled before/after): SPGI detail strictly better (identity closes: $24.59B + $4.92B + $31.29B = $60.79B), AAPL detail pixel-identical. Live on :8123 (restarted, kill-by-PID): 12/12 routes 200.
+
+**Follow-ups (not this batch):** none — round 16 leaves no open items. SPGI's missing Q2 2026 quarter was investigated and is EDGAR ingestion lag (10-Q filed 2026-07-28, zero facts in companyfacts); the batch-53 pending-filing note already covers it and fires correctly.
