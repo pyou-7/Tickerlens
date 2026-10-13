@@ -1284,8 +1284,14 @@ class FinancialsService:
             if not rows:
                 raise CompanyNotFoundError(f"No quarterly data for {ticker}")
 
-            ttm = _compute_ttm(list(rows[:4]))
-            prior_ttm = _compute_ttm(list(rows[4:8])) if len(rows) >= 8 else None
+            # Batch 63: strict per-metric TTM windows — a 4-quarter window with a
+            # per-metric gap (e.g. NTRS Q2 2026 filed net income but no XBRL
+            # EPS facts) must not silently sum fewer than 4 quarters; the
+            # missing metric is None so EPS-dependent paths are skipped and
+            # the model falls back to the sales path instead of fabricating
+            # a signal on understated TTM earnings.
+            ttm = _compute_ttm_strict(list(rows[:4]))
+            prior_ttm = _compute_ttm_strict(list(rows[4:8])) if len(rows) >= 8 else None
 
             # Growth input, best available first.
             growth_pct: float | None = None
@@ -2823,6 +2829,38 @@ def _compute_ttm(rows: list[QuarterlyFinancial]) -> KPISnapshot:
         eps_diluted=_sum_nullable(*[r.eps_diluted for r in rows]),
         free_cash_flow=_sum_nullable(*[r.free_cash_flow for r in rows]),
     )
+
+
+def _compute_ttm_strict(rows: list[QuarterlyFinancial]) -> KPISnapshot:
+    """TTM where each metric sums only when *every* quarter in the window
+    carries it; otherwise the metric is None.
+
+    The plain ``_compute_ttm`` skip-None convention silently sums fewer than
+    4 quarters when a full 4-quarter window has a per-metric gap — e.g.
+    Northern Trust's Q2 2026 10-Q filed net income but no XBRL EPS facts, so
+    TTM diluted EPS was a 3-quarter sum (~25% low) and the PEG path rendered
+    a fabricated Strong Sell (-64.5%). With strict windows, EPS-dependent
+    paths are skipped and the model falls back to the batch-33 sales path
+    ("no per-share earnings to anchor a P/E multiple"), which is the honest
+    answer for gappy filings.
+
+    Windows shorter than 4 quarters keep the skip-None behavior — those are
+    already flagged as partial via ``ttm_quarters < 4`` (confidence capped at
+    Medium), so no silent fabrication occurs there.
+    """
+    if len(rows) == 4:
+
+        def strict(values: list[float | None]) -> float | None:
+            return sum(values) if all(v is not None for v in values) else None
+
+        return KPISnapshot(
+            revenue=strict([r.revenue for r in rows]),
+            net_income=strict([r.net_income for r in rows]),
+            eps_basic=strict([r.eps_basic for r in rows]),
+            eps_diluted=strict([r.eps_diluted for r in rows]),
+            free_cash_flow=strict([r.free_cash_flow for r in rows]),
+        )
+    return _compute_ttm(rows)
 
 
 def _pct_change(current: float | None, prior: float | None) -> float | None:

@@ -19,6 +19,7 @@ from tickerlens.services.financials import (
     _compute_qoq,
     _compute_kpi_yoy,
     _compute_ttm,
+    _compute_ttm_strict,
     _compute_yoy,
     _pct_change,
     KPISnapshot,
@@ -131,6 +132,59 @@ def test_compute_ttm_all_null_returns_none() -> None:
     assert ttm.revenue is None
 
 
+# ── _compute_ttm_strict ───────────────────────────────────────────────────────
+
+def test_compute_ttm_strict_sums_complete_window() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=100, eps_diluted=1.0),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=90,  eps_diluted=0.9),
+        _row(period_end=dt.date(2025, 6, 30),  fiscal_year=2025, fiscal_period="Q2",
+             revenue=80,  eps_diluted=0.8),
+        _row(period_end=dt.date(2025, 3, 31),  fiscal_year=2025, fiscal_period="Q1",
+             revenue=70,  eps_diluted=0.7),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.revenue == pytest.approx(340.0)
+    assert ttm.eps_diluted == pytest.approx(3.4)
+
+
+def test_compute_ttm_strict_gappy_full_window_returns_none_for_that_metric() -> None:
+    # NTRS Q2 2026 class: newest quarter filed net income but no XBRL EPS
+    # facts. The metric must be None — never a silent 3-quarter sum.
+    rows = [
+        _row(period_end=dt.date(2026, 6, 30), fiscal_year=2026, fiscal_period="Q2",
+             revenue=110, net_income=80, eps_diluted=None),
+        _row(period_end=dt.date(2026, 3, 31), fiscal_year=2026, fiscal_period="Q1",
+             revenue=100, net_income=70, eps_diluted=0.7),
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=90,  net_income=60, eps_diluted=0.6),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=80,  net_income=50, eps_diluted=0.5),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.eps_diluted is None
+    assert ttm.eps_basic is None
+    # Complete metrics still sum.
+    assert ttm.revenue == pytest.approx(380.0)
+    assert ttm.net_income == pytest.approx(260.0)
+
+
+def test_compute_ttm_strict_short_window_keeps_skip_none() -> None:
+    # Short windows are already flagged partial via ttm_quarters < 4, so the
+    # legacy skip-None convention stands there.
+    rows = [
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=100, free_cash_flow=None),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=90,  free_cash_flow=20),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.revenue == pytest.approx(190.0)
+    assert ttm.free_cash_flow == pytest.approx(20.0)
+
+
 # ── _compute_yoy ─────────────────────────────────────────────────────────────
 
 def test_compute_yoy_matches_same_period_prior_year() -> None:
@@ -201,6 +255,79 @@ def test_get_overview_returns_correct_kpis(session: Session) -> None:
     assert overview.ttm_kpi.revenue == pytest.approx(124_300 + 94_930 + 85_777 + 95_359)
     expected_yoy = (124_300 - 119_575) / 119_575 * 100
     assert overview.yoy.revenue == pytest.approx(expected_yoy)
+
+
+# ── get_valuation: strict TTM windows (batch 63) ──────────────────────────────
+
+def _valuation_company(cik: str, ticker: str) -> Company:
+    c = _company(cik=cik, ticker=ticker)
+    c.last_price = 100.0
+    c.market_cap = 10_000_000_000.0
+    c.sic = "6021"  # national commercial bank — not a REIT
+    return c
+
+
+def _valuation_rows(cik: str, newest_eps_diluted: float | None) -> list[QuarterlyFinancial]:
+    # 8 quarters; newest quarter carries revenue + net income but the
+    # requested EPS value (NTRS Q2 2026 class: no XBRL EPS facts).
+    quarters = [
+        (2026, "Q2", dt.date(2026, 6, 30)),
+        (2026, "Q1", dt.date(2026, 3, 31)),
+        (2025, "Q4", dt.date(2025, 12, 31)),
+        (2025, "Q3", dt.date(2025, 9, 30)),
+        (2025, "Q2", dt.date(2025, 6, 30)),
+        (2025, "Q1", dt.date(2025, 3, 31)),
+        (2024, "Q4", dt.date(2024, 12, 31)),
+        (2024, "Q3", dt.date(2024, 9, 30)),
+    ]
+    rows = []
+    for i, (fy, fp, end) in enumerate(quarters):
+        rows.append(_row(
+            cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+            revenue=2_000.0, net_income=500.0,
+            eps_basic=2.0 if i else (2.0 if newest_eps_diluted is not None else None),
+            eps_diluted=2.0 if i else newest_eps_diluted,
+        ))
+    return rows
+
+
+def test_get_valuation_skips_peg_when_newest_quarter_lacks_eps(session: Session) -> None:
+    # Regression: NTRS's TTM EPS was a silent 3-quarter sum (~25% low),
+    # fabricating a Strong Sell on the PEG path. With a gappy newest
+    # quarter the EPS-dependent path must be skipped and the model must
+    # fall back to the sales path with honest copy.
+    cik = "0000073124"
+    session.add(_valuation_company(cik, "NTRS"))
+    for r in _valuation_rows(cik, newest_eps_diluted=None):
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    signal = svc.get_valuation("NTRS")
+
+    assert signal.method == "sales"
+    assert signal.target_price is not None
+    assert "No per-share earnings" in signal.reasoning[0]
+
+
+def test_get_valuation_uses_peg_when_eps_window_complete(session: Session) -> None:
+    # Control: same fixture with EPS present in every quarter → PEG path.
+    cik = "0000073124"
+    session.add(_valuation_company(cik, "NTRS"))
+    for r in _valuation_rows(cik, newest_eps_diluted=2.0):
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    signal = svc.get_valuation("NTRS")
+
+    assert signal.method == "peg"
+    # TTM EPS = 4 x $2.00 = $8.00, not a partial sum.
+    assert "TTM diluted EPS $8.00" in signal.reasoning[0]
 
 
 # ── fetch_and_persist ─────────────────────────────────────────────────────────
