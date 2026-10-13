@@ -10,6 +10,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from tickerlens.models.quarterly_financial import (
+    identity_tolerance as _identity_tolerance,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +51,10 @@ class XbrlFact(BaseModel):
     start: dt.date | None = None
     fy: int | None = None
     fp: str | None = None
+    # SEC accession number of the filing the fact came from (e.g.
+    # "0000940944-25-000071"). Lets the balance-sheet identity guard tell
+    # whether the three legs of one period end share a filing basis.
+    accn: str | None = None
 
 
 class PeriodMetric(BaseModel):
@@ -225,9 +233,9 @@ def extract_recent_quarterly_financials(
             logger.warning("No XBRL facts for %s — storing None", metric.value)
             return []
 
-    def _safe_bs(metric: Metric) -> dict[dt.date, float]:
+    def _safe_bs_facts(metric: Metric) -> dict[dt.date, XbrlFact]:
         try:
-            return balance_sheet_metric(companyfacts, metric, fiscal_year_end)
+            return _balance_sheet_facts(companyfacts, metric, fiscal_year_end)
         except KeyError:
             logger.warning("No XBRL facts for %s — storing None", metric.value)
             return {}
@@ -242,7 +250,16 @@ def extract_recent_quarterly_financials(
     eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
-    balance_sheet = {metric: _safe_bs(metric) for metric in BALANCE_SHEET_METRICS}
+    bs_facts = {metric: _safe_bs_facts(metric) for metric in BALANCE_SHEET_METRICS}
+    # Latest-filed-wins is per metric, so one quarter's legs can come from
+    # different filings (Darden's segment note misdates its consolidated
+    # total-assets context); repair the basis before the identity is used to
+    # derive missing legs below.
+    _reconcile_balance_sheet_identity(bs_facts, companyfacts, fiscal_year_end)
+    balance_sheet = {
+        metric: {end: fact.val for end, fact in facts.items()}
+        for metric, facts in bs_facts.items()
+    }
     # Filers that never report a standalone ``Liabilities`` tag (e.g. Eli
     # Lilly files only LiabilitiesAndStockholdersEquity + StockholdersEquity),
     # or never report an ``Equity`` tag (e.g. Visa files Assets + Liabilities
@@ -1343,6 +1360,35 @@ def _newest_in_window(
     return max(ends) if ends else None
 
 
+def _balance_sheet_facts(
+    companyfacts: dict[str, Any],
+    metric: Metric,
+    fiscal_year_end: str | None = None,
+) -> dict[dt.date, XbrlFact]:
+    """Chosen balance-sheet fact per period-end date, provenance-preserving.
+
+    Same selection as :func:`balance_sheet_metric`, but keeps the winning
+    :class:`XbrlFact` (including its filing ``accn``) instead of just the
+    value, so :func:`_reconcile_balance_sheet_identity` can detect legs of
+    one quarter drawn from different filings and repair the basis.
+    """
+    spec = CONCEPTS[metric]
+    candidates = _chain_candidates(
+        companyfacts, spec.tags, spec.unit, instant=True, metric_name=metric.value
+    )
+    chosen: dict[dt.date, XbrlFact] = {}
+    for tag, facts in candidates:
+        grouped: dict[dt.date, list[XbrlFact]] = {}
+        for fact in facts:
+            grouped.setdefault(fact.end, []).append(fact)
+        for end, end_candidates in grouped.items():
+            if end not in chosen:
+                chosen[end] = _choose_fact_for_end(
+                    end, end_candidates, fiscal_year_end
+                )
+    return chosen
+
+
 def balance_sheet_metric(
     companyfacts: dict[str, Any],
     metric: Metric,
@@ -1357,22 +1403,128 @@ def balance_sheet_metric(
     winning tag lacks are gap-filled from later chain tags (Intel's plain cash
     tag skips quarters the composite cash tag has) without changing any value
     the winner supplied.
+
+    Thin wrapper over :func:`_balance_sheet_facts`; the identity guard in
+    ``extract_recent_quarterly_financials`` works on the facts directly.
     """
-    spec = CONCEPTS[metric]
-    candidates = _chain_candidates(
-        companyfacts, spec.tags, spec.unit, instant=True, metric_name=metric.value
+    return {
+        end: fact.val
+        for end, fact in _balance_sheet_facts(
+            companyfacts, metric, fiscal_year_end
+        ).items()
+    }
+
+
+# A single filing's balance sheet always satisfies the accounting identity
+# (double-entry bookkeeping), but the per-metric latest-filed-wins assembly
+# can mix legs from different filings. Darden's Q2 FY2026 10-Q tags its
+# segment-note "Consolidated" total-assets column (Nov 23, 2025: $12,940.2M)
+# with a stale 2024-11-24 context, so the 2024-11-24 Assets leg came from the
+# FY2026-Q2 filing while Liabilities/Equity came from the original FY2025-Q2
+# filing - a $421M phantom gap no mezzanine line could explain. When the
+# identity is violated beyond tolerance and the legs span more than one
+# filing, fall back to the earliest-filed single filing whose own legs close
+# the identity (tolerance: models.quarterly_financial.identity_tolerance,
+# shared with the mezzanine render gate).
+
+
+def _reconcile_balance_sheet_identity(
+    chosen: dict[Metric, dict[dt.date, XbrlFact]],
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None,
+) -> None:
+    """Repair mixed-filing balance-sheet bases via the accounting identity.
+
+    For each period end where Assets, Liabilities and Equity are all present,
+    checks ``|A - L - mezz - E|`` against the tolerance. On violation with
+    legs drawn from two or more filings, replaces the quarter's legs with the
+    earliest-filed single filing whose own facts for that end close the
+    identity. A no-op when the identity already holds, when every leg shares
+    one filing (the filer's own books genuinely don't close - nothing to
+    reconcile), or when no single filing's legs close (keeps latest-wins).
+    Never invents values: every candidate comes from a filed fact.
+    """
+    need = (Metric.TOTAL_ASSETS, Metric.TOTAL_LIABILITIES, Metric.TOTAL_EQUITY)
+    if not all(m in chosen for m in need):
+        return
+    mezz_by_end = chosen.get(Metric.REDEEMABLE_NCI, {})
+    ends = (
+        set(chosen[Metric.TOTAL_ASSETS])
+        & set(chosen[Metric.TOTAL_LIABILITIES])
+        & set(chosen[Metric.TOTAL_EQUITY])
     )
-    merged: dict[dt.date, float] = {}
-    for tag, facts in candidates:
-        grouped: dict[dt.date, list[XbrlFact]] = {}
-        for fact in facts:
-            grouped.setdefault(fact.end, []).append(fact)
-        for end, end_candidates in grouped.items():
-            if end not in merged:
-                merged[end] = _choose_fact_for_end(
-                    end, end_candidates, fiscal_year_end
-                ).val
-    return merged
+    for end in sorted(ends):
+        a = chosen[Metric.TOTAL_ASSETS][end].val
+        l = chosen[Metric.TOTAL_LIABILITIES][end].val  # noqa: E741
+        e = chosen[Metric.TOTAL_EQUITY][end].val
+        mezz_fact = mezz_by_end.get(end)
+        mezz = mezz_fact.val if mezz_fact is not None else 0.0
+        if abs(a - l - mezz - e) <= _identity_tolerance(a):
+            continue
+        accns = {
+            chosen[m][end].accn for m in need if chosen[m][end].accn is not None
+        }
+        if mezz_fact is not None and mezz_fact.accn is not None:
+            accns.add(mezz_fact.accn)
+        if len(accns) < 2:
+            continue
+        # All candidate facts for this end, grouped by filing.
+        per_accn: dict[str, dict[Metric, XbrlFact]] = {}
+        metrics = need + (
+            (Metric.REDEEMABLE_NCI,) if Metric.REDEEMABLE_NCI in chosen else ()
+        )
+        for m in metrics:
+            spec = CONCEPTS[m]
+            try:
+                tag_facts = _chain_candidates(
+                    companyfacts, spec.tags, spec.unit,
+                    instant=True, metric_name=m.value,
+                )
+            except KeyError:
+                continue
+            for _tag, facts in tag_facts:
+                for fact in facts:
+                    if fact.end != end or fact.accn is None:
+                        continue
+                    slot = per_accn.setdefault(fact.accn, {})
+                    if m not in slot or fact.filed > slot[m].filed:
+                        slot[m] = fact
+        for accn in sorted(
+            per_accn, key=lambda a_: min(f.filed for f in per_accn[a_].values())
+        ):
+            legs = per_accn[accn]
+            if not all(m in legs for m in need):
+                continue
+            mz = (
+                legs[Metric.REDEEMABLE_NCI].val
+                if Metric.REDEEMABLE_NCI in legs
+                else 0.0
+            )
+            a2 = legs[Metric.TOTAL_ASSETS].val
+            if (
+                abs(
+                    a2
+                    - legs[Metric.TOTAL_LIABILITIES].val
+                    - mz
+                    - legs[Metric.TOTAL_EQUITY].val
+                )
+                <= _identity_tolerance(a2)
+            ):
+                for m in need:
+                    chosen[m][end] = legs[m]
+                if Metric.REDEEMABLE_NCI in chosen:
+                    if Metric.REDEEMABLE_NCI in legs:
+                        chosen[Metric.REDEEMABLE_NCI][end] = legs[
+                            Metric.REDEEMABLE_NCI
+                        ]
+                    else:
+                        chosen[Metric.REDEEMABLE_NCI].pop(end, None)
+                logger.info(
+                    "Balance-sheet basis reconciled for %s: mixed filings %s "
+                    "violated A=L+mezz+E by %.1fM; using %s",
+                    end, sorted(accns), (a - l - mezz - e) / 1e6, accn,
+                )
+                break
 
 
 def _derive_missing_balance_sheet(
