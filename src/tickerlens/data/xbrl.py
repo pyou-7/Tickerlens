@@ -131,10 +131,18 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     # EPS_UNDISTRIBUTED_TAG). The Distributed guard in
     # quarterly_income_metric drops it for filers that split two-class EPS
     # into components, so it is never read as a partial EPS there.
+    # The per-unit tags cover partnership filers (MLPs such as Energy
+    # Transfer and MPLX) that report income per outstanding unit instead of
+    # per share — total-income tags, so no continuing/total ambiguity.
+    # The continuing-operations per-share tag covers filers (Airbnb) that
+    # tag quarterly EPS only there; the discontinued-ops guard in
+    # quarterly_income_metric drops it when continuing != total.
     Metric.EPS_BASIC: ConceptSpec(
         tags=(
             "EarningsPerShareBasic",
             "EarningsPerShareBasicUndistributed",
+            "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax",
+            "IncomeLossFromContinuingOperationsPerBasicShare",
         ),
         unit="USD/shares",
     ),
@@ -142,6 +150,8 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         tags=(
             "EarningsPerShareDiluted",
             "EarningsPerShareDilutedUndistributed",
+            "NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted",
+            "IncomeLossFromContinuingOperationsPerDilutedShare",
         ),
         unit="USD/shares",
     ),
@@ -265,6 +275,31 @@ def _has_distributed_eps_facts(companyfacts: dict[str, Any], metric: Metric) -> 
     for raw in us_gaap.get(dist_tag, {}).get("units", {}).get("USD/shares", []):
         if raw.get("form") in {"10-Q", "10-K"} and raw.get("end"):
             return True
+    return False
+
+
+# Income-statement discontinued-operations tags (batch 68). The
+# continuing-operations per-share tag is a total-EPS read only when the
+# filer has no discontinued operations at all — continuing-ops EPS ==
+# total EPS iff these tags carry no 10-Q/10-K facts. Presence-based and
+# fail-closed: a filer with discontinued-ops income keeps the quarter
+# honestly blank instead of a continuing-ops number. Balance-sheet
+# disposal-group tags (AssetsOfDisposalGroup...) are deliberately NOT in
+# this list — they say nothing about the income statement.
+_DISCONTINUED_OPS_TAGS: tuple[str, ...] = (
+    "IncomeLossFromDiscontinuedOperations",
+    "IncomeLossFromDiscontinuedOperationsNetOfTax",
+    "ProfitLossFromDiscontinuedOperations",
+)
+
+
+def _has_discontinued_ops_facts(companyfacts: dict[str, Any]) -> bool:
+    """True when the filer reports discontinued-operations income."""
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    for tag in _DISCONTINUED_OPS_TAGS:
+        for raw in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
+            if raw.get("form") in {"10-Q", "10-K"} and raw.get("end"):
+                return True
     return False
 
 
@@ -867,11 +902,17 @@ def quarterly_income_metric(
     # the filer does not split two-class EPS into distributed +
     # undistributed components. Drop it from the chain when Distributed
     # facts exist, so a component is never stored as total EPS.
+    # Batch 68: the continuing-operations per-share tag is a total-EPS read
+    # only when the filer has no discontinued operations (continuing ==
+    # total). Drop it when discontinued-ops facts exist, so a filer with
+    # material discontinued ops never gets a continuing-ops number stored
+    # as total EPS.
     tags = spec.tags
-    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED) and _has_distributed_eps_facts(
-        companyfacts, metric
-    ):
-        tags = tuple(t for t in tags if t != EPS_UNDISTRIBUTED_TAG[metric])
+    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+        if _has_distributed_eps_facts(companyfacts, metric):
+            tags = tuple(t for t in tags if t != EPS_UNDISTRIBUTED_TAG[metric])
+        if _has_discontinued_ops_facts(companyfacts):
+            tags = tuple(t for t in tags if t != CONT_OPS_EPS_TAG[metric])
     try:
         candidates = _chain_candidates(
             companyfacts,

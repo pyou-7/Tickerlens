@@ -271,6 +271,9 @@ def make_companyfacts(
     undistributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
     distributed_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
     distributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    per_unit_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    per_unit_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    discontinued_ops_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -305,6 +308,18 @@ def make_companyfacts(
     if distributed_diluted_eps_values is not None:
         us_gaap["EarningsPerShareDilutedDistributed"] = units(
             "USD/shares", distributed_diluted_eps_values
+        )
+    if per_unit_basic_eps_values is not None:
+        us_gaap["NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"] = units(
+            "USD/shares", per_unit_basic_eps_values
+        )
+    if per_unit_diluted_eps_values is not None:
+        us_gaap["NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted"] = units(
+            "USD/shares", per_unit_diluted_eps_values
+        )
+    if discontinued_ops_values is not None:
+        us_gaap["IncomeLossFromDiscontinuedOperationsNetOfTax"] = units(
+            "USD", discontinued_ops_values
         )
     return {"facts": {"us-gaap": us_gaap}}
 
@@ -2742,3 +2757,164 @@ def test_tag_kept_alive_only_by_sixteen_week_facts_counts_as_fresh() -> None:
     # the 70–100d staleness window judged it abandoned and the second tag won.
     source_tag, _ = concept_facts(cf, Metric.REVENUE)
     assert source_tag == "Revenues"
+
+
+def _abnb_like_companyfacts(*, with_discontinued_ops: bool = False) -> dict:
+    """ABNB-shaped facts: quarterly EPS tagged ONLY under the
+    continuing-operations per-share tag — the generic tag carries no
+    facts. FY2025 annual + 9M facts exercise the Q4 derivation through
+    the continuing-ops winner: annual 4.00 - 9M 3.00 with NI 2.4B/1.8B
+    implies Q4 basic EPS of exactly 1.00."""
+    kwargs: dict = {
+        "revenue_values": [
+            ("2025-01-01", "2025-09-30", 8_000_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 11_000_000_000, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 2_500_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_800_000_000, 2026, "Q2"),
+        ],
+        "net_income_values": [
+            ("2025-01-01", "2025-09-30", 1_800_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 2_400_000_000, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 160_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 816_000_000, 2026, "Q2"),
+        ],
+        "basic_eps_values": [],
+        "diluted_eps_values": [],
+        "cont_ops_basic_eps_values": [
+            ("2025-01-01", "2025-09-30", 3.00, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.00, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 0.27, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1.38, 2026, "Q2"),
+        ],
+        "cont_ops_diluted_eps_values": [
+            ("2025-01-01", "2025-09-30", 2.97, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 3.95, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 0.26, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1.37, 2026, "Q2"),
+        ],
+        "opcf_values": [],
+        "capex_values": [],
+    }
+    if with_discontinued_ops:
+        # A filer whose continuing-ops EPS differs from total EPS: the
+        # continuing-ops tag must be dropped, not stored as total EPS.
+        kwargs["discontinued_ops_values"] = [
+            ("2026-04-01", "2026-06-30", 50_000_000, 2026, "Q2"),
+        ]
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_continuing_ops_fills_quarters_when_no_discontinued_ops() -> None:
+    # Regression (batch 68, ABNB class): the generic EPS tag carries no
+    # facts, so EPS quarters were honestly blank and TTM EPS fell back to
+    # the sales path. The continuing-operations per-share tag fills the
+    # quarters, and the Q4 derivation works through it (annual 4.00 with
+    # implied 600M shares -> Q4 basic EPS exactly 1.00).
+    companyfacts = _abnb_like_companyfacts()
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2, q4 = dt.date(2026, 3, 31), dt.date(2026, 6, 30), dt.date(2025, 12, 31)
+    assert basic[q1].value == 0.27
+    assert basic[q1].source_tag == "IncomeLossFromContinuingOperationsPerBasicShare"
+    assert basic[q2].value == 1.38
+    assert basic[q4].value == 1.00
+    diluted = {
+        m.end: m
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert diluted[q1].value == 0.26
+    assert diluted[q2].value == 1.37
+    assert diluted[q2].source_tag == "IncomeLossFromContinuingOperationsPerDilutedShare"
+    assert diluted[q4].value == pytest.approx(0.9801)
+
+
+def test_eps_continuing_ops_dropped_when_discontinued_ops_exist() -> None:
+    # Guard (batch 68): continuing-ops EPS != total EPS when the filer
+    # reports discontinued-operations income. The tag is dropped from the
+    # chain so a continuing-ops number is never stored as total EPS — the
+    # quarters stay honestly blank instead.
+    companyfacts = _abnb_like_companyfacts(with_discontinued_ops=True)
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q2 = next(r for r in rows if r.end == dt.date(2026, 6, 30))
+    assert q2.eps_basic is None
+    assert q2.eps_diluted is None
+
+
+def _et_like_companyfacts() -> dict:
+    """ET/MPLX-shaped facts: EPS tagged ONLY under the MLP per-unit
+    tags — partnerships report income per outstanding unit, not per
+    share, and tag no generic EPS facts at all."""
+    return make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 19_000_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 21_000_000_000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 1_254_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_088_000_000, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        per_unit_basic_eps_values=[
+            ("2026-01-01", "2026-03-31", 0.35, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0.59, 2026, "Q2"),
+        ],
+        per_unit_diluted_eps_values=[
+            ("2026-01-01", "2026-03-31", 0.35, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0.59, 2026, "Q2"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+
+
+def test_eps_per_unit_tags_fill_mlp_eps() -> None:
+    # Regression (batch 68, ET/MPLX class): partnership filers tag income
+    # per outstanding unit, not per share. The per-unit tags fill the EPS
+    # quarters with the right source attribution.
+    companyfacts = _et_like_companyfacts()
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    diluted = {
+        m.end: m
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q1].value == 0.35
+    assert basic[q2].value == 0.59
+    assert (
+        basic[q2].source_tag
+        == "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"
+    )
+    assert diluted[q1].value == 0.35
+    assert diluted[q2].value == 0.59
+    assert (
+        diluted[q2].source_tag
+        == "NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted"
+    )
+
+
+def test_eps_plain_tag_still_wins_over_per_unit_and_cont_ops() -> None:
+    # Chain order (batch 68): when a filer tags the generic EPS tag, it
+    # wins every end it covers — the per-unit and continuing-ops tags are
+    # inert fallbacks, never overrides.
+    cf = _et_like_companyfacts()
+    us_gaap = cf["facts"]["us-gaap"]
+    us_gaap["EarningsPerShareBasic"] = units(
+        "USD/shares", [("2026-04-01", "2026-06-30", 0.61, 2026, "Q2")]
+    )
+    basic = {
+        m.end: m for m in quarterly_income_metric(cf, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q2].value == 0.61
+    assert basic[q2].source_tag == "EarningsPerShareBasic"
+    assert basic[q1].value == 0.35
+    assert (
+        basic[q1].source_tag
+        == "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"
+    )
