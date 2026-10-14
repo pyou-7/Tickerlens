@@ -1306,3 +1306,64 @@ per-unit EPS for ET/MPLX (carried from batch 66); bank/insurer PEG
 multiples (carried from batch 62); FFO extraction for REIT valuation
 (carried from batch 62); risk-factor backfill (self-heals on page views
 via `enrich_company`).
+
+## Batch 68 (2026-10-14): dimensional/multi-class EPS investigation — ABNB + ET/MPLX recovered, V/BRK.B terminal
+
+**Investigation.** Closed the batch-65/66 follow-up "dimensional EPS for
+V/ABNB/BRK.B + MLP per-unit EPS for ET/MPLX" with live EDGAR evidence.
+Key structural finding: the SEC companyfacts API **strips all
+dimensional facts** — 0 of 23,227 of Visa's 10-Q/10-K facts carry dims,
+and Visa's `EarningsPerShareBasic` facts (verified present in the 10-Q
+instance XML, context `StatementClassOfStockAxis=CommonClassAMember`,
+Q3 FY2026 $2.97) are absent from the API entirely. Dimensional EPS is
+therefore unrecoverable from the pipeline's data source, full stop.
+
+**Recoverable (shipped).** Three of the five carry *dimensionless* EPS
+under non-generic tags, verified against the filed 10-Qs:
+- ABNB tags quarterly EPS only under
+  `IncomeLossFromContinuingOperationsPerBasicShare/DilutedShare`
+  (Q2 2026: $1.38/$1.37 — matches the 10-Q face). It has zero
+  discontinued-operations facts, so continuing == total.
+- ET/MPLX tag `NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax`
+  / `NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted`
+  (total-income per-unit tags; ET Q2 2026: $0.59/$0.59, MPLX: $1.06/$1.06).
+
+**Fix** (`data/xbrl.py`): the four tags join the EPS CONCEPTS chains as
+tail fallbacks (generic still wins every end it covers; inert for
+corporate filers). The continuing-ops tag is gated by a new
+`_has_discontinued_ops_facts` presence check — a filer with any
+income-statement discontinued-ops facts gets the tag dropped, so a
+continuing-ops number is never stored as total EPS (fail-closed; ET's
+discontinued-ops history is why the gate is presence-based, and ET
+doesn't need the tag anyway). The Q4 derivation composes: with the
+continuing-ops tag as winner, annual/9M facts come from the same tag
+and the NI-implied derivation runs on the primary path (ABNB Q4 2025
+derived $0.5631/$0.5534 — matches the filed ~$0.55-0.56).
+
+**Terminal (documented, not fixable from companyfacts).**
+- V: EPS is per-class dimensional (stripped by the API); no
+  dimensionless `WeightedAverageNumberOfSharesOutstanding` either, so
+  NI÷shares derivation is impossible.
+- BRK.B: `EarningsPerShareBasic` ends FY2013; modern EPS is
+  dimensional per-class; WASO facts are stale (end 2015).
+Both keep the batch-33 sales-path fallback with honest copy. A
+NI÷shares derivation was considered and rejected: for multi-class
+filers the two-class allocation makes it inexact, and V lacks even the
+share counts.
+
+**Blast radius:** DB-wide before/after extraction over all 174
+companies (git-stash A/B, warm companyfacts cache): exactly ABNB, ET,
+MPLX change — each gains 8 quarters of EPS; the other 171 are
+byte-identical. All three re-seeded via `fetch_and_persist`.
+Valuations now run on the real PEG path: ABNB TTM diluted EPS $4.39
+(+6.5% YoY) → Strong Sell −74.1% (model-honest: 37.7× P/E vs 9.8× fair
+on 6.5% growth; AI briefing reconciles with its fundamentals Watch);
+ET Strong Buy on TTM $1.47 (+14.0%); MPLX on TTM $4.65 (+10.5%).
+
+**Tests:** 4 new (ABNB-shaped cont-ops fill incl. exact Q4 derivation
+$1.00, discontinued-ops guard honest blank, MLP per-unit fill with
+source tags, plain-tag precedence). Suite 633 green.
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (carried
+from batch 62); REIT FFO extraction (carried from batch 62);
+risk-factor backfill (self-heals on page views via `enrich_company`).
