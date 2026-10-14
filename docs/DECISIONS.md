@@ -1196,3 +1196,64 @@ fix); XOM stores only 2 quarters (seed-history quirk, unrelated to EPS);
 bank/insurer PEG multiples (carried from batch 62); FFO extraction for
 REIT valuation (carried from batch 62); risk-factor backfill for 65
 companies (self-heals on page views via `enrich_company`).
+
+## Batch 66 (2026-10-13): EPS Undistributed fallback — NTRS Q2-2026 EPS recovered
+
+**Finding:** Northern Trust's Q2-2026 10-Q tags net income ($792.2M) but
+zero plain EPS facts, so the quarter stored EPS-less and TTM diluted EPS
+was a 3-quarter sum (~25% low), which the PEG path turned into a
+fabricated Strong Sell (−64.5%). Batch 65's candidate fix was a
+quarterly NI÷shares derivation — but live companyfacts showed a better
+anchor: the 10-Q tags the face-of-statement EPS under the two-class
+`...Undistributed` tags (Basic $4.25 / Diluted $4.23), verified against
+the 10-Q itself: the income statement prints "PER COMMON SHARE Net
+Income — Basic $4.25 — Diluted 4.23", and the two-class reconciliation
+(NI applicable to common $787.5M − participating allocation $5.3M =
+$782.2M over 183,993,670 shares = $4.25) proves the Undistributed value
+IS the reported EPS, not a component of it.
+
+**Fix:** `EarningsPerShareBasicUndistributed` /
+`EarningsPerShareDilutedUndistributed` appended to the EPS CONCEPTS
+chains in `data/xbrl.py`, so they gap-fill quarters the generic tag
+lacks. The plain tag still wins every end it covers (merge order), and
+the fallback is a filed value, not a derivation.
+
+**Guards (fail closed):** the Undistributed tag is dropped from the
+chain when the filer also tags a `...Distributed` fact for that metric
+(`_has_distributed_eps_facts` in the EPS branch of
+`quarterly_income_metric`). A filer splitting two-class EPS into
+distributed + undistributed components would otherwise get the
+undistributed piece stored as total EPS — understated — so the quarter
+stays honestly blank instead. A DB-wide audit of the 41
+EPS-null-with-NI quarters confirmed NTRS is the only Undistributed
+case in the DB: ABNB/BRK.B/ET/MPLX/V carry no usable EPS tags at all
+(dimensional multi-class / MLP per-unit facts, excluded from
+companyfacts).
+
+**Blast radius:** `data/xbrl.py` only (chain extension + guard +
+tag maps). DB-wide before/after extraction over all 168 companies
+(same 6h-cached companyfacts): exactly ONE ticker changes — NTRS gains
+Q2-2026 EPS (basic 4.25, diluted 4.23); the other 167 are
+byte-identical. 3 new tests (NTRS-shaped gap-fill incl. plain-wins +
+source-tag, Distributed-guard honest blank, end-to-end extraction).
+Suite 627 green, `git diff --check` clean. Live on :8123 (restarted):
+11/11 routes 200; NTRS detail renders Q2 EPS $4.23; NTRS valuation now
+runs on complete TTM diluted EPS $11.66 → Strong Buy +157.9% (PEG,
+37.0× capped fair P/E, Medium confidence), replacing the fabricated
+Strong Sell. No template change (backend-only); screenshot gate N/A.
+NTRS re-seeded via `fetch_and_persist`.
+
+**Alternatives considered:** quarterly NI÷shares derivation (batch 65's
+candidate — rejected: the filed Undistributed EPS is authoritative and
+already reflects the participating-securities allocation; NI÷shares
+gives $4.31, 1.3% high, and needs a diluted-shares tag not every filer
+carries); adding Undistributed without the Distributed guard (rejected —
+component-split filers would get understated EPS); promoting
+Undistributed to first-class chain equality (rejected — plain must win
+on overlap; the existing merge order already guarantees that).
+
+**Follow-ups (not this batch):** dimensional EPS for V/ABNB/BRK.B +
+MLP per-unit EPS for ET/MPLX — needs dimensional-fact support, its own
+investigation; bank/insurer PEG multiples (carried from batch 62); FFO
+extraction for REIT valuation (carried from batch 62); risk-factor
+backfill (self-heals on page views via `enrich_company`).
