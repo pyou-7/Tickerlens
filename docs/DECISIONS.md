@@ -1115,3 +1115,84 @@ Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.
 **Alternatives considered:** retuning `_normalize_words` to split apostrophes ("oreilly" → "o"+"reilly") instead of an alias (rejected — global tokenizer change with blast radius across all 147 described companies, for one ticker; the alias map is the curated escape hatch); making `enrich_company` blank-only too (rejected — its clear-on-None policy is deliberate per its docstring: "a fresh search that finds nothing is preferable to keeping stale/wrong text"; the seed path is the only one that needed blank-only semantics); full `enrich_company` in seed scripts instead of the targeted helper (rejected — risk factors and press highlights are expensive per the code comments; description+quote is the cheap presentable-minimum).
 
 **Follow-ups (not this batch):** bank/insurer PEG multiples (carried from batch 62); FFO extraction for REIT valuation (carried from batch 62); risk-factor backfill for 65 companies (self-heals on page views via `enrich_company`); HAL class stays on the sales path by design (this batch's decision, terminal).
+
+---
+
+## Batch 65 (2026-10-13) — Q4 EPS from the continuing-operations annual tag (HAL class)
+
+**Decision:** when a filer's 10-K tags no annual EPS under the generic tag,
+derive Q4 EPS from the continuing-operations per-share tag's annual fact
+(`IncomeLossFromContinuingOperationsPerDilutedShare` /
+`...PerBasicShare`), gated by an implied-shares coherence check. Same
+derivation machinery as before (Q4 NI over implied Q4 shares); the
+fallback annual is annual-only, primary-tag annuals always win, and the
+derived row carries the fallback tag as its source.
+
+**Why:** Halliburton's 10-Ks tag no annual EPS under
+`EarningsPerShareDiluted` (verified: last annual fact FY2019), while its
+10-Qs tag quarters + 9M under the generic tag — so Q4 EPS was
+underivable and HAL stored two EPS-less Q4 rows (FY2024, FY2025), forcing
+the valuation onto the sales path. Its 10-Ks DO tag the annual under the
+continuing-operations tag (FY2025 $1.50, FY2024 $2.83 via the corrected
+comparative twin). This corrects batch 64's close of the same follow-up:
+batch 64 verified "zero annual EPS facts" against the generic tag only,
+so it missed the anchor that exists under the continuing-ops tag. With
+the fallback, HAL's derived Q4s are $0.70 (FY2024) and $0.69 (FY2025),
+and its valuation runs on the real PEG path (growth −11.1% YoY, P/E
+17.2× on complete TTM EPS $1.90, fair value $15.22 vs $32.79 → Strong
+Sell −53.6%) instead of the sales fallback (−52.9%).
+
+**Guards (fail closed):** (1) the fallback requires the NI pair and
+passes a 5% implied-shares coherence check (FY shares from NI/EPS vs 9M
+shares) — a filer with material discontinued operations
+(continuing-ops EPS != total EPS) is rejected rather than fabricated;
+(2) the primary path gains the same check at a loose 75% as a tripwire
+against scale-corrupted inputs (HAL's 2022–2024 10-Qs tagged net-income
+dollar amounts, in thousands, under the EPS tag — a 1e6× mis-scale that
+would otherwise print a Q4 EPS wrong by ~4×); 75% sits above the worst
+legitimate divergence observed DB-wide (Capital One FY2025, 56%, from
+the Discover merger + acquisition accounting) with margin — the first
+cut at 10% regressed COF and SOFI to EPS-less Q4s, caught by the DB-wide
+before/after diff, and the tolerance was raised with a COF-shaped
+regression test locking the old subtraction value ($3.80); (3) if the
+share-implied derivation returns None on the fallback path, the row is
+skipped (no plain subtraction, which would mix continuing-ops annual
+with total 9M). Loss years abstain from the check and keep existing
+behavior.
+
+**Blast radius:** `data/xbrl.py` only (new fallback fetch in the EPS
+branch of `quarterly_income_metric`, threaded winner-only through
+`_income_series_for_tag` into `_derive_q4_income`, plus the
+`_shares_coherent` helper). DB-wide before/after extraction over all 168
+companies (git-stash A/B on identical 6h-cached companyfacts): exactly
+ONE ticker changes — HAL gains the two Q4 EPS rows; the other 167 are
+byte-identical. 5 new tests (HAL-shaped derivation incl. source-tag,
+discontinued-ops rejection, scale-garbage tripwire, no-NI rejection,
+COF merger-divergence tolerance). Suite 624 green, `git diff --check`
+clean. Live on :8123 (started fresh): 7/7 routes 200; HAL detail renders
+0.6999/0.6922; HAL valuation card shows Methodology: PEG. No template
+change (backend-only); screenshot gate N/A. HAL re-seeded via
+`fetch_and_persist`.
+
+**Alternatives considered:** deriving Q4 EPS as FY−9M by plain
+subtraction on the fallback annual (rejected — mixes continuing-ops
+annual with total 9M and reintroduces the DUOL inversion class);
+adding the continuing-ops tag to the CONCEPTS chain for gap-fill
+(rejected — the annual and 9M live in different tag series, so per-tag
+derivation would never combine them, and standalone quarters could
+silently become continuing-ops EPS); deriving from NI ÷ weighted-shares
+tags (rejected — HAL tags no usable weighted-shares concept in
+companyfacts); dropping the primary-path guard entirely after the
+COF/SOFI false positives (rejected — the 75% tripwire keeps the
+1e6×-scale protection at zero observed cost; the false positives came
+from the tolerance, not the guard).
+
+**Follow-ups (not this batch):** V/ABNB/BRK.B have no plain EPS in
+companyfacts at all (multi-class dimensional EPS, excluded from
+companyfacts) — needs dimensional-fact support, its own investigation;
+NTRS's Q2-2026 10-Q still tags NI but zero EPS facts (10-Q gap, not a
+10-K annual gap — a quarterly NI÷shares derivation is the candidate
+fix); XOM stores only 2 quarters (seed-history quirk, unrelated to EPS);
+bank/insurer PEG multiples (carried from batch 62); FFO extraction for
+REIT valuation (carried from batch 62); risk-factor backfill for 65
+companies (self-heals on page views via `enrich_company`).
