@@ -84,9 +84,10 @@ def get_description(company_name: str, ticker: str | None = None) -> str | None:
 def _relevance_overlap(title: str, company_name: str, ticker: str | None = None) -> int:
     """Shared-word overlap between a candidate title and the company name.
 
-    An exact ticker-title match ("AMD") always wins.
+    An exact ticker-title match ("AMD") — or a ticker match through the
+    "(company)" disambiguator ("ADP (company)", batch 69) — always wins.
     """
-    if ticker and title.strip().lower() == ticker.strip().lower():
+    if ticker and _bare_title(title).strip().lower() == ticker.strip().lower():
         return 100
     return len(set(_normalize_words(title)) & set(_normalize_words(company_name)))
 
@@ -311,7 +312,11 @@ def _title_relevant(title: str, company_name: str, ticker: str | None = None) ->
       is the river/mythology).
 
     Otherwise, three rules in order:
-    1. Acronym pages: the article is literally the ticker ("AMD", "BNY").
+    1. Acronym pages: the article is literally the ticker ("AMD", "BNY"),
+       or the ticker disambiguated as "(company)" — "ADP (company)" for
+       AUTOMATIC DATA PROCESSING INC (batch 69: the bare-phrase title
+       "Automatic data processing" is a disambiguation page, so the
+       acronym rule must see through the "(company)" disambiguator).
     2. First-word agreement between the SEC name and the title.
     3. Fallback: the SEC name's lead word appears anywhere in the title —
        covers "John Deere" for "DEERE & CO", "The Coca-Cola Company" for
@@ -320,7 +325,7 @@ def _title_relevant(title: str, company_name: str, ticker: str | None = None) ->
     """
     if _never_relevant(title):
         return False
-    if ticker and title.strip().lower() == ticker.strip().lower():
+    if ticker and _bare_title(title).strip().lower() == ticker.strip().lower():
         return True
     title_words = _normalize_words(title)
     name_words = _normalize_words(company_name)

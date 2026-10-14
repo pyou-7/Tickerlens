@@ -105,6 +105,48 @@ def test_title_relevant_ticker_acronym_page() -> None:
     assert _title_relevant("News Corp", "Applied Digital Corp.", ticker="APLD") is False
 
 
+def test_title_relevant_ticker_acronym_company_disambiguated() -> None:
+    """Batch 69: 'ADP (company)' is the acronym page for AUTOMATIC DATA
+    PROCESSING INC — the acronym rule must see through the '(company)'
+    disambiguator. A mismatched ticker must not match it."""
+    assert (
+        _title_relevant("ADP (company)", "AUTOMATIC DATA PROCESSING INC", ticker="ADP")
+        is True
+    )
+    assert (
+        _title_relevant("ADP (company)", "AUTOMATIC DATA PROCESSING INC", ticker="XYZ")
+        is False
+    )
+    # non-"(company)" parentheticals are still never relevant
+    assert (
+        _title_relevant("ADP (chess)", "AUTOMATIC DATA PROCESSING INC", ticker="ADP")
+        is False
+    )
+    # the overlap path scores it like a bare ticker match
+    assert (
+        _relevance_overlap("ADP (company)", "AUTOMATIC DATA PROCESSING INC", ticker="ADP")
+        == 100
+    )
+
+
+def test_best_title_acronym_company_page_beats_concept_article() -> None:
+    """Batch 69 regression: Wikipedia ranks the generic concept article
+    'Automatic data processing' above 'ADP (company)' for the legal name,
+    and the concept article wins on raw word overlap — the ticker-matched
+    '(company)' page must win instead."""
+    candidates = [
+        "ADP (company)",
+        "Automatic data processing",
+        "Data processing",
+        "Electronic data processing",
+        "Data processing (disambiguation)",
+    ]
+    with patch(
+        "tickerlens.data.wikipedia._search_titles", return_value=candidates
+    ):
+        assert _best_title("AUTOMATIC DATA PROCESSING INC", "ADP") == "ADP (company)"
+
+
 def test_title_relevant_rejects_unrelated_pages() -> None:
     assert _title_relevant("News Corp", "Applied Digital Corp.") is False
     assert _title_relevant("Meta Platforms", "HORTON D R INC /DE/") is False
