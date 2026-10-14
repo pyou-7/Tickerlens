@@ -510,3 +510,38 @@ def test_best_title_alias_rejects_series_page() -> None:
         side_effect=_search_by_query(mapping),
     ):
         assert _best_title("O REILLY AUTOMOTIVE INC", ticker="ORLY") is None
+
+
+def test_best_title_alias_rescues_initials_name() -> None:
+    """Batch 67 (live GWW case): 'W.W. GRAINGER, INC.' — Wikipedia's top hit
+    IS the right article ('W. W. Grainger'), but the initials mismatch
+    (SEC 'w.w' as one token vs Wikipedia's two dropped single-letter
+    tokens) defeats first-word agreement and the lead-word fallback, so
+    every relevance path rejects it. The curated alias retry accepts the
+    article whose squashed title equals the squashed alias."""
+    mapping = {
+        "W.W. GRAINGER, INC.": ["W. W. Grainger", "Grainger"],
+        "W.W. GRAINGER": [],
+        "W.W. Grainger": ["W. W. Grainger", "Grainger plc"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("W.W. GRAINGER, INC.", ticker="GWW") == "W. W. Grainger"
+
+
+def test_best_title_alias_rejects_wrong_company_grainger() -> None:
+    """Batch 67: the alias retry demands an exact squashed-title match, so
+    when only 'Grainger plc' (a different, UK company) comes back for the
+    GWW alias, it is declined instead of misattributed."""
+    mapping = {
+        "W.W. GRAINGER, INC.": ["Grainger College of Engineering"],
+        "W.W. GRAINGER": [],
+        "W.W. Grainger": ["Grainger plc"],
+    }
+    with patch(
+        "tickerlens.data.wikipedia._search_titles",
+        side_effect=_search_by_query(mapping),
+    ):
+        assert _best_title("W.W. GRAINGER, INC.", ticker="GWW") is None

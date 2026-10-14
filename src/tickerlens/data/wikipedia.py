@@ -55,6 +55,15 @@ _DBA_ALIASES = {
     # Parts (SEC 10-K cover page: "O'Reilly Automotive, Inc." dba O'Reilly
     # Auto Parts; verified 2026-10-13). Exact-match guarded like the rest.
     "ORLY": "O'Reilly Auto Parts",
+    # Batch 67 (live GWW case): "W.W. GRAINGER, INC." — Wikipedia's top hit
+    # IS the right article ("W. W. Grainger"), but the initials mismatch
+    # ("w.w" as one normalized token vs Wikipedia's two single-letter
+    # tokens, which _normalize_words drops) defeats first-word agreement
+    # and the lead-word fallback, so every relevance path rejects it. The
+    # alias retry accepts only the article whose squashed title equals
+    # "wwgrainger" — "Grainger plc" (a different company) can't match.
+    # Verified the article is the company page 2026-10-14.
+    "GWW": "W.W. Grainger",
 }
 
 
