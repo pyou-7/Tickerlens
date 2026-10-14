@@ -1257,3 +1257,52 @@ MLP per-unit EPS for ET/MPLX — needs dimensional-fact support, its own
 investigation; bank/insurer PEG multiples (carried from batch 62); FFO
 extraction for REIT valuation (carried from batch 62); risk-factor
 backfill (self-heals on page views via `enrich_company`).
+
+## Batch 67 (2026-10-14): fresh-ticker hunt round 22 — FICO/WDAY/RMD/GWW/CEG/CPRT seeded; GWW initials-name relevance defect fixed
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences
+(FICO Sep FY; WDAY Jan FY; RMD Jun FY; CPRT Jul FY; GWW Dec; CEG Dec),
+balance-sheet identities hold (CPRT carries a 0.2% gap — no redeemable-NCI
+or other extractable facts in companyfacts; filing-real/rounding, not
+fixable), seed-time enrichment committed descriptions + prices for all 6.
+DB at 174.
+
+**Deep audit — three candidate defects, all verified clean:**
+- FICO FY2026Q2 rev +35% QoQ ($512M → $691.7M): the 10-Q tags TWO
+  revenue facts for 2026-03-31 — $1,203.6M (start 2025-10-01, fiscal H1)
+  and $691.7M (start 2026-01-01, the quarter). The pipeline correctly
+  keeps the quarterly one (verified: 691.7 + 511.96 = 1,203.6 = the H1
+  fact). Genuine strong quarter, not an extraction defect.
+- WDAY FY2027Q2 NI $632M (~3x prior quarters): companyfacts shows
+  IncomeTaxExpenseBenefit of −$172M/−$305M for the quarter — a one-time
+  tax benefit, filing-real (DLR batch-40 precedent).
+- CEG FY2026Q1 rev $11.1B (+83% QoQ): the Calpine acquisition closed in
+  the quarter; the filed numbers are what they are.
+
+**One real defect found and fixed.** GWW was the only seeded company
+left descriptionless: "W.W. GRAINGER, INC." could never resolve — the
+initials mismatch (SEC normalizes "w.w" as one token; Wikipedia's
+"W. W." splits into two single-letter tokens that `_normalize_words`
+drops) defeats first-word agreement and the lead-word fallback, so every
+relevance path rejects the correct top hit. **Fix** (`data/wikipedia.py`):
+curated `"GWW": "W.W. Grainger"` in `_DBA_ALIASES` (same escape hatch as
+ORLY batch 64); the alias retry accepts only the article whose squashed
+title equals "wwgrainger", so "Grainger plc" (a different UK company)
+can't misattribute. DB-wide check: GWW is the only company with the
+initials pattern. Description backfilled and rendering.
+
+**Valuation sanity on the 6 new cards:** FICO Strong Buy +77.3% (Medium,
+PEG on filed TTM EPS $34.62, 35.4% growth — below the 40% Watch guard);
+WDAY Watch (Low — +130% TTM EPS growth trips the batch-62 hyper-growth
+guard, by design); RMD/CEG/CPRT/GWW Strong Sells are model-honest on
+filed data (CEG's lumpy utility EPS hits the P/E floor; GWW's TTM EPS is
+depressed by its real Q3-2025 charge — filed data, disclosed).
+
+**Tests:** 2 new (alias rescues initials name; alias rejects the wrong
+"Grainger plc"). Suite 629 green.
+
+**Follow-ups (not this batch):** dimensional EPS for V/ABNB/BRK.B + MLP
+per-unit EPS for ET/MPLX (carried from batch 66); bank/insurer PEG
+multiples (carried from batch 62); FFO extraction for REIT valuation
+(carried from batch 62); risk-factor backfill (self-heals on page views
+via `enrich_company`).
