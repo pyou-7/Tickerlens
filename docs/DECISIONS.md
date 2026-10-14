@@ -1367,3 +1367,70 @@ source tags, plain-tag precedence). Suite 633 green.
 **Follow-ups (not this batch):** bank/insurer PEG multiples (carried
 from batch 62); REIT FFO extraction (carried from batch 62);
 risk-factor backfill (self-heals on page views via `enrich_company`).
+
+## Batch 69 (2026-10-14): fresh-ticker hunt round 23 — SHW/ADP/TTWO/SLB/EOG/PGR seeded; acronym "(company)" description defect fixed
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences
+(SHW Dec; ADP Jun; TTWO Mar — FY2027Q1 is the June-2026 quarter, filed
+August 2026; SLB/EOG/PGR Dec), balance-sheet identity 0.000% on all 48
+quarters, EPS complete on every row, descriptions present for 5 of 6
+(ADP was the miss — see below). DB at 180.
+
+**Deep audit — the TTWO FY2025Q4 loss quarter, verified genuine.** The
+row shows NI −$3.726B / EPS −$21.12 against otherwise −$0.1B quarters —
+the shape of an extraction bug, so it was checked against raw
+companyfacts (CIK 0000946581): the filed 10-K annual NI is −$4.4789B and
+the filed 9M YTD NI is −$752.7M, so Q4 = annual − 9M = −$3,726.2M
+exactly; Q1–Q3 (−262M, −365.5M, −125.2M) + Q4 sums to the annual to the
+dollar (a real goodwill-impairment quarter, Zynga-related). The EPS is
+the batch-65 NI-implied derivation: implied FY shares 175.10M from
+annual NI/EPS (−$4,478.9M / −$25.58), implied 9M shares 174.62M, Q4
+share-month residual (12·FY − 9·9M)/3 = 176.53M, Q4 EPS −3,726.2/176.53
+= −21.1171 — self-consistent with the filed inputs (the −0.15 vs naive
+annual−9M subtraction is the different-share-count effect the
+derivation exists to handle). Not a defect. The valuation layer treats
+it honestly: TTM EPS growth +92.8% trips the batch-62 hyper-growth
+guard → Watch, method unavailable, Low confidence — no fabricated
+signal.
+
+**One real defect found and fixed.** ADP was description-less. Root
+cause (`data/wikipedia.py`): the batch-47 acronym rule matched only
+titles literally equal to the ticker ("AMD", "BNY"). Wikipedia's search
+for "AUTOMATIC DATA PROCESSING INC" returns "ADP (company)" at rank #1 —
+the real article, disambiguated because the bare phrase is taken — but
+the rule judged it irrelevant ("adp (company)" != "adp"), so the "top
+hit irrelevant" branch picked the highest-overlap name-contained lower
+hit: "Automatic data processing", which is a *disambiguation* page. Its
+extract is correctly rejected by type, leaving ADP with no description
+— the one case where the right article sat at rank #1 and the pipeline
+still missed it. **Fix:** both the acronym rule in `_title_relevant` and
+`_relevance_overlap` now compare the parenthetical-stripped bare title
+to the ticker, so "ADP (company)" is relevant with overlap 100 — the
+same standing as "AMD"/"BNY" — and the predecessor-override can no
+longer displace it with a concept/disambiguation page. Safety: the
+extension only fires for a "(company)"-disambiguated acronym article in
+Wikipedia's own top-5 for the legal-name query — the same accepted risk
+class as the existing bare-ticker rule (non-"(company)" parentheticals
+still never relevant). Blast radius (DB-wide stash A/B, warm
+companyfacts cache, 180 companies): exactly ADP changes
+("Automatic data processing" → "ADP (company)"), 179 byte-identical.
+ADP description backfilled (28-word extract, verified the ADP payroll
+article) and rendering.
+
+**Valuation sanity on the 6 new cards:** PGR Strong Buy (PEG, TTM
+$19.94 +12.3%, insurer — batch-46 financial margin register holds:
+"spread discipline and fee-income efficiency"); EOG Strong Buy (PEG,
+TTM $12.85 +24.7%); ADP/SHW Strong Sell (PEG on filed data, ADP's
+industrial margin register correct for a business-services filer); SLB
+Strong Sell with the floor-guardrail honesty note (growth −29% → 8× P/E
+floor, confidence capped Medium); TTWO Watch via the hyper-growth
+guard. All model-honest, no fabrication patterns.
+
+**Tests:** 2 new (acronym "(company)" relevance incl. mismatched-ticker
+and non-company-parenthetical negatives + overlap-100; `_best_title`
+picks "ADP (company)" over the disambiguation page on the live result
+order, mocked). Suite 635 green.
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (carried
+from batch 62); REIT FFO extraction (carried from batch 62);
+risk-factor backfill (self-heals on page views via `enrich_company`).
