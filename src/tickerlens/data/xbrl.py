@@ -198,6 +198,20 @@ BALANCE_SHEET_METRICS: tuple[Metric, ...] = (
 )
 
 
+# Continuing-operations per-share tags: used ONLY as an annual-EPS fallback
+# inside the Q4 derivation (batch 65). Some filers (Halliburton) tag
+# quarterly EPS under the generic tag in 10-Qs but tag the 10-K annual EPS
+# only under the continuing-operations tag, leaving Q4 underivable from the
+# generic tag alone. The fallback is gated by the implied-shares coherence
+# check in _derive_q4_income, so a filer with material discontinued
+# operations (where continuing-ops EPS != total EPS) never gets a
+# fabricated Q4.
+CONT_OPS_EPS_TAG: dict[Metric, str] = {
+    Metric.EPS_BASIC: "IncomeLossFromContinuingOperationsPerBasicShare",
+    Metric.EPS_DILUTED: "IncomeLossFromContinuingOperationsPerDilutedShare",
+}
+
+
 def extract_recent_quarterly_financials(
     companyfacts: dict[str, Any],
     *,
@@ -768,7 +782,13 @@ def quarterly_income_metric(
     # Q4 EPS can't be derived by subtracting per-share values (the annual and
     # 9M figures divide by different share counts), so pass the net-income
     # facts for the share-implied derivation. Dollar metrics need nothing.
+    # EPS also gets the continuing-operations per-share tag as an annual-only
+    # fallback for the Q4 derivation (batch 65: Halliburton's 10-K tags no
+    # annual fact under the generic tag). It is passed only to the winning
+    # tag's series — tail tags derive from their own facts — and only
+    # annual-duration facts are ever taken from it (see _derive_q4_income).
     ni_facts: list[XbrlFact] | None = None
+    eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None
     if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
         try:
             _, ni_facts = concept_facts(
@@ -776,6 +796,16 @@ def quarterly_income_metric(
             )
         except KeyError:
             ni_facts = None
+        try:
+            eps_annual_fallback = _select_tag_facts(
+                companyfacts,
+                (CONT_OPS_EPS_TAG[metric],),
+                "USD/shares",
+                staleness_window=_QUARTERLY_FACT_WINDOW,
+                metric_name=metric.value,
+            )
+        except KeyError:
+            eps_annual_fallback = None
     spec = CONCEPTS[metric]
     try:
         candidates = _chain_candidates(
@@ -804,10 +834,19 @@ def quarterly_income_metric(
     # Q4 share-implied derivation below also sees consistent NI/EPS pairs.
     if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
         _split_adjust_facts([fact for _, facts in candidates for fact in facts])
+        if eps_annual_fallback is not None:
+            _split_adjust_facts(eps_annual_fallback[1])
     return _merge_gap_fill(
         [
-            _income_series_for_tag(metric, tag, facts, fiscal_year_end, ni_facts)
-            for tag, facts in candidates
+            _income_series_for_tag(
+                metric,
+                tag,
+                facts,
+                fiscal_year_end,
+                ni_facts,
+                eps_annual_fallback=eps_annual_fallback if i == 0 else None,
+            )
+            for i, (tag, facts) in enumerate(candidates)
         ]
     )
 
@@ -818,10 +857,18 @@ def _income_series_for_tag(
     facts: list[XbrlFact],
     fiscal_year_end: str | None,
     ni_facts: list[XbrlFact] | None = None,
+    eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None,
 ) -> list[PeriodMetric]:
     """Quarterly series from one tag: standalone quarters + derived Q4s."""
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(facts, source_tag, metric, fiscal_year_end, ni_facts=ni_facts)
+    q4 = _derive_q4_income(
+        facts,
+        source_tag,
+        metric,
+        fiscal_year_end,
+        ni_facts=ni_facts,
+        eps_annual_fallback=eps_annual_fallback,
+    )
     return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
 
 
@@ -1601,6 +1648,7 @@ def _derive_q4_income(
     metric: Metric,
     fiscal_year_end: str | None,
     ni_facts: list[XbrlFact] | None = None,
+    eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None,
 ) -> list[PeriodMetric]:
     annual = _dedup_by_end(facts, 340, 380, fiscal_year_end)
     # Same 240-day floor as quarterly_cash_flow_metric's m9 window (52/53-week
@@ -1608,6 +1656,23 @@ def _derive_q4_income(
     ytd_9m = _dedup_by_end(facts, 240, 290, fiscal_year_end)
     annual_by_start = _by_start(annual)
     ytd_by_start = _by_start(ytd_9m)
+    # Annual-only EPS fallback (batch 65): a filer may tag its 10-K annual
+    # EPS only under the continuing-operations per-share tag (Halliburton:
+    # no annual fact under the generic tag since 2020), while its 10-Qs use
+    # the generic tag for quarters and 9M. Only annual-duration facts are
+    # ever taken from the fallback, and only for starts the primary tag
+    # lacks — the primary tag's annual fact always wins.
+    fallback_by_start: dict[dt.date, XbrlFact] = {}
+    fallback_tag: str | None = None
+    if eps_annual_fallback is not None:
+        fallback_tag, fallback_facts = eps_annual_fallback
+        fallback_by_start = {
+            start: fact
+            for start, fact in _by_start(
+                _dedup_by_end(fallback_facts, 340, 380, fiscal_year_end)
+            ).items()
+            if start not in annual_by_start
+        }
     ni_lookup: dict[dt.date, tuple[XbrlFact, XbrlFact]] = {}
     if ni_facts:
         ni_annual = _by_start(_dedup_by_end(ni_facts, 340, 380, fiscal_year_end))
@@ -1619,10 +1684,14 @@ def _derive_q4_income(
         }
 
     results: list[PeriodMetric] = []
-    for start, annual_fact in annual_by_start.items():
-        if start not in ytd_by_start:
+    for start, ytd in ytd_by_start.items():
+        annual_fact = annual_by_start.get(start)
+        from_fallback = False
+        if annual_fact is None:
+            annual_fact = fallback_by_start.get(start)
+            from_fallback = annual_fact is not None
+        if annual_fact is None:
             continue
-        ytd = ytd_by_start[start]
         fy = _fact_fy(annual_fact)
         value = annual_fact.val - ytd.val
         if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
@@ -1632,14 +1701,55 @@ def _derive_q4_income(
             # basic/diluted ranking, as it did for DUOL's FY2025 Q4
             # ($0.94 diluted vs $0.88 basic, arithmetically impossible).
             # Derive Q4 from net income and implied share counts instead.
-            implied = _implied_q4_eps(annual_fact, ytd, ni_lookup.get(start))
-            value = implied if implied is not None else _round_like_inputs(
-                annual_fact.val, ytd.val, value
-            )
+            ni_pair = ni_lookup.get(start)
+            if from_fallback:
+                # The fallback annual is continuing-operations EPS while
+                # the 9M and NI pairs are totals. The derivation is only
+                # valid when the two coincide (no material discontinued
+                # operations), which the implied-shares coherence check
+                # enforces — plus the NI pair must exist, because the
+                # plain-subtraction fallback would mix the two bases.
+                # Fail closed: reject the substitute rather than derive.
+                if ni_pair is None or not _shares_coherent(
+                    annual_fact.val,
+                    ytd.val,
+                    ni_pair[0].val,
+                    ni_pair[1].val,
+                    _FALLBACK_SHARES_TOLERANCE,
+                    require_positive=True,
+                ):
+                    continue
+                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                if implied is None:
+                    continue
+                value = implied
+            else:
+                # Primary path: the same coherence check is a tripwire
+                # against scale-corrupted inputs (Halliburton's 2022–2024
+                # 10-Qs tagged net-income dollar amounts, in thousands,
+                # under the EPS tag — a 1e6× mis-scale whose implied share
+                # count diverges ~100%). The tolerance is deliberately
+                # loose — 75% sits above the worst legitimate divergence
+                # observed DB-wide (Capital One FY2025, 56%, from the
+                # Discover merger + acquisition accounting) with margin,
+                # while any scale error diverges ~100%. Loss years abstain
+                # (non-positive inputs) and keep the existing behavior.
+                if ni_pair is not None and not _shares_coherent(
+                    annual_fact.val,
+                    ytd.val,
+                    ni_pair[0].val,
+                    ni_pair[1].val,
+                    _PRIMARY_SHARES_TOLERANCE,
+                ):
+                    continue
+                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                value = implied if implied is not None else _round_like_inputs(
+                    annual_fact.val, ytd.val, value
+                )
         results.append(
             _metric_value(
                 metric,
-                source_tag,
+                fallback_tag if from_fallback and fallback_tag else source_tag,
                 fy,
                 "Q4",
                 annual_fact.end,
@@ -1647,6 +1757,46 @@ def _derive_q4_income(
             )
         )
     return results
+
+
+# Implied-share-count coherence tolerances for the Q4 EPS derivation.
+# _PRIMARY_SHARES_TOLERANCE is a tripwire against scale-corrupted inputs
+# (Halliburton's 1e6× mis-scaled EPS facts diverge ~100%); 75% sits above
+# the worst legitimate divergence observed DB-wide (Capital One FY2025,
+# 56%, from the Discover merger + acquisition accounting) with margin.
+# _FALLBACK_SHARES_TOLERANCE is tighter because the fallback annual is
+# continuing-operations EPS, which equals total EPS only when
+# discontinued operations are negligible — 5% bounds the resulting Q4
+# error to ~20% in the worst case and rejects material contamination.
+_PRIMARY_SHARES_TOLERANCE = 0.75
+_FALLBACK_SHARES_TOLERANCE = 0.05
+
+
+def _shares_coherent(
+    annual_eps: float,
+    ytd_eps: float,
+    annual_ni: float,
+    ytd_ni: float,
+    tolerance: float,
+    *,
+    require_positive: bool = False,
+) -> bool:
+    """Check that an annual EPS/NI pair implies a share count close to the 9M pair's.
+
+    EPS = NI / weighted-average shares, so each pair implies an average
+    share count. For a coherent filer the FY average (12 months) sits close
+    to the 9M average — they differ only by Q4 drift (buybacks/issuance).
+    A large divergence means the inputs are inconsistent: a mis-scaled EPS
+    fact, or a continuing-operations annual paired with total 9M/NI when
+    discontinued operations are material. When any input is non-positive
+    the implied share counts are meaningless, so the check abstains (True)
+    unless ``require_positive`` is set, in which case it fails closed.
+    """
+    if annual_eps <= 0 or ytd_eps <= 0 or annual_ni <= 0 or ytd_ni <= 0:
+        return not require_positive
+    fy_shares = annual_ni / annual_eps
+    ytd_shares = ytd_ni / ytd_eps
+    return abs(fy_shares - ytd_shares) / ytd_shares <= tolerance
 
 
 def _implied_q4_eps(

@@ -265,6 +265,8 @@ def make_companyfacts(
     opcf_values: list[tuple[str, str, float, int, str]],
     capex_values: list[tuple[str, str, float, int, str]],
     assets_values: list[tuple[str, float, int, str]] | None = None,
+    cont_ops_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    cont_ops_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -276,6 +278,14 @@ def make_companyfacts(
     }
     if assets_values is not None:
         us_gaap["Assets"] = instant_units(assets_values)
+    if cont_ops_basic_eps_values is not None:
+        us_gaap["IncomeLossFromContinuingOperationsPerBasicShare"] = units(
+            "USD/shares", cont_ops_basic_eps_values
+        )
+    if cont_ops_diluted_eps_values is not None:
+        us_gaap["IncomeLossFromContinuingOperationsPerDilutedShare"] = units(
+            "USD/shares", cont_ops_diluted_eps_values
+        )
     return {"facts": {"us-gaap": us_gaap}}
 
 
@@ -1703,6 +1713,147 @@ def test_q4_eps_falls_back_when_eps_zero() -> None:
         m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
     }
     assert metrics[dt.date(2025, 12, 31)].value == -8.17
+
+
+def _hal_like_companyfacts(
+    *,
+    cont_ops_annual_eps: float,
+    primary_9m_eps: float = 0.81,
+    net_income_values: list | None = None,
+) -> dict:
+    """HAL FY2025-shaped facts: the 10-K tags no annual EPS under the generic
+    tag — only under the continuing-operations per-share tag — while the
+    10-Qs tag quarters + 9M under the generic tag."""
+    return make_companyfacts(
+        revenue_values=[],
+        net_income_values=(
+            net_income_values
+            if net_income_values is not None
+            else [
+                ("2025-01-01", "2025-09-30", 694_000_000, 2025, "Q3"),
+                ("2025-01-01", "2025-12-31", 1_283_000_000, 2025, "FY"),
+            ]
+        ),
+        basic_eps_values=[
+            ("2025-01-01", "2025-03-31", 0.24, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 0.55, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 0.02, 2025, "Q3"),
+            ("2025-01-01", "2025-09-30", primary_9m_eps, 2025, "Q3"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-03-31", 0.24, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 0.55, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 0.02, 2025, "Q3"),
+            ("2025-01-01", "2025-09-30", primary_9m_eps, 2025, "Q3"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+        cont_ops_basic_eps_values=[
+            ("2025-01-01", "2025-12-31", cont_ops_annual_eps, 2025, "FY"),
+        ],
+        cont_ops_diluted_eps_values=[
+            ("2025-01-01", "2025-12-31", cont_ops_annual_eps, 2025, "FY"),
+        ],
+    )
+
+
+def test_q4_eps_derived_from_continuing_ops_annual_when_primary_annual_missing() -> None:
+    # Regression (batch 65, HAL class): the 10-K tags no annual EPS under
+    # EarningsPerShareDiluted — only under
+    # IncomeLossFromContinuingOperationsPerDilutedShare — so Q4 was
+    # underivable and HAL rendered two EPS-less Q4 rows. The continuing-ops
+    # annual now supplies the derivation input: Q4 NI $589M over the
+    # implied Q4 share count ≈ 0.6922, and the row carries the fallback
+    # tag as its source.
+    companyfacts = _hal_like_companyfacts(cont_ops_annual_eps=1.50)
+    for metric, tag in (
+        (Metric.EPS_BASIC, "IncomeLossFromContinuingOperationsPerBasicShare"),
+        (Metric.EPS_DILUTED, "IncomeLossFromContinuingOperationsPerDilutedShare"),
+    ):
+        series = {
+            m.end: m for m in quarterly_income_metric(companyfacts, metric, "1231")
+        }
+        q4 = series[dt.date(2025, 12, 31)]
+        assert round(q4.value, 4) == 0.6922
+        assert q4.source_tag == tag
+        assert q4.fy == 2025 and q4.fp == "Q4"
+
+
+def test_q4_eps_fallback_rejected_when_discontinued_ops_material() -> None:
+    # The fallback annual is continuing-operations EPS while the 9M and NI
+    # pairs are totals. A continuing-ops annual of $0.75 against $1,283M
+    # of total net income implies ~1.71B shares vs the 9M pair's ~857M —
+    # a ~100% divergence, i.e. material discontinued operations. The
+    # substitute is rejected (fail closed) rather than fabricating a Q4.
+    companyfacts = _hal_like_companyfacts(cont_ops_annual_eps=0.75)
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_primary_guard_rejects_scale_garbage_9m() -> None:
+    # Halliburton's 2022–2024 10-Qs tagged net-income dollar amounts, in
+    # thousands, under the EPS tag (a 1e6× mis-scale). A mis-scaled 9M EPS
+    # implies an absurd share count vs the annual pair; the derivation is
+    # skipped instead of printing a Q4 EPS wrong by ~4×.
+    companyfacts = _hal_like_companyfacts(
+        cont_ops_annual_eps=1.50, primary_9m_eps=810_000.0
+    )
+    # Primary annual present so the primary path (not the fallback) is
+    # exercised: add it via the generic tag.
+    companyfacts["facts"]["us-gaap"]["EarningsPerShareDiluted"]["units"][
+        "USD/shares"
+    ].append(fact("2025-01-01", "2025-12-31", 1.50, 2025, "FY"))
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_fallback_rejected_without_ni_pair() -> None:
+    # Without net-income facts there is no way to verify that the
+    # continuing-ops annual coincides with total EPS, and the plain
+    # subtraction fallback would mix the two bases — so the substitute is
+    # rejected outright (unlike the primary path, which keeps subtraction).
+    companyfacts = _hal_like_companyfacts(
+        cont_ops_annual_eps=1.50, net_income_values=[]
+    )
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_primary_guard_tolerates_merger_divergence() -> None:
+    # Regression guard for the guard (batch 65, Capital One FY2025):
+    # the Discover merger + acquisition accounting left the 9M implied
+    # share count 56% above the FY implied count — incoherent-looking but
+    # legitimate. The 75% primary tolerance must let it through: the
+    # implied-shares path returns None (negative Q4 shares) and the
+    # subtraction fallback (the filer's own FY − 9M arithmetic) yields
+    # $3.80, exactly the pre-guard value.
+    companyfacts = make_companyfacts(
+        revenue_values=[],
+        net_income_values=[
+            ("2025-01-01", "2025-09-30", 319_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 2_453_000_000, 2025, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.23, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.03, 2025, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.23, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.03, 2025, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert series[dt.date(2025, 12, 31)].value == 3.80
 
 
 def test_fcf_suppressed_for_finance_sic() -> None:
