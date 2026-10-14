@@ -126,8 +126,25 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         ),
         unit="USD",
     ),
-    Metric.EPS_BASIC: ConceptSpec(tags=("EarningsPerShareBasic",), unit="USD/shares"),
-    Metric.EPS_DILUTED: ConceptSpec(tags=("EarningsPerShareDiluted",), unit="USD/shares"),
+    # EPS: the Undistributed tag gap-fills quarters the generic tag lacks
+    # (Northern Trust Q2 2026 — see the batch-66 note on
+    # EPS_UNDISTRIBUTED_TAG). The Distributed guard in
+    # quarterly_income_metric drops it for filers that split two-class EPS
+    # into components, so it is never read as a partial EPS there.
+    Metric.EPS_BASIC: ConceptSpec(
+        tags=(
+            "EarningsPerShareBasic",
+            "EarningsPerShareBasicUndistributed",
+        ),
+        unit="USD/shares",
+    ),
+    Metric.EPS_DILUTED: ConceptSpec(
+        tags=(
+            "EarningsPerShareDiluted",
+            "EarningsPerShareDilutedUndistributed",
+        ),
+        unit="USD/shares",
+    ),
     Metric.OPERATING_CASH_FLOW: ConceptSpec(
         tags=(
             "NetCashProvidedByUsedInOperatingActivities",
@@ -210,6 +227,45 @@ CONT_OPS_EPS_TAG: dict[Metric, str] = {
     Metric.EPS_BASIC: "IncomeLossFromContinuingOperationsPerBasicShare",
     Metric.EPS_DILUTED: "IncomeLossFromContinuingOperationsPerDilutedShare",
 }
+
+
+# Two-class-method EPS tags (batch 66). Some filers (Northern Trust) tag
+# the face-of-statement EPS under the *Undistributed* tag in quarters where
+# the generic ``EarningsPerShare*`` tag carries no fact — NTRS's Q2 2026
+# 10-Q reports Basic $4.25 / Diluted $4.23 on the income statement, tagged
+# only as ``...Undistributed``, and its two-class reconciliation (NI
+# applicable to common $787.5M − participating allocation $5.3M = $782.2M
+# over 183,993,670 shares = $4.25) proves the Undistributed value IS the
+# reported EPS, not a component. The Undistributed tag therefore gap-fills
+# quarters the generic tag lacks — but only when the filer does NOT also
+# tag a ``...Distributed`` fact for that metric: a filer tagging both
+# components splits total EPS into distributed + undistributed, and
+# storing the undistributed piece alone would understate EPS. In that
+# case the guard below drops the Undistributed tag and the quarter stays
+# honestly blank.
+EPS_UNDISTRIBUTED_TAG: dict[Metric, str] = {
+    Metric.EPS_BASIC: "EarningsPerShareBasicUndistributed",
+    Metric.EPS_DILUTED: "EarningsPerShareDilutedUndistributed",
+}
+EPS_DISTRIBUTED_TAG: dict[Metric, str] = {
+    Metric.EPS_BASIC: "EarningsPerShareBasicDistributed",
+    Metric.EPS_DILUTED: "EarningsPerShareDilutedDistributed",
+}
+
+
+def _has_distributed_eps_facts(companyfacts: dict[str, Any], metric: Metric) -> bool:
+    """True when the filer tags a distributed-EPS component for ``metric``.
+
+    Any 10-Q/10-K fact under the Distributed tag means the filer splits
+    two-class EPS into components, so the Undistributed tag must not be
+    read as total EPS (see the batch-66 note above).
+    """
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    dist_tag = EPS_DISTRIBUTED_TAG[metric]
+    for raw in us_gaap.get(dist_tag, {}).get("units", {}).get("USD/shares", []):
+        if raw.get("form") in {"10-Q", "10-K"} and raw.get("end"):
+            return True
+    return False
 
 
 def extract_recent_quarterly_financials(
@@ -807,10 +863,19 @@ def quarterly_income_metric(
         except KeyError:
             eps_annual_fallback = None
     spec = CONCEPTS[metric]
+    # Batch 66: the Undistributed fallback is a total-EPS read only when
+    # the filer does not split two-class EPS into distributed +
+    # undistributed components. Drop it from the chain when Distributed
+    # facts exist, so a component is never stored as total EPS.
+    tags = spec.tags
+    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED) and _has_distributed_eps_facts(
+        companyfacts, metric
+    ):
+        tags = tuple(t for t in tags if t != EPS_UNDISTRIBUTED_TAG[metric])
     try:
         candidates = _chain_candidates(
             companyfacts,
-            spec.tags,
+            tags,
             spec.unit,
             staleness_window=_QUARTERLY_FACT_WINDOW,
             metric_name=metric.value,

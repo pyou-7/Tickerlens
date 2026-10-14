@@ -267,6 +267,10 @@ def make_companyfacts(
     assets_values: list[tuple[str, float, int, str]] | None = None,
     cont_ops_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
     cont_ops_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    undistributed_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    undistributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    distributed_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    distributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -285,6 +289,22 @@ def make_companyfacts(
     if cont_ops_diluted_eps_values is not None:
         us_gaap["IncomeLossFromContinuingOperationsPerDilutedShare"] = units(
             "USD/shares", cont_ops_diluted_eps_values
+        )
+    if undistributed_basic_eps_values is not None:
+        us_gaap["EarningsPerShareBasicUndistributed"] = units(
+            "USD/shares", undistributed_basic_eps_values
+        )
+    if undistributed_diluted_eps_values is not None:
+        us_gaap["EarningsPerShareDilutedUndistributed"] = units(
+            "USD/shares", undistributed_diluted_eps_values
+        )
+    if distributed_basic_eps_values is not None:
+        us_gaap["EarningsPerShareBasicDistributed"] = units(
+            "USD/shares", distributed_basic_eps_values
+        )
+    if distributed_diluted_eps_values is not None:
+        us_gaap["EarningsPerShareDilutedDistributed"] = units(
+            "USD/shares", distributed_diluted_eps_values
         )
     return {"facts": {"us-gaap": us_gaap}}
 
@@ -1854,6 +1874,104 @@ def test_q4_eps_primary_guard_tolerates_merger_divergence() -> None:
         m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
     }
     assert series[dt.date(2025, 12, 31)].value == 3.80
+
+
+def _ntrs_like_companyfacts(*, with_distributed: bool = False) -> dict:
+    """NTRS Q1–Q2 2026-shaped facts: the 10-Q tags plain EPS for Q1 but
+    only the Undistributed variant for Q2 (Basic $4.25 / Diluted $4.23 —
+    the face-of-statement values, verified against the 10-Q). The
+    Undistributed Q1 values are deliberately 0.02 below the plain Q1
+    values so the test proves the plain tag wins every end it covers."""
+    kwargs: dict = {
+        "revenue_values": [
+            ("2026-01-01", "2026-03-31", 2_205_600_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_698_000_000, 2026, "Q2"),
+        ],
+        "net_income_values": [
+            ("2026-01-01", "2026-03-31", 525_500_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 792_200_000, 2026, "Q2"),
+        ],
+        "basic_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.72, 2026, "Q1"),
+        ],
+        "diluted_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.71, 2026, "Q1"),
+        ],
+        "opcf_values": [],
+        "capex_values": [],
+        "undistributed_basic_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.70, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 4.25, 2026, "Q2"),
+        ],
+        "undistributed_diluted_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.69, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 4.23, 2026, "Q2"),
+        ],
+    }
+    if with_distributed:
+        # A filer splitting two-class EPS into components: distributed
+        # 0.80 + undistributed 4.25. The guard must drop the
+        # Undistributed tag, so neither component is stored as total EPS.
+        kwargs["distributed_basic_eps_values"] = [
+            ("2026-04-01", "2026-06-30", 0.80, 2026, "Q2"),
+        ]
+        kwargs["distributed_diluted_eps_values"] = [
+            ("2026-04-01", "2026-06-30", 0.80, 2026, "Q2"),
+        ]
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_undistributed_fills_quarters_plain_tag_lacks() -> None:
+    # Regression (batch 66, NTRS class): the Q2 2026 10-Q tags no plain
+    # EPS fact, so Q2 rendered EPS-less and TTM EPS was a 3-quarter sum.
+    # The Undistributed tag gap-fills Q2; the plain tag still wins Q1
+    # (2.72, not the Undistributed 2.70) on ends it covers.
+    companyfacts = _ntrs_like_companyfacts()
+    basic = {m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")}
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q1].value == 2.72
+    assert basic[q1].source_tag == "EarningsPerShareBasic"
+    assert basic[q2].value == 4.25
+    assert basic[q2].source_tag == "EarningsPerShareBasicUndistributed"
+    assert diluted[q1].value == 2.71
+    assert diluted[q2].value == 4.23
+    assert diluted[q2].source_tag == "EarningsPerShareDilutedUndistributed"
+
+
+def test_eps_undistributed_ignored_when_distributed_tagged() -> None:
+    # Guard (batch 66): a filer tagging BOTH two-class components must
+    # not have the undistributed piece stored as total EPS — that would
+    # understate it (0.80 + 4.25 = 5.05 total, not 4.25). The quarter
+    # stays honestly blank instead.
+    companyfacts = _ntrs_like_companyfacts(with_distributed=True)
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q2 = next(r for r in rows if r.end == dt.date(2026, 6, 30))
+    assert q2.eps_basic is None
+    assert q2.eps_diluted is None
+    # Q1 still resolves from the plain tag.
+    q1 = next(r for r in rows if r.end == dt.date(2026, 3, 31))
+    assert q1.eps_basic == 2.72
+    assert q1.eps_diluted == 2.71
+
+
+def test_ntrs_q2_2026_eps_extracted_end_to_end() -> None:
+    # Full-pipeline form of the NTRS regression: revenue + NI + plain Q1
+    # EPS + Undistributed Q2 EPS in, a complete Q2 row out.
+    companyfacts = _ntrs_like_companyfacts()
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    assert len(rows) == 2
+    q2 = rows[-1]
+    assert q2.end == dt.date(2026, 6, 30)
+    assert q2.eps_basic == 4.25
+    assert q2.eps_diluted == 4.23
+    assert q2.net_income == 792_200_000
 
 
 def test_fcf_suppressed_for_finance_sic() -> None:
