@@ -230,6 +230,7 @@ def compute_valuation(
     market_cap: float | None = None,
     ten_year_yield_pct: float | None = None,
     is_reit: bool = False,
+    is_bank_insurer: bool = False,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
@@ -241,7 +242,9 @@ def compute_valuation(
     ``market_cap`` feed the FCF-yield cross-check footnote only; they never
     change the signal. ``ten_year_yield_pct`` is the 10-year Treasury yield
     in percent (batch 12 rate guardrail); ``None`` uses the module default
-    benchmark.
+    benchmark. ``is_reit`` / ``is_bank_insurer`` are design-envelope flags:
+    sectors the P/E-growth framework cannot price get Watch/unavailable
+    instead of a fabricated target (batches 62, 70).
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -303,12 +306,12 @@ def compute_valuation(
             ],
         )
 
-    # ── Design-envelope guards (batch 62) ─────────────────────────────────
-    # Two input classes the PEG curve was never built for. Both produced
-    # fabricated triple-digit signals in the round-19 fresh-ticker hunt, so
-    # both return Watch/unavailable with honest copy instead of a target —
-    # the same doctrine as the batch-36 margin guard above. Placed after it
-    # so its copy still owns the margin-absurdity cases (e.g. NLY).
+    # ── Design-envelope guards (batches 62, 70) ─────────────────────────────
+    # Three input classes the PEG curve was never built for. All produced
+    # fabricated signals in fresh-ticker hunts, so all return Watch/unavailable
+    # with honest copy instead of a target — the same doctrine as the
+    # batch-36 margin guard above. Placed after it so its copy still owns
+    # the margin-absurdity cases (e.g. NLY).
     #
     # 1. REITs: GAAP EPS is structurally the wrong earnings base — the
     #    industry values REITs on funds from operations (FFO), which the
@@ -319,7 +322,12 @@ def compute_valuation(
     #    −75%). The sales fallback is no rescue — GAAP net margin is
     #    depressed by the same depreciation — so the guard sits before both
     #    paths.
-    # 2. Hyper-growth: EPS growth above the 40% model maximum. Beyond it the
+    # 2. Banks/lenders and insurers (batch 70): balance-sheet businesses
+    #    valued on book value and normalized earnings, not EPS growth —
+    #    see the guard body below. Placed before the hyper-growth guard so
+    #    a bank with a cyclical EPS spike gets the sector copy, which is
+    #    the more fundamental reason the model declines.
+    # 3. Hyper-growth: EPS growth above the 40% model maximum. Beyond it the
     #    multiple is clamped fiction, and the TTM base usually reflects a
     #    one-off snapback rather than sustainable earning power — a trough
     #    recovery (MU Strong Buy +167% on 877% growth), investment gains
@@ -346,6 +354,40 @@ def compute_valuation(
                 "multiple nor a margin-anchored sales multiple applies.",
                 "No target until FFO-based valuation is modeled — Watch the "
                 "FFO trend instead.",
+            ],
+        )
+    # 2. Banks/lenders and insurers (batch 70): balance-sheet businesses the
+    #    industry values on book value and normalized earnings, not EPS
+    #    growth. Loan-loss provisions, reserve releases, and rate cycles make
+    #    their EPS growth cyclical rather than compoundable, so a PEG-implied
+    #    "fair" P/E is market fiction — banks rarely sustain even 15x through
+    #    a cycle, yet the growth curve was printing 26-37x fair multiples
+    #    (BAC Strong Buy +196% at 37.0x, CI +216% at 37.0x, PNC +199% at
+    #    36.4x, TFC +159% at 27.7x). The sales fallback is no rescue — fair
+    #    P/S = P/E x net margin inherits the same broken multiple (BRK.B
+    #    Strong Sell -38% on a P/S the market never uses for a book-value
+    #    stock) — so this guard sits before both paths, like the REIT guard.
+    if is_bank_insurer:
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(eps_growth_pct, 1) if eps_growth_pct is not None else None,
+            reasoning=[
+                "This is a bank, lender, or insurer — a balance-sheet business "
+                "the industry values on book value and normalized earnings, "
+                "not EPS growth. Loan-loss provisions, reserve releases, and "
+                "rate cycles make bank/insurer earnings cyclical rather than "
+                "compoundable, so a growth-implied 'fair' P/E is market fiction "
+                "(banks rarely sustain even 15x through a cycle).",
+                "No target until book-value-based valuation is modeled — Watch "
+                "the price-to-book trend and return on equity instead.",
             ],
         )
     if eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT:

@@ -543,3 +543,63 @@ def test_sales_no_cap_keeps_ps_copy():
     assert v.method == "sales"
     assert v.fair_multiple == pytest.approx(3.0)  # 20% margin x 15x P/E
     assert any("implies a fair P/S of 3.0× (current P/S is" in p for p in v.reasoning)
+
+
+# ── Batch 70: design-envelope guard — banks/lenders and insurers ───────────
+def test_bank_insurer_is_watch_on_peg_path():
+    # Mirror the BAC case: EPS $3.42 growing 28% printed Strong Buy +196%
+    # at a 37.0x "fair" P/E — banks rarely sustain even 15x through a
+    # cycle, so the growth-implied multiple is market fiction. Lenders and
+    # insurers are balance-sheet businesses: Watch, not a target.
+    v = _base(ttm_eps_diluted=3.42, eps_growth_pct=28.0, current_price=51.13,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("book value" in r for r in v.reasoning)
+
+
+def test_bank_insurer_blocks_sales_path_too():
+    # Mirror the BRK.B case: no per-share data, so the margin-anchored
+    # sales fallback would step in — but fair P/S = P/E x net margin
+    # inherits the same broken multiple, and the market values insurers
+    # on book value, never P/S. The guard sits before both paths.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=51.13,
+              ttm_revenue=100_000_000_000.0, ttm_net_income=20_000_000_000.0,
+              revenue_growth_pct=10.0, shares_outstanding=10_000_000.0,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+
+
+def test_bank_insurer_guard_sits_after_margin_guard():
+    # A bank whose margin is ALSO absurd (>100% via non-operating items)
+    # keeps the batch-36 margin copy — the margin guard owns margin
+    # absurdity.
+    v = _base(ttm_eps_diluted=4.11, eps_growth_pct=257.0, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert any("non-operating" in r for r in v.reasoning)
+
+
+def test_bank_insurer_guard_sits_before_hyper_growth_guard():
+    # A bank with a cyclical EPS spike above the 40% model max gets the
+    # sector copy — the sector is the more fundamental reason the model
+    # declines, not the one-off spike.
+    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=232.60,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert any("bank, lender, or insurer" in r for r in v.reasoning)
+    assert not any("design range" in r for r in v.reasoning)
+
+
+def test_non_bank_insurer_unaffected():
+    # Same strong PEG inputs without the flag still render a signal — the
+    # guard is strictly opt-in via the SIC classification.
+    v = _base(ttm_eps_diluted=3.42, eps_growth_pct=28.0, current_price=51.13,
+              is_bank_insurer=False)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"

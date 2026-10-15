@@ -26,6 +26,7 @@ from tickerlens.data.xbrl import (
     CONCEPTS,
     Metric,
     QuarterlyFinancials,
+    _is_bank_insurer_sic,
     _is_mreit_sic,
     _quarter_steps,
     _walk_label,
@@ -1378,6 +1379,7 @@ class FinancialsService:
                 ttm_free_cash_flow=ttm.free_cash_flow,
                 market_cap=effective_market_cap,
                 is_reit=_is_mreit_sic(company.sic),
+                is_bank_insurer=_is_bank_insurer_sic(company.sic),
             )
         finally:
             if session is None and self._session is None:

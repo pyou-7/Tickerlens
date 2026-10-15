@@ -1469,6 +1469,31 @@ def _is_mreit_sic(sic: str | int | None) -> bool:
         return False
 
 
+# Batch 70: banks/lenders (6000-6199) and insurers (6300-6499) are
+# balance-sheet businesses the industry values on book value and normalized
+# earnings, not EPS growth multiples. Deliberately excludes 6200-6299
+# (brokers/dealers, exchanges, advisors — fee businesses where the P/E
+# framework still applies) and 6700-6799 (holding companies / REITs, the
+# latter already guarded by _is_mreit_sic).
+_BANK_INSURER_SIC_RANGES = ((6000, 6199), (6300, 6499))
+
+
+def _is_bank_insurer_sic(sic: str | int | None) -> bool:
+    """True for SIC 6000-6199 (banks, lenders, finance companies) or
+    6300-6499 (insurers). Loan-loss provisions, reserve releases, and rate
+    cycles make their EPS growth cyclical rather than compoundable, so a
+    PEG-implied 'fair' P/E is market fiction — banks rarely sustain even
+    15x through a cycle, yet the growth curve was printing 26-37x fair
+    multiples (BAC Strong Buy +196% at 37.0x, CI +216% at 37.0x)."""
+    if sic is None:
+        return False
+    try:
+        code = int(str(sic).strip())
+    except (TypeError, ValueError):
+        return False
+    return any(lo <= code <= hi for lo, hi in _BANK_INSURER_SIC_RANGES)
+
+
 def _mreit_quarterly_revenue(
     companyfacts: dict[str, Any],
     fiscal_year_end: str | None = None,

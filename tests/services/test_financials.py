@@ -263,7 +263,9 @@ def _valuation_company(cik: str, ticker: str) -> Company:
     c = _company(cik=cik, ticker=ticker)
     c.last_price = 100.0
     c.market_cap = 10_000_000_000.0
-    c.sic = "6021"  # national commercial bank — not a REIT
+    c.sic = "3571"  # electronic computers — a plain operating company, so
+    # neither the REIT guard (batch 62) nor the bank/insurer guard
+    # (batch 70) fires and the PEG/sales paths stay reachable.
     return c
 
 

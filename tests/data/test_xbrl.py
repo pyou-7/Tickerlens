@@ -2918,3 +2918,28 @@ def test_eps_plain_tag_still_wins_over_per_unit_and_cont_ops() -> None:
         basic[q1].source_tag
         == "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"
     )
+
+
+def test_is_bank_insurer_sic_boundaries() -> None:
+    from tickerlens.data.xbrl import _is_bank_insurer_sic
+
+    # Banks / lenders: 6000-6199
+    assert _is_bank_insurer_sic(6021)      # national commercial banks (JPM)
+    assert _is_bank_insurer_sic("6199")    # finance services (AXP)
+    assert _is_bank_insurer_sic(6000)
+    assert _is_bank_insurer_sic(6199)
+    assert not _is_bank_insurer_sic(5999)
+    # Brokers/dealers/exchanges/advisors are fee businesses — not guarded
+    assert not _is_bank_insurer_sic(6200)
+    assert not _is_bank_insurer_sic(6211)  # (GS, MS, BLK)
+    assert not _is_bank_insurer_sic(6299)
+    # Insurers: 6300-6499
+    assert _is_bank_insurer_sic(6331)      # P&C (PGR, CB)
+    assert _is_bank_insurer_sic(6324)      # health (UNH)
+    assert _is_bank_insurer_sic(6300)
+    assert _is_bank_insurer_sic(6499)
+    assert not _is_bank_insurer_sic(6500)
+    # Holding companies / REITs live elsewhere
+    assert not _is_bank_insurer_sic(6798)
+    assert not _is_bank_insurer_sic(None)
+    assert not _is_bank_insurer_sic("n/a")
