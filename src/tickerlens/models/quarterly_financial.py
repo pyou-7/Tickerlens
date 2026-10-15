@@ -62,6 +62,11 @@ class QuarterlyFinancial(Base):
     eps_basic: Mapped[float | None] = mapped_column(Float)
     eps_diluted: Mapped[float | None] = mapped_column(Float)
     free_cash_flow: Mapped[float | None] = mapped_column(Float)
+    # Funds from operations (batch 72): net income + depreciation −
+    # property-disposition gains (+ real-estate impairments), computed at
+    # extraction time. Only the REIT valuation path reads it. Auto-migrated
+    # by ensure_schema(); backfilled by batch 72.
+    ffo: Mapped[float | None] = mapped_column(Float)
     # Balance sheet (instant, as of period_end)
     total_assets: Mapped[float | None] = mapped_column(Float)
     total_liabilities: Mapped[float | None] = mapped_column(Float)

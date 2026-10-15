@@ -34,6 +34,15 @@ class Metric(StrEnum):
     # Filers that carry it (e.g. S&P Global's $4.9B, AT&T's $2.0B) otherwise
     # render Assets != Liabilities + Equity.
     REDEEMABLE_NCI = "redeemable_nci"
+    # FFO components (batch 72): funds from operations = net income +
+    # depreciation/amortization − gains on property dispositions (+ real-estate
+    # impairments). Duration facts extracted with the same quarterly machinery
+    # as the income metrics; the composite is assembled per quarter in
+    # extract_recent_quarterly_financials. Only meaningful for equity REITs —
+    # mortgage REITs file no property depreciation, so their FFO is None.
+    FFO_DEPRECIATION = "ffo_depreciation"
+    FFO_DISPOSITION_GAINS = "ffo_disposition_gains"
+    FFO_IMPAIRMENT = "ffo_impairment"
 
 
 class ConceptSpec(BaseModel):
@@ -79,6 +88,12 @@ class QuarterlyFinancials(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    # Funds from operations (batch 72): net income + depreciation −
+    # property-disposition gains (+ real-estate impairments). Computed at
+    # extraction time from the FFO_* component series; None when the filer
+    # has no quarterly depreciation series (e.g. mortgage REITs) or no net
+    # income for the quarter. Only the REIT valuation path reads it.
+    ffo: float | None = None
     # Balance sheet (instant, as of period end)
     total_assets: float | None = None
     total_liabilities: float | None = None
@@ -212,6 +227,43 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     # the bare tag has no facts on any of them, so the chain is one tag.
     Metric.REDEEMABLE_NCI: ConceptSpec(
         tags=("RedeemableNoncontrollingInterestEquityCarryingAmount",),
+        unit="USD",
+    ),
+    # FFO components (batch 72). Depreciation: filers use either the
+    # cash-flow-statement tag (Realty Income files
+    # DepreciationDepletionAndAmortization) or the plainer variant (Digital
+    # Realty files DepreciationAndAmortization) — chain order prefers the
+    # more specific one, with the freshness rule skipping abandoned tags.
+    # Tower REITs (AMT, CCI) tag the same line as
+    # DepreciationAmortizationAndAccretionNet — appended as the tail fallback
+    # (verified live: ~$520M/quarter AMT, ~$170M/quarter CCI, 10-Q
+    # cash-flow magnitude). It bundles minor ARO accretion with
+    # depreciation; the accretion slice is small next to the depreciation
+    # base, so the tail fallback is closer to FFO than no FFO at all — and
+    # it only fills ends the first two tags lack (winner-only merge).
+    # Disposition gains: property-specific tags first (REIT dispositions are
+    # overwhelmingly property sales), then the generic disposition tags.
+    # Impairment: real-estate impairments only — NAREIT FFO adds these back,
+    # while goodwill/intangible impairments stay in FFO.
+    Metric.FFO_DEPRECIATION: ConceptSpec(
+        tags=(
+            "DepreciationDepletionAndAmortization",
+            "DepreciationAndAmortization",
+            "DepreciationAmortizationAndAccretionNet",
+        ),
+        unit="USD",
+    ),
+    Metric.FFO_DISPOSITION_GAINS: ConceptSpec(
+        tags=(
+            "GainLossOnSaleOfProperties",
+            "GainLossOnSaleOfPropertyPlantEquipment",
+            "GainLossOnDispositionOfAssets",
+            "GainLossOnDispositionOfAssets1",
+        ),
+        unit="USD",
+    ),
+    Metric.FFO_IMPAIRMENT: ConceptSpec(
+        tags=("ImpairmentOfRealEstate",),
         unit="USD",
     ),
 }
@@ -355,6 +407,14 @@ def extract_recent_quarterly_financials(
     eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
+    # FFO components (batch 72): funds from operations = net income +
+    # depreciation/amortization − gains on property dispositions (+ real-estate
+    # impairments). Extracted with the same quarterly income machinery
+    # (standalone-quarter facts, Q4-from-annual derivation, freshness rules),
+    # so the composite inherits all of its defect fixes.
+    ffo_depr    = _safe(quarterly_income_metric,    Metric.FFO_DEPRECIATION)
+    ffo_gains   = _safe(quarterly_income_metric,    Metric.FFO_DISPOSITION_GAINS)
+    ffo_impair  = _safe(quarterly_income_metric,    Metric.FFO_IMPAIRMENT)
     bs_facts = {metric: _safe_bs_facts(metric) for metric in BALANCE_SHEET_METRICS}
     # Latest-filed-wins is per metric, so one quarter's legs can come from
     # different filings (Darden's segment note misdates its consolidated
@@ -379,6 +439,9 @@ def extract_recent_quarterly_financials(
         Metric.EPS_DILUTED: _by_end(eps_diluted),
         Metric.OPERATING_CASH_FLOW: _by_end(opcf),
         Metric.CAPEX: _by_end(capex),
+        Metric.FFO_DEPRECIATION: _by_end(ffo_depr),
+        Metric.FFO_DISPOSITION_GAINS: _by_end(ffo_gains),
+        Metric.FFO_IMPAIRMENT: _by_end(ffo_impair),
     }
 
     rows: list[QuarterlyFinancials] = []
@@ -409,6 +472,13 @@ def extract_recent_quarterly_financials(
                 eps_basic=_value_for_end(by_end[Metric.EPS_BASIC], item.end),
                 eps_diluted=_value_for_end(by_end[Metric.EPS_DILUTED], item.end),
                 free_cash_flow=free_cash_flow,
+                ffo=_ffo_for_end(
+                    by_end[Metric.NET_INCOME],
+                    by_end[Metric.FFO_DEPRECIATION],
+                    by_end[Metric.FFO_DISPOSITION_GAINS],
+                    by_end[Metric.FFO_IMPAIRMENT],
+                    item.end,
+                ),
                 total_assets=balance_sheet[Metric.TOTAL_ASSETS].get(item.end),
                 total_liabilities=balance_sheet[Metric.TOTAL_LIABILITIES].get(item.end),
                 total_equity=balance_sheet[Metric.TOTAL_EQUITY].get(item.end),
@@ -2050,6 +2120,37 @@ def _by_start(facts: list[XbrlFact]) -> dict[dt.date, XbrlFact]:
 def _value_for_end(items: dict[dt.date, PeriodMetric], end: dt.date) -> float | None:
     item = items.get(end)
     return item.value if item else None
+
+
+def _ffo_for_end(
+    net_income: dict[dt.date, PeriodMetric],
+    depreciation: dict[dt.date, PeriodMetric],
+    gains: dict[dt.date, PeriodMetric],
+    impairments: dict[dt.date, PeriodMetric],
+    end: dt.date,
+) -> float | None:
+    """Quarterly funds from operations (batch 72).
+
+    FFO = net income + depreciation/amortization − gains on property
+    dispositions + real-estate impairments (the NAREIT definition, computed
+    from filed XBRL rather than the earnings-release reconciliation).
+
+    Net income and depreciation are required legs: an equity REIT always
+    files both, so a missing leg means extraction failure and FFO is None
+    (never a partial sum). Gains and impairments are episodic — filers only
+    file the tag in quarters with an actual disposition or impairment, so a
+    missing end counts as zero. When the filer files no gain/impairment facts
+    at all in the window, the same zero applies: the valuation copy names
+    the assumption ("no property-disposition gains were filed, so FFO
+    assumes none") rather than silently asserting it.
+    """
+    ni = net_income.get(end)
+    depr = depreciation.get(end)
+    if ni is None or depr is None:
+        return None
+    gain = gains.get(end)
+    impair = impairments.get(end)
+    return ni.value + depr.value - (gain.value if gain else 0.0) + (impair.value if impair else 0.0)
 
 
 def _fact_fy(fact: XbrlFact) -> int:

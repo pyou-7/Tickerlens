@@ -701,3 +701,199 @@ def test_bank_insurer_zero_book_value_is_watch():
               book_value_per_share=0.0, roe_pct=6.2)
     assert v.signal == "Watch"
     assert v.method == "unavailable"
+
+
+def _reit_base(**overrides):
+    kwargs = dict(
+        ticker="REIT",
+        current_price=80.0,
+        ttm_eps_diluted=1.0,
+        eps_growth_pct=5.0,
+        ttm_revenue=8_000_000_000.0,
+        revenue_growth_pct=3.0,
+        shares_outstanding=1_000_000_000.0,
+        ttm_quarters=4,
+        is_reit=True,
+        ttm_ffo=4_000_000_000.0,
+        ffo_growth_pct=4.0,
+    )
+    kwargs.update(overrides)
+    return compute_valuation(**kwargs)
+
+
+def test_reit_ffo_path_basic():
+    # FFO/share $4.00, 4% observed growth, 10y 4.5% -> CoE 9%.
+    # The perpetual g is capped at the 3% long-run rate (a 4% TTM print is
+    # cyclical, not perpetual): fair P/FFO = 103 / (9 - 3) = 17.2x ->
+    # target $68.67 vs $80 -> -14.2% Sell. The growth display still shows
+    # the observed 4.0%, and the cap is named in the reasoning.
+    v = _reit_base()
+    assert v.method == "ffo"
+    assert v.signal == "Sell"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.current_multiple == pytest.approx(20.0)
+    assert v.growth_pct == pytest.approx(4.0)
+    assert v.target_price == pytest.approx(68.67, abs=0.05)
+    assert v.upside_pct == pytest.approx(-14.2, abs=0.1)
+    assert v.confidence == "High"
+    assert any("fair P/FFO of 17.2" in r for r in v.reasoning)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+    assert any("funds from operations" in r for r in v.reasoning)
+    assert v.fcf_note is None  # FCF cross-check is noise for REITs
+
+
+def test_reit_ffo_growth_capped_at_long_run():
+    # 8% observed FFO growth is not capitalized — the multiple is valued at
+    # the 3% long-run rate (103/6 = 17.2x), the cap named, and no target is
+    # fabricated from the spike.
+    v = _reit_base(current_price=100.0, ffo_growth_pct=8.0)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.growth_pct == pytest.approx(8.0)  # display keeps the print
+    assert v.signal == "Strong Sell"  # 4.00 * 17.17 = 68.67 vs 100 -> -31.3%
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+    assert any("instead of capitalizing the spike" in r for r in v.reasoning)
+
+
+def test_reit_ffo_path_floor_binds():
+    # -5% FFO growth implies 6.8x — below the 8x floor for declining
+    # REIT cash flows, so valued at 8x, confidence Medium.
+    v = _reit_base(current_price=100.0, ffo_growth_pct=-5.0)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(8.0)
+    assert v.signal == "Strong Sell"  # 4.00 * 8 = 32 vs 100 -> -68%
+    assert v.confidence == "Medium"
+    assert any("below the 8" in r and "floor" in r for r in v.reasoning)
+
+
+def test_reit_ffo_growth_spike_gets_real_signal():
+    # 12% observed FFO growth (above the old Gordon singularity): no more
+    # Watch decline — the spike is capped at the long-run rate and the
+    # REIT gets a real P/FFO target with the cap named.
+    v = _reit_base(ffo_growth_pct=12.0)
+    assert v.method == "ffo"
+    assert v.target_price is not None
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.growth_pct == pytest.approx(12.0)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+
+
+def test_reit_ffo_hyper_growth_gets_real_signal():
+    # 45% FFO growth (a one-off snapback): still valued at the long-run
+    # rate, not declined — the cyclical print is never capitalized.
+    v = _reit_base(ffo_growth_pct=45.0)
+    assert v.method == "ffo"
+    assert v.target_price is not None
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+
+
+def test_reit_ffo_dominant_quarter_is_watch():
+    # SPG-shaped window: one quarter (2025Q4, the $2.9B Taubman
+    # remeasurement gain, invisible to companyfacts) owns the TTM —
+    # the base is a one-off, not a run-rate, so Watch with the quarter
+    # named instead of a fabricated P/FFO target.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 952_000_000.0),
+            ("2026Q1", 938_000_000.0),
+            ("2025Q4", 3_469_000_000.0),
+            ("2025Q3", 945_000_000.0),
+        ]
+    )
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("2025Q4" in r for r in v.reasoning)
+    assert any("one-off" in r for r in v.reasoning)
+
+
+def test_reit_ffo_even_quarters_pass_guard():
+    # Normal REIT lumpiness (WELL runs ~1.7x max/median) takes the P/FFO
+    # path — the guard only fires on true outliers.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 170_000_000.0),
+            ("2026Q1", 120_000_000.0),
+            ("2025Q4", 110_000_000.0),
+            ("2025Q3", 100_000_000.0),
+        ]
+    )
+    assert v.method == "ffo"
+    assert v.target_price is not None
+
+
+def test_reit_ffo_dominance_guard_needs_full_window():
+    # Fewer than 4 quarterly values: the guard stays out of the way.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 3_469_000_000.0),
+            ("2026Q1", 938_000_000.0),
+            ("2025Q4", 945_000_000.0),
+        ]
+    )
+    assert v.method == "ffo"
+
+
+def test_reit_ffo_missing_is_watch():
+    # No FFO inputs (e.g. mortgage REITs file no property depreciation):
+    # no honest P/FFO target exists.
+    v = _reit_base(ttm_ffo=None)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("could not be computed" in r for r in v.reasoning)
+
+
+def test_reit_ffo_non_positive_is_watch():
+    # A non-positive TTM FFO gives a zero/negative justified P/FFO —
+    # nonsense, not a target (same honesty as the batch-26 margin guard).
+    v = _reit_base(ttm_ffo=-100_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+
+
+def test_reit_ffo_missing_shares_is_watch():
+    v = _reit_base(shares_outstanding=None)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+
+
+def test_reit_ffo_growth_default_caps_confidence():
+    # No growth history: assume 3% long-run FFO growth, named in the copy,
+    # confidence capped at Medium.
+    v = _reit_base(ffo_growth_pct=None)
+    assert v.method == "ffo"
+    assert v.growth_pct == pytest.approx(3.0)
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.confidence == "Medium"
+    assert any("assuming 3% long-run" in r for r in v.reasoning)
+
+
+def test_reit_ffo_fallback_growth_caps_confidence():
+    # YoY-fallback FFO growth (no 8-quarter history): the 4% print is capped
+    # at the long-run rate for the multiple, confidence Medium.
+    v = _reit_base(ffo_growth_is_fallback=True)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.confidence == "Medium"
+    assert any("a year ago" in r for r in v.reasoning)
+
+
+def test_reit_ffo_path_rate_sensitive():
+    # A higher 10-year raises the cost of equity, lowering the justified
+    # P/FFO — the FFO path respects the rate environment like the book path.
+    kw = dict(is_reit=True, ttm_ffo=4_000_000_000.0, ffo_growth_pct=4.0)
+    low_rate = _reit_base(**kw)
+    high_rate = _reit_base(**kw, ten_year_yield_pct=7.0)
+    assert high_rate.fair_multiple < low_rate.fair_multiple
+    assert high_rate.fair_multiple == pytest.approx(103.0 / 8.5, abs=0.05)
+    assert any("10-year 7.0%" in r for r in high_rate.reasoning)
+
+
+def test_non_reit_ignores_ffo_inputs():
+    # FFO inputs only matter with the flag — a normal company with stray
+    # FFO inputs still takes the PEG path.
+    v = _base(is_reit=False, ttm_ffo=4_000_000_000.0, ffo_growth_pct=4.0)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"

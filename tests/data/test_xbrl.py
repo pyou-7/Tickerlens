@@ -61,6 +61,255 @@ def test_concept_mapping_falls_back_to_revenues() -> None:
     assert facts[0].val == 100
 
 
+def test_ffo_composite_basic() -> None:
+    """FFO = net income + depreciation − disposition gains + impairments.
+
+    Mirrors the DLR Q2'25 shape: a $1,032M one-time disposition gain spikes
+    net income, but FFO strips it — FFO stays flat while NI jumps.
+    """
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1032, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 0, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1032, 2026, "Q2"),
+        ],
+        impairment_values=[
+            ("2026-01-01", "2026-03-31", 0, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [180 + 560 - 0 + 0, 1032 + 560 - 1032 + 0]
+
+
+def test_ffo_gain_quarter_missing_counts_as_zero() -> None:
+    """Filers only file the gain tag in quarters with an actual disposition —
+    a missing quarter end counts as zero gains, not a gap."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 200, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+        # Gain filed only in Q1 — Q2 has no disposition.
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 100, 2026, "Q1"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [180 + 560 - 100, 200 + 560 - 0]
+
+
+def test_ffo_no_gain_facts_at_all_assumes_zero() -> None:
+    """A filer with no disposition-gain facts in the window (e.g. PLD's
+    quarterly XBRL) gets FFO with gains assumed zero — the valuation copy
+    names the assumption rather than silently asserting it."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 200, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [740, 760]
+
+
+def test_ffo_missing_depreciation_is_none() -> None:
+    """No quarterly depreciation series (e.g. mortgage REITs) means no FFO —
+    never a partial net-income-only sum."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 800, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 820, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [None, None]
+
+
+def test_ffo_missing_net_income_is_none() -> None:
+    """Depreciation without net income is not FFO either."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [None, None]
+
+
+def test_ffo_depreciation_fallback_tag() -> None:
+    """Filers using the plainer DepreciationAndAmortization tag (Digital
+    Realty) extract the same composite as DepreciationDepletionAndAmortization
+    filers (Realty Income)."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["DepreciationAndAmortization"] = us_gaap.pop(
+        "DepreciationDepletionAndAmortization"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 740
+
+
+def test_ffo_depreciation_accretion_net_tag() -> None:
+    """Tower REITs (AMT, CCI) tag quarterly depreciation expense as
+    DepreciationAmortizationAndAccretionNet — the tail chain tag must fill
+    the FFO leg when the first two tags have no facts (live-data defect
+    found on the batch-72 backfill)."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["DepreciationAmortizationAndAccretionNet"] = us_gaap.pop(
+        "DepreciationDepletionAndAmortization"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 740
+
+
+def test_ffo_gain_fallback_tag() -> None:
+    """Filers tagging dispositions GainLossOnDispositionOfAssets (Digital
+    Realty) get gains stripped just like GainLossOnSaleOfProperties filers."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 1032, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 900, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["GainLossOnDispositionOfAssets"] = us_gaap.pop(
+        "GainLossOnSaleOfProperties"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 1032 + 560 - 900
+
+
 def test_cash_flow_uncumulates_ytd_periods() -> None:
     companyfacts = make_companyfacts(
         revenue_values=[],
@@ -274,6 +523,9 @@ def make_companyfacts(
     per_unit_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
     per_unit_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
     discontinued_ops_values: list[tuple[str, str, float, int, str]] | None = None,
+    depreciation_values: list[tuple[str, str, float, int, str]] | None = None,
+    disposition_gain_values: list[tuple[str, str, float, int, str]] | None = None,
+    impairment_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -321,6 +573,16 @@ def make_companyfacts(
         us_gaap["IncomeLossFromDiscontinuedOperationsNetOfTax"] = units(
             "USD", discontinued_ops_values
         )
+    if depreciation_values is not None:
+        us_gaap["DepreciationDepletionAndAmortization"] = units(
+            "USD", depreciation_values
+        )
+    if disposition_gain_values is not None:
+        us_gaap["GainLossOnSaleOfProperties"] = units(
+            "USD", disposition_gain_values
+        )
+    if impairment_values is not None:
+        us_gaap["ImpairmentOfRealEstate"] = units("USD", impairment_values)
     return {"facts": {"us-gaap": us_gaap}}
 
 

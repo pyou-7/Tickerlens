@@ -441,6 +441,8 @@ class KPISnapshot(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    # Funds from operations (batch 72) — REIT valuation path only.
+    ffo: float | None = None
 
 
 class KPIChange(BaseModel):
@@ -450,6 +452,7 @@ class KPIChange(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    ffo: float | None = None
 
 
 class BalanceSheet(BaseModel):
@@ -1349,6 +1352,30 @@ class FinancialsService:
             if prior_ttm is not None:
                 revenue_growth_pct = _pct_change(ttm.revenue, prior_ttm.revenue)
 
+            # Batch 72: FFO growth for the REIT P/FFO path — TTM-over-TTM
+            # first, same-fiscal-quarter YoY as fallback (mirrors the EPS
+            # growth logic above).
+            ffo_growth_pct: float | None = None
+            ffo_growth_is_fallback = False
+            if prior_ttm is not None:
+                ffo_growth_pct = _pct_change(ttm.ffo, prior_ttm.ffo)
+            if ffo_growth_pct is None:
+                yoy_ffo = _compute_yoy(rows[0], list(rows)).ffo
+                ffo_growth_pct = yoy_ffo
+                ffo_growth_is_fallback = yoy_ffo is not None
+            # Batch 72: the quarterly FFO window for the dominant-quarter
+            # guard — a TTM base owned by one quarter is a one-off, not a
+            # run-rate. Only passed when all four quarters have FFO (the
+            # strict TTM already guarantees ttm.ffo is None otherwise).
+            ffo_quarters: list[tuple[str, float]] | None = None
+            if ttm.ffo is not None and len(rows) >= 4:
+                window = [
+                    (f"{r.fiscal_year}{r.fiscal_period}", r.ffo)
+                    for r in rows[:4]
+                ]
+                if all(v is not None for _, v in window):
+                    ffo_quarters = [(label, v) for label, v in window]
+
             live_quote = peeked_quote(company.ticker or ticker)
             effective_price = (
                 live_quote.last_price
@@ -1401,6 +1428,10 @@ class FinancialsService:
                 is_bank_insurer=_is_bank_insurer_sic(company.sic),
                 book_value_per_share=book_value_per_share,
                 roe_pct=roe_pct,
+                ttm_ffo=ttm.ffo,
+                ffo_growth_pct=ffo_growth_pct,
+                ffo_growth_is_fallback=ffo_growth_is_fallback,
+                ffo_quarters=ffo_quarters,
             )
         finally:
             if session is None and self._session is None:
@@ -2889,6 +2920,7 @@ def _compute_ttm(rows: list[QuarterlyFinancial]) -> KPISnapshot:
         eps_basic=_sum_nullable(*[r.eps_basic for r in rows]),
         eps_diluted=_sum_nullable(*[r.eps_diluted for r in rows]),
         free_cash_flow=_sum_nullable(*[r.free_cash_flow for r in rows]),
+        ffo=_sum_nullable(*[r.ffo for r in rows]),
     )
 
 
@@ -2920,6 +2952,7 @@ def _compute_ttm_strict(rows: list[QuarterlyFinancial]) -> KPISnapshot:
             eps_basic=strict([r.eps_basic for r in rows]),
             eps_diluted=strict([r.eps_diluted for r in rows]),
             free_cash_flow=strict([r.free_cash_flow for r in rows]),
+            ffo=strict([r.ffo for r in rows]),
         )
     return _compute_ttm(rows)
 
@@ -2947,6 +2980,7 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         eps_basic=_pct_change(latest.eps_basic, prior.eps_basic),
         eps_diluted=_pct_change(latest.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(latest.free_cash_flow, prior.free_cash_flow),
+        ffo=_pct_change(latest.ffo, prior.ffo),
     )
 
 
@@ -3168,6 +3202,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             eps_basic=row.eps_basic,
             eps_diluted=row.eps_diluted,
             free_cash_flow=row.free_cash_flow,
+            ffo=row.ffo,
             total_assets=row.total_assets,
             total_liabilities=row.total_liabilities,
             total_equity=row.total_equity,
@@ -3185,6 +3220,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "eps_basic": row.eps_basic,
                 "eps_diluted": row.eps_diluted,
                 "free_cash_flow": row.free_cash_flow,
+                "ffo": row.ffo,
                 "total_assets": row.total_assets,
                 "total_liabilities": row.total_liabilities,
                 "total_equity": row.total_equity,
