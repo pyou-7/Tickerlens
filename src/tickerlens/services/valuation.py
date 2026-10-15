@@ -17,6 +17,17 @@ sales on 3.8% revenue growth while loss-making). When the TTM net margin is
 not positive there is nothing to anchor the multiple to, so the model
 returns Watch/unavailable instead of a fabricated target.
 
+Bank/insurer path ("book", batch 71): banks, lenders, and insurers are
+balance-sheet businesses the industry values on price-to-book, not EPS
+growth. The fair P/B is the Gordon justified multiple for a bank —
+fair P/B = (ROE - g) / (CoE - g) — where the cost of equity is the 10-year
+Treasury plus a bank equity-risk premium, floored at 8%. The fair P/B is
+clamped to 0.5-2.5x (the observed through-cycle trading range for US
+banks/insurers); a binding clamp names itself and caps confidence at
+Medium. A bank not earning on its equity (ROE <= 0) cannot be priced on
+book value, so it returns Watch/unavailable — the same honesty as the
+sales path's non-positive-margin guard.
+
 Signal thresholds are on implied upside = (target - price) / price.
 """
 
@@ -38,6 +49,19 @@ _MAX_PE = 40.0
 # lower bound: the identity P/S = P/E x margin can legitimately be small for
 # thin-margin businesses, and a floor would inflate the target.
 _MAX_PS = 10.0
+
+# Book-value path for banks/insurers (batch 71): justified P/B from the
+# Gordon formula fair P/B = (ROE - g) / (CoE - g). The cost of equity is the
+# 10-year Treasury plus a levered-bank equity-risk premium, floored at 8%
+# (a bank's cost of equity never prices below this in practice); g is the
+# long-run nominal growth a bank can sustain. The fair P/B is clamped to
+# the observed through-cycle trading range for US banks/insurers — roughly
+# 0.5x for distressed books, 2.5x for the best compounders.
+_PB_GROWTH_PCT = 3.0
+_BANK_ERP_PCT = 5.0
+_COE_FLOOR_PCT = 8.0
+_MIN_PB = 0.5
+_MAX_PB = 2.5
 
 # Rate-aware guardrail (batch 12): the PEG multiple is blind to the discount
 # rate. A 40x fair P/E implies a 2.5% earnings yield — indefensible when the
@@ -65,7 +89,7 @@ class ValuationSignal(BaseModel):
     upside_pct: float | None  # implied upside in percent, e.g. 23.5
     signal: str  # Strong Buy | Buy | Hold | Sell | Strong Sell | Watch
     confidence: str  # High | Medium | Low
-    method: str  # "peg" | "sales" | "unavailable"
+    method: str  # "peg" | "sales" | "book" | "unavailable"
     fair_multiple: float | None  # the P/E or P/S the model deemed fair
     current_multiple: float | None  # where the market prices it today
     growth_pct: float | None  # the growth input, in percent
@@ -231,6 +255,8 @@ def compute_valuation(
     ten_year_yield_pct: float | None = None,
     is_reit: bool = False,
     is_bank_insurer: bool = False,
+    book_value_per_share: float | None = None,
+    roe_pct: float | None = None,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
@@ -243,8 +269,11 @@ def compute_valuation(
     change the signal. ``ten_year_yield_pct`` is the 10-year Treasury yield
     in percent (batch 12 rate guardrail); ``None`` uses the module default
     benchmark. ``is_reit`` / ``is_bank_insurer`` are design-envelope flags:
-    sectors the P/E-growth framework cannot price get Watch/unavailable
-    instead of a fabricated target (batches 62, 70).
+    sectors the P/E-growth framework cannot price get the sector-native path
+    (P/B for banks/insurers, batch 71) or Watch/unavailable instead of a
+    fabricated target (batches 62, 70). ``book_value_per_share`` and
+    ``roe_pct`` feed the bank/insurer P/B path; when either is missing the
+    bank/insurer guard falls back to the honest Watch copy.
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -306,12 +335,16 @@ def compute_valuation(
             ],
         )
 
-    # ── Design-envelope guards (batches 62, 70) ─────────────────────────────
-    # Three input classes the PEG curve was never built for. All produced
-    # fabricated signals in fresh-ticker hunts, so all return Watch/unavailable
-    # with honest copy instead of a target — the same doctrine as the
-    # batch-36 margin guard above. Placed after it so its copy still owns
-    # the margin-absurdity cases (e.g. NLY).
+    # ── Design-envelope handling (batches 62, 70, 71) ───────────────────────
+    # Three input classes the PEG curve was never built for. REITs and
+    # hyper-growth inputs produced fabricated signals in fresh-ticker hunts,
+    # so they return Watch/unavailable with honest copy instead of a target
+    # — the same doctrine as the batch-36 margin guard above. Placed after
+    # it so its copy still owns the margin-absurdity cases (e.g. NLY).
+    # Banks/insurers (batch 71) are the exception: instead of Watch they get
+    # the sector-native valuation — price-to-book via the Gordon justified
+    # multiple — because the industry prices balance-sheet businesses on
+    # book value.
     #
     # 1. REITs: GAAP EPS is structurally the wrong earnings base — the
     #    industry values REITs on funds from operations (FFO), which the
@@ -356,8 +389,8 @@ def compute_valuation(
                 "FFO trend instead.",
             ],
         )
-    # 2. Banks/lenders and insurers (batch 70): balance-sheet businesses the
-    #    industry values on book value and normalized earnings, not EPS
+    # 2. Banks/lenders and insurers (batches 70, 71): balance-sheet businesses
+    #    the industry values on book value and normalized earnings, not EPS
     #    growth. Loan-loss provisions, reserve releases, and rate cycles make
     #    their EPS growth cyclical rather than compoundable, so a PEG-implied
     #    "fair" P/E is market fiction — banks rarely sustain even 15x through
@@ -366,9 +399,15 @@ def compute_valuation(
     #    36.4x, TFC +159% at 27.7x). The sales fallback is no rescue — fair
     #    P/S = P/E x net margin inherits the same broken multiple (BRK.B
     #    Strong Sell -38% on a P/S the market never uses for a book-value
-    #    stock) — so this guard sits before both paths, like the REIT guard.
+    #    stock) — so this branch owns banks/insurers, valuing them on
+    #    price-to-book via the Gordon justified multiple (batch 71). When
+    #    the book-value inputs are missing or the bank is not earning on its
+    #    equity, no honest P/B target exists and the branch returns
+    #    Watch/unavailable with honest copy. Placed before the hyper-growth
+    #    guard so a bank with a cyclical EPS spike gets the sector-native
+    #    treatment, which is the more fundamental reason.
     if is_bank_insurer:
-        return ValuationSignal(
+        bank_watch = ValuationSignal(
             ticker=ticker,
             current_price=current_price,
             target_price=None,
@@ -378,7 +417,7 @@ def compute_valuation(
             method="unavailable",
             fair_multiple=None,
             current_multiple=None,
-            growth_pct=round(eps_growth_pct, 1) if eps_growth_pct is not None else None,
+            growth_pct=round(roe_pct, 1) if roe_pct is not None else None,
             reasoning=[
                 "This is a bank, lender, or insurer — a balance-sheet business "
                 "the industry values on book value and normalized earnings, "
@@ -386,9 +425,88 @@ def compute_valuation(
                 "rate cycles make bank/insurer earnings cyclical rather than "
                 "compoundable, so a growth-implied 'fair' P/E is market fiction "
                 "(banks rarely sustain even 15x through a cycle).",
-                "No target until book-value-based valuation is modeled — Watch "
-                "the price-to-book trend and return on equity instead.",
+                "Book-value inputs are incomplete, so no price-to-book target "
+                "can be computed — Watch the price-to-book trend and return on "
+                "equity instead.",
             ],
+        )
+        if book_value_per_share is None or book_value_per_share <= 0:
+            return bank_watch
+        if roe_pct is None or roe_pct <= 0:
+            # A bank not earning on its book equity cannot be priced on book
+            # value — the Gordon model gives a zero/negative justified P/B,
+            # which is nonsense, not a target. Same honesty as the sales
+            # path's non-positive-margin guard (batch 26).
+            return bank_watch
+        yld = ten_year_yield_pct
+        if yld is None or yld <= 0:
+            yld = _TEN_YEAR_YIELD_DEFAULT_PCT
+        coe_pct = max(_COE_FLOOR_PCT, yld + _BANK_ERP_PCT)
+        raw_pb = (roe_pct - _PB_GROWTH_PCT) / (coe_pct - _PB_GROWTH_PCT)
+        fair_pb = _clamp(raw_pb, _MIN_PB, _MAX_PB)
+        current_pb = current_price / book_value_per_share
+        target = book_value_per_share * fair_pb
+        upside = (target - current_price) / current_price * 100.0
+        signal = _signal_for_upside(upside)
+        book_confidence = confidence
+        pb_clamp_note: str | None = None
+        if raw_pb > _MAX_PB:
+            pb_clamp_note = (
+                f"Note: a {roe_pct:.1f}% ROE implies a fair P/B of {raw_pb:.1f}× — "
+                f"above the {_MAX_PB:.1f}× cap for cyclical bank/insurer book "
+                f"earnings, so valued at {fair_pb:.1f}× instead; the target is "
+                "driven by the guardrail, so confidence is capped at Medium."
+            )
+            book_confidence = "Medium"
+        elif raw_pb < _MIN_PB:
+            pb_clamp_note = (
+                f"Note: a {roe_pct:.1f}% ROE implies a fair P/B of {raw_pb:.1f}× — "
+                f"below the {_MIN_PB:.1f}× floor for distressed book earnings, "
+                f"so valued at {fair_pb:.1f}× instead; the target is driven by "
+                "the guardrail, so confidence is capped at Medium."
+            )
+            book_confidence = "Medium"
+        multiple_line = (
+            f"A {roe_pct:.1f}% return on equity against a {coe_pct:.1f}% cost of "
+            f"equity (10-year {yld:.1f}% + {_BANK_ERP_PCT:.0f}pp bank equity "
+            f"premium) implies a fair P/B of {raw_pb:.1f}×"
+            + (
+                f" — above the {_MAX_PB:.1f}× cap, so valued at {fair_pb:.1f}× "
+                if raw_pb > _MAX_PB
+                else (
+                    f" — below the {_MIN_PB:.1f}× floor, so valued at {fair_pb:.1f}× "
+                    if raw_pb < _MIN_PB
+                    else " "
+                )
+            )
+            + f"(current P/B is {current_pb:.1f}×)."
+        )
+        reasoning = [
+            f"TTM return on equity {roe_pct:.1f}% on book value — banks and "
+            "insurers are balance-sheet businesses, so this card values book "
+            "value, not earnings growth.",
+            multiple_line,
+            f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
+            f"({upside:+.1f}% implied upside).",
+        ]
+        if pb_clamp_note is not None:
+            reasoning.append(pb_clamp_note)
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=round(target, 2),
+            upside_pct=round(upside, 1),
+            signal=signal,
+            confidence=book_confidence,
+            method="book",
+            fair_multiple=round(fair_pb, 1),
+            current_multiple=round(current_pb, 1),
+            growth_pct=round(roe_pct, 1),
+            reasoning=reasoning,
+            # No FCF cross-check on the book path: for banks/insurers TTM
+            # free cash flow mixes operating cash with deposit/loan balance
+            # moves, so an FCF-yield footnote would be noise, not context.
+            fcf_note=None,
         )
     if eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT:
         return ValuationSignal(

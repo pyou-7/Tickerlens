@@ -1365,6 +1365,25 @@ class FinancialsService:
             if effective_market_cap and effective_price:
                 shares_outstanding = effective_market_cap / effective_price
 
+            # Batch 71: P/B inputs for the bank/insurer book path — latest
+            # book equity per share plus TTM return on average book equity.
+            ttm_equities = [r.total_equity for r in rows[:4] if r.total_equity]
+            avg_equity = (
+                sum(ttm_equities) / len(ttm_equities) if ttm_equities else None
+            )
+            latest_equity = rows[0].total_equity
+            book_value_per_share: float | None = None
+            if (
+                latest_equity
+                and latest_equity > 0
+                and shares_outstanding
+                and shares_outstanding > 0
+            ):
+                book_value_per_share = latest_equity / shares_outstanding
+            roe_pct: float | None = None
+            if ttm.net_income is not None and avg_equity and avg_equity > 0:
+                roe_pct = ttm.net_income / avg_equity * 100
+
             return compute_valuation(
                 ticker=ticker.upper(),
                 current_price=effective_price,
@@ -1380,6 +1399,8 @@ class FinancialsService:
                 market_cap=effective_market_cap,
                 is_reit=_is_mreit_sic(company.sic),
                 is_bank_insurer=_is_bank_insurer_sic(company.sic),
+                book_value_per_share=book_value_per_share,
+                roe_pct=roe_pct,
             )
         finally:
             if session is None and self._session is None:

@@ -603,3 +603,101 @@ def test_non_bank_insurer_unaffected():
               is_bank_insurer=False)
     assert v.method == "peg"
     assert v.signal == "Strong Buy"
+
+
+# ── Batch 71: bank/insurer price-to-book path ─────────────────────────────
+
+
+def test_bank_insurer_book_path_basic():
+    # Mirror the JPM case: ROE 17.8%, current P/B 2.38x.
+    # Fair P/B = (17.8 - 3) / (9.5 - 3) = 2.28x -> target below price -> Hold.
+    bvps = 335.28 / 2.38
+    v = _base(current_price=335.28, is_bank_insurer=True,
+              book_value_per_share=bvps, roe_pct=17.8)
+    assert v.method == "book"
+    assert v.signal == "Hold"
+    assert v.fair_multiple == pytest.approx(2.3)
+    assert v.current_multiple == pytest.approx(2.4)
+    assert v.growth_pct == pytest.approx(17.8)
+    assert v.target_price == pytest.approx(bvps * 2.2769, rel=1e-3)
+    assert v.upside_pct == pytest.approx(-4.3, abs=0.1)
+    assert v.confidence == "High"
+    assert any("return on equity" in r for r in v.reasoning)
+    assert any("fair P/B of 2.3" in r for r in v.reasoning)
+    assert v.fcf_note is None  # FCF cross-check is noise for banks
+
+
+def test_bank_insurer_book_path_cap_binds():
+    # Mirror the ALL case: peak ROE 43.2% implies 6.2x fair P/B — above the
+    # 2.5x cap for cyclical book earnings, so valued at 2.5x with the
+    # guardrail named and confidence capped at Medium.
+    v = _base(current_price=1.75, is_bank_insurer=True,
+              book_value_per_share=1.0, roe_pct=43.2)
+    assert v.method == "book"
+    assert v.fair_multiple == pytest.approx(2.5)
+    assert v.signal == "Strong Buy"
+    assert v.confidence == "Medium"
+    assert any("above the 2.5" in r and "cap" in r for r in v.reasoning)
+    assert any("implies a fair P/B of 6.2" in r for r in v.reasoning)
+
+
+def test_bank_insurer_book_path_floor_binds():
+    # Mirror the SOFI case: ROE 6.2% implies 0.49x — below the 0.5x floor
+    # for distressed book earnings, so valued at 0.5x, confidence Medium.
+    v = _base(current_price=2.79, is_bank_insurer=True,
+              book_value_per_share=1.0, roe_pct=6.2)
+    assert v.method == "book"
+    assert v.fair_multiple == pytest.approx(0.5)
+    assert v.signal == "Strong Sell"
+    assert v.confidence == "Medium"
+    assert any("below the 0.5" in r and "floor" in r for r in v.reasoning)
+
+
+def test_bank_insurer_negative_roe_is_watch():
+    # Mirror the COIN case: a bank not earning on its book equity cannot be
+    # priced on book value — the Gordon model would give a negative
+    # justified P/B, which is nonsense, not a target.
+    v = _base(current_price=179.39, is_bank_insurer=True,
+              book_value_per_share=49.5, roe_pct=-6.9)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("book value" in r for r in v.reasoning)
+
+
+def test_bank_insurer_missing_book_inputs_is_watch():
+    # ROE present but no book value per share: no honest P/B target exists.
+    v = _base(current_price=54.32, is_bank_insurer=True,
+              book_value_per_share=None, roe_pct=11.1)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert any("incomplete" in r for r in v.reasoning)
+
+
+def test_bank_insurer_book_path_rate_sensitive():
+    # A higher 10-year raises the cost of equity, lowering the justified
+    # P/B — the book path respects the rate environment like the PEG path.
+    kw = dict(current_price=335.28, is_bank_insurer=True,
+              book_value_per_share=335.28 / 2.38, roe_pct=17.8)
+    low_rate = _base(**kw)
+    high_rate = _base(**kw, ten_year_yield_pct=7.0)
+    assert high_rate.fair_multiple < low_rate.fair_multiple
+    assert high_rate.fair_multiple == pytest.approx(1.6, abs=0.05)
+    assert any("10-year 7.0%" in r for r in high_rate.reasoning)
+
+
+def test_non_bank_insurer_ignores_book_inputs():
+    # Book inputs only matter with the flag — a normal company with stray
+    # book inputs still takes the PEG path.
+    v = _base(is_bank_insurer=False, book_value_per_share=50.0, roe_pct=25.0)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"
+
+
+def test_bank_insurer_zero_book_value_is_watch():
+    # Non-positive book equity (e.g. a levered lender with negative book)
+    # cannot anchor a P/B multiple — Watch, not a fabricated target.
+    v = _base(current_price=15.24, is_bank_insurer=True,
+              book_value_per_share=0.0, roe_pct=6.2)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"

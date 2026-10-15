@@ -25,4 +25,4 @@ class ValuationHistory(Base):
     target_price: Mapped[float | None] = mapped_column(Float)
     upside_pct: Mapped[float | None] = mapped_column(Float)
     signal: Mapped[str] = mapped_column(String(16))
-    method: Mapped[str] = mapped_column(String(16))  # "peg" | "sales" | "unavailable"
+    method: Mapped[str] = mapped_column(String(16))  # "peg" | "sales" | "book" | "unavailable"
