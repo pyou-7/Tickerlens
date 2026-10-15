@@ -222,3 +222,99 @@ def test_reconcile_direct_unit_mixed_basis() -> None:
     _reconcile_balance_sheet_identity(chosen, facts, "0525")
     assert chosen[Metric.TOTAL_ASSETS][end].val == 12_519_200_000
     assert chosen[Metric.TOTAL_ASSETS][end].accn == ACCN_A
+
+
+def _len_shaped() -> dict:
+    """Mirror Lennar's Q3 2026 10-Q: no standalone ``Assets`` / ``Liabilities``
+    facts for the new quarter end — only ``LiabilitiesAndStockholdersEquity``
+    (the balance-sheet total, definitionally Assets) alongside
+    ``StockholdersEquity``. The prior quarter still files the classic tags."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {
+                                "start": "2026-06-01",
+                                "end": "2026-08-31",
+                                "val": 8_046_119_000,
+                                "fy": 2026,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2026-10-02",
+                            },
+                            {
+                                "start": "2026-03-01",
+                                "end": "2026-05-31",
+                                "val": 7_939_872_000,
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-06-29",
+                            },
+                        ]
+                    }
+                },
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            _instant("2026-05-31", 33_701_455_000, "2026-06-29"),
+                        ]
+                    }
+                },
+                "Liabilities": {
+                    "units": {
+                        "USD": [
+                            _instant("2026-05-31", 11_935_729_000, "2026-06-29"),
+                        ]
+                    }
+                },
+                "LiabilitiesAndStockholdersEquity": {
+                    "units": {
+                        "USD": [
+                            _instant("2026-05-31", 33_701_455_000, "2026-06-29"),
+                            _instant("2026-08-31", 33_378_225_000, "2026-10-02"),
+                        ]
+                    }
+                },
+                "StockholdersEquity": {
+                    "units": {
+                        "USD": [
+                            _instant("2026-05-31", 21_765_726_000, "2026-06-29"),
+                            _instant("2026-08-31", 21_558_959_000, "2026-10-02"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_liabilities_and_equity_total_fills_missing_assets() -> None:
+    """Batch 73: the balance-sheet total tag backfills Assets for ends the
+    standalone tag lacks, and Liabilities derives from Assets − Equity —
+    the newest quarter renders a full balance sheet instead of "—"."""
+    rows = extract_recent_quarterly_financials(
+        _len_shaped(), fiscal_year_end="1130", periods=2
+    )
+    by_end = {row.end.isoformat(): row for row in rows}
+    latest = by_end["2026-08-31"]
+    assert latest.total_assets == 33_378_225_000
+    assert latest.total_equity == 21_558_959_000
+    assert latest.total_liabilities == 33_378_225_000 - 21_558_959_000
+    assert (
+        latest.total_liabilities + latest.total_equity == latest.total_assets
+    )
+
+
+def test_filed_assets_tag_wins_over_balance_sheet_total() -> None:
+    """The total tag only fills ends the standalone Assets tag lacks — a
+    filed Assets value is never overridden."""
+    rows = extract_recent_quarterly_financials(
+        _len_shaped(), fiscal_year_end="1130", periods=2
+    )
+    by_end = {row.end.isoformat(): row for row in rows}
+    prior = by_end["2026-05-31"]
+    assert prior.total_assets == 33_701_455_000
+    assert prior.total_liabilities == 11_935_729_000

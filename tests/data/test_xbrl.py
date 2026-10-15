@@ -709,6 +709,87 @@ def test_capex_keeps_ppande_tag_when_fresh():
     assert tag == "PaymentsToAcquirePropertyPlantAndEquipment"
 
 
+def _dal_capex_split_facts() -> dict:
+    """Mirror the Delta (DAL) case: the total
+    ``PaymentsToAcquireProductiveAssets`` tag stops at Q1 2026 while the
+    filer keeps reporting the two components — ``PaymentsForFlightEquipment``
+    and ``PaymentsToAcquireOtherProductiveAssets`` — through Q3 2026.
+    Component sums equal the old total (Q1: 1000 + 200 = 1200)."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "PaymentsToAcquireProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 1_200_000_000.0, 2026, "Q1"),
+                        ]
+                    }
+                },
+                "PaymentsForFlightEquipment": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 1_000_000_000.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 2_244_000_000.0, 2026, "Q2"),
+                            fact("2026-01-01", "2026-09-30", 3_444_000_000.0, 2026, "Q3"),
+                        ]
+                    }
+                },
+                "PaymentsToAcquireOtherProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 200_000_000.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 414_000_000.0, 2026, "Q2"),
+                            fact("2026-01-01", "2026-09-30", 627_000_000.0, 2026, "Q3"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_capex_flight_equipment_composite_sums_components():
+    """The split-capex composite sums flight + other productive assets per
+    YTD period before un-cumulating: Q2 = (2244+414) − 1200 = 1458,
+    Q3 = (3444+627) − (2244+414) = 1413. Flight-only would understate capex
+    ~15% and overstate FCF; a blank would lose the quarters entirely."""
+    series = quarterly_cash_flow_metric(
+        _dal_capex_split_facts(), Metric.CAPEX, "1231"
+    )
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-03-31"].value == 1_200_000_000.0
+    assert by_end["2026-06-30"].value == 1_458_000_000.0
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
+    assert "PaymentsForFlightEquipment" in by_end["2026-09-30"].source_tag
+
+
+def test_capex_flight_composite_does_not_fire_when_total_current():
+    """Dispatch guard: when the total capex tag stays current, it remains
+    authoritative — the composite must not fire and double-count a filer
+    that reports both a total and the flight-equipment subset."""
+    cf = _dal_capex_split_facts()
+    total = cf["facts"]["us-gaap"]["PaymentsToAcquireProductiveAssets"]["units"]["USD"]
+    total.append(fact("2026-01-01", "2026-06-30", 2_658_000_000.0, 2026, "Q2"))
+    total.append(fact("2026-01-01", "2026-09-30", 4_071_000_000.0, 2026, "Q3"))
+    series = quarterly_cash_flow_metric(cf, Metric.CAPEX, "1231")
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-09-30"].source_tag == "PaymentsToAcquireProductiveAssets"
+    assert by_end["2026-06-30"].value == 1_458_000_000.0
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
+
+
+def test_capex_flight_composite_ignores_non_10q_forms():
+    """Only 10-Q/10-K facts feed the composite — an 8-K-tagged flight
+    payment must not leak into capex."""
+    cf = _dal_capex_split_facts()
+    bad = fact("2026-01-01", "2026-09-30", 99_000_000_000.0, 2026, "Q3")
+    bad["form"] = "8-K"
+    cf["facts"]["us-gaap"]["PaymentsForFlightEquipment"]["units"]["USD"].append(bad)
+    series = quarterly_cash_flow_metric(cf, Metric.CAPEX, "1231")
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
+
+
 def test_net_income_falls_back_to_common_stockholders_tag_when_abandoned() -> None:
     """Mirror the Realty Income (O) case: ``NetIncomeLoss`` quarterly facts
     stop at 2025-09-30 (273 days behind); the filer now reports net income as

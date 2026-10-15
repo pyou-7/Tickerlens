@@ -193,7 +193,20 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         ),
         unit="USD",
     ),
-    Metric.TOTAL_ASSETS: ConceptSpec(tags=("Assets",), unit="USD"),
+    Metric.TOTAL_ASSETS: ConceptSpec(
+        tags=(
+            "Assets",
+            # Batch 73: a 10-Q can carry the balance-sheet total without the
+            # standalone Assets tag (Lennar's Q3 2026 10-Q files no Assets /
+            # Liabilities facts, only LiabilitiesAndStockholdersEquity +
+            # StockholdersEquity). The total is definitionally Assets, so it
+            # fills ends the primary tag lacks; the derivation below then
+            # recovers Liabilities from Assets − Equity. Never overrides a
+            # filed Assets value (gap-fill only adds missing ends).
+            "LiabilitiesAndStockholdersEquity",
+        ),
+        unit="USD",
+    ),
     Metric.TOTAL_LIABILITIES: ConceptSpec(tags=("Liabilities",), unit="USD"),
     Metric.TOTAL_EQUITY: ConceptSpec(
         tags=(
@@ -1100,6 +1113,17 @@ def quarterly_cash_flow_metric(
     metric: Metric,
     fiscal_year_end: str | None = None,
 ) -> list[PeriodMetric]:
+    # Batch 73: airlines split capital expenditures into flight-equipment
+    # and other productive-asset payments (Delta's 2026 10-Qs tag
+    # ``PaymentsForFlightEquipment`` + ``PaymentsToAcquireOtherProductiveAssets``
+    # while the total ``PaymentsToAcquireProductiveAssets`` tag stops at Q1
+    # 2026). The tag-detected composite below sums the components per YTD
+    # period before un-cumulating, so recent quarters keep a complete capex
+    # (and FCF) instead of going blank.
+    if metric is Metric.CAPEX:
+        composite = _flight_equipment_capex(companyfacts, fiscal_year_end)
+        if composite:
+            return composite
     spec = CONCEPTS[metric]
     candidates = _chain_candidates(
         companyfacts, spec.tags, spec.unit, metric_name=metric.value
@@ -1109,6 +1133,89 @@ def quarterly_cash_flow_metric(
             _cash_flow_series_for_tag(metric, tag, facts, fiscal_year_end)
             for tag, facts in candidates
         ]
+    )
+
+
+# Airlines split capital expenditures into flight-equipment payments and
+# other productive-asset payments. Delta's 2026 10-Qs file the two
+# components while the total ``PaymentsToAcquireProductiveAssets`` tag stops
+# at Q1 2026 — the generic winner-take-all chain would blank FCF for every
+# recent quarter, and merely appending the flight-equipment tag to the chain
+# would understate capex ~15% (DAL Q3 2026: $1.20B flight-only vs $1.41B
+# true), overstating FCF by 70%+. The composite sums the components per YTD
+# period, then un-cumulates with the same machinery as a single tag.
+_CAPEX_FLIGHT_COMPONENTS = (
+    "PaymentsForFlightEquipment",
+    "PaymentsToAcquireOtherProductiveAssets",
+)
+
+
+def _flight_equipment_capex(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None = None,
+) -> list[PeriodMetric]:
+    """Quarterly capex for filers that split it into flight-equipment parts.
+
+    Tag-detected: fires only when ``PaymentsForFlightEquipment`` has 10-Q/10-K
+    USD facts. Dispatches only when the flight-equipment tag is newer than
+    the generic CAPEX chain's winner — a filer whose total capex tag stays
+    current keeps the authoritative total, so a filer reporting both a total
+    and the flight-equipment subset is never double-counted. Returns [] when
+    the composite doesn't apply so the caller falls back to the generic
+    chain.
+    """
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    components: dict[str, list[XbrlFact]] = {}
+    for tag in _CAPEX_FLIGHT_COMPONENTS:
+        raw = us_gaap.get(tag, {}).get("units", {}).get("USD", [])
+        facts = [
+            XbrlFact.model_validate(item)
+            for item in raw
+            if item.get("form") in {"10-Q", "10-K"}
+            and item.get("end")
+            and item.get("start")
+        ]
+        if facts:
+            components[tag] = facts
+    flight = components.get("PaymentsForFlightEquipment")
+    if not flight:
+        return []
+    try:
+        _, winner_facts = _select_tag_facts(
+            companyfacts,
+            CONCEPTS[Metric.CAPEX].tags,
+            "USD",
+            staleness_window=_QUARTERLY_FACT_WINDOW,
+            metric_name=Metric.CAPEX.value,
+        )
+        winner_newest = max(fact.end for fact in winner_facts)
+    except KeyError:
+        winner_newest = None
+    if winner_newest is not None and max(fact.end for fact in flight) <= winner_newest:
+        return []
+    # Sum the components per YTD (start, end). Dedupe re-filed periods per
+    # tag first (latest filing wins) so a restated fact isn't double-counted.
+    summed: dict[tuple[dt.date, dt.date], XbrlFact] = {}
+    for facts in components.values():
+        by_period: dict[tuple[dt.date, dt.date], XbrlFact] = {}
+        for fact in facts:
+            key = (fact.start, fact.end)  # type: ignore[arg-type]
+            if key not in by_period or fact.filed > by_period[key].filed:
+                by_period[key] = fact
+        for key, fact in by_period.items():
+            if key in summed:
+                prev = summed[key]
+                keep = fact if fact.filed >= prev.filed else prev
+                summed[key] = keep.model_copy(update={"val": prev.val + fact.val})
+            else:
+                summed[key] = fact
+    if not summed:
+        return []
+    return _cash_flow_series_for_tag(
+        Metric.CAPEX,
+        "+".join(components),
+        sorted(summed.values(), key=lambda fact: fact.end),
+        fiscal_year_end,
     )
 
 
