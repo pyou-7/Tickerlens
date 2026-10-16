@@ -1536,3 +1536,15 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Alternatives considered:** per-ticker special-casing (rejected — the four shapes are general filer conventions, not ticker quirks; the regexes will serve future seeds); excluding running headers by page-footer patterns (rejected — footer formats are filer-specific, e.g. `30 Honeywell International Inc.` vs `HAL 2025 FORM 10-K | 20`, while longest-section-wins is structural); a TOC page-number-anchored extraction (rejected back in batch 75, still rejected — high garbage risk).
 
 **Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 78 (2026-10-16): NI/shares EPS derivation for annual-only EPS filers (GD)
+
+**Decision:** add `_eps_from_income_shares` as a final gap-fill in `quarterly_income_metric` for EPS_BASIC/EPS_DILUTED: when a filer tags no quarterly EPS facts, derive quarterly EPS = quarterly net income / quarterly weighted-average shares for the same period end; Q4 (whose quarterly share count the 10-K doesn't tag) uses the share-month residual (12·FY_avg − 9·9M_avg)/3. Filed EPS facts always win via skip_ends; the derivation is skipped for two-class filers (reuses the batch-66 `_has_distributed_eps_facts` guard); it yields nothing when no share facts exist.
+
+**Why:** the round-22 hunt found General Dynamics with all 8 quarters EPS-less — its 10-Qs haven't tagged quarterly EPS since 2019, only the 10-K annual fact. NI/shares is definitionally total EPS for the period (unlike the batch-65 Q4 path, which must infer shares from NI/EPS pairs), so no coherence check is needed; the two-class guard is the one case where the identity breaks (participating-securities allocation). V (no EPS concept in companyfacts — extension taxonomy) and BRK.B (nothing tagged since 2013) stay honestly blank, which the tests pin. The derivation also future-proofs the chain: any filer with the GD shape now seeds with complete EPS.
+
+**Detection boundary / honesty boundaries:** derivation only fills ends the chain lacks; source_tag is `Derived:<shares tag>/NetIncomeLoss` so derived values are traceable in the DB; the Q4 residual requires positive implied shares and start-matched annual/9M share facts, else the quarter stays blank (fail closed). Loss quarters are fine (negative NI over the filed share count). Per-share facts need no split adjustment here — numerator and denominator are period-consistent, so the ratio is basis-correct under restatement.
+
+**Alternatives considered:** storing the annual EPS fact on the Q4 row (rejected — would misread as quarterly EPS); extending the continuing-ops fallback (rejected — GD's 10-Qs tag no per-share facts at all, nothing to extend); leaving the quarters blank (rejected — the exact inputs sit in the same filings, and blank EPS degrades the valuation card to unavailable).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if their tagging resumes).
