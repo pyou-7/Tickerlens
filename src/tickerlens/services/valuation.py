@@ -423,12 +423,15 @@ def compute_valuation(
     #    a bank with a cyclical EPS spike gets the sector copy, which is
     #    the more fundamental reason the model declines.
     # 3. Hyper-growth: EPS growth above the 40% model maximum. Beyond it the
-    #    multiple is clamped fiction, and the TTM base usually reflects a
+    #    PEG curve is clamped fiction, and the TTM base usually reflects a
     #    one-off snapback rather than sustainable earning power — a trough
     #    recovery (MU Strong Buy +167% on 877% growth), investment gains
     #    (ALL Strong Buy +697% on 135%), or a cyclical rebound (HON Strong
-    #    Buy +359% on 47%). The model's own documentation calls 40% the
-    #    maximum: inputs beyond it get Watch, not a clamped Strong Buy.
+    #    Buy +359% on 47%). Batch 74 reroutes these names to the
+    #    margin-anchored sales fallback instead of Watch: the PEG path is
+    #    skipped (its growth input is the unreliable one) but the fallback
+    #    prices revenue growth — the more durable input — with the growth
+    #    clamp, P/S cap, and rate guardrail all naming themselves.
     if is_reit:
         reit_watch = ValuationSignal(
             ticker=ticker,
@@ -744,31 +747,24 @@ def compute_valuation(
             # moves, so an FCF-yield footnote would be noise, not context.
             fcf_note=None,
         )
-    if eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT:
-        return ValuationSignal(
-            ticker=ticker,
-            current_price=current_price,
-            target_price=None,
-            upside_pct=None,
-            signal="Watch",
-            confidence="Low",
-            method="unavailable",
-            fair_multiple=None,
-            current_multiple=None,
-            growth_pct=round(eps_growth_pct, 1),
-            reasoning=[
-                f"TTM EPS growth of {eps_growth_pct:.1f}% is outside the model's "
-                f"{_MAX_GROWTH_PCT:.0f}% design range — beyond it the PEG curve "
-                "is clamped fiction, and triple-digit growth usually reflects "
-                "a one-off snapback (trough recovery, asset sales, investment "
-                "gains) rather than sustainable earning power.",
-                "A growth multiple on that base would fabricate a target — no "
-                "target until growth normalizes into the model's range.",
-            ],
-        )
+    # Batch 74: hyper-growth no longer returns Watch here. The PEG curve
+    # cannot price EPS growth above the 40% model maximum (clamped fiction
+    # on a usually snapback base — MU Strong Buy +167% on 877% growth, ALL
+    # +697% on 135%), but the sales fallback below prices *revenue* growth,
+    # the more durable input, through the same margin-anchored fair-P/S
+    # machinery. The PEG path is skipped for these names (its growth input
+    # is the unreliable one); names the fallback cannot price (no positive
+    # margin, missing revenue inputs) still land on the honest Watch
+    # copies below.
+    hyper_growth = eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT
 
     # ── Primary: PEG-implied P/E ──────────────────────────────────────────
-    if ttm_eps_diluted is not None and ttm_eps_diluted > 0 and eps_growth_pct is not None:
+    if (
+        ttm_eps_diluted is not None
+        and ttm_eps_diluted > 0
+        and eps_growth_pct is not None
+        and not hyper_growth
+    ):
         raw_pe = PEG_TARGET * _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
         fair_pe, rate_note = _fair_pe_for_growth(eps_growth_pct, ten_year_yield_pct)
         target = ttm_eps_diluted * fair_pe
@@ -972,14 +968,30 @@ def compute_valuation(
             sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
         if sales_rate_note is not None:
             sales_confidence = "Medium"  # cap: the rate environment, not the data, drives the target
+        if hyper_growth:
+            # Batch 74: per-share earnings exist here — the PEG path was
+            # skipped because the EPS *growth* is outside the model's 40%
+            # range, not because earnings are missing. The batch-33 "no
+            # per-share earnings" line would be false for these names, so
+            # name the reroute instead.
+            sales_opening = (
+                f"TTM EPS growth of {eps_growth_pct:.1f}% is outside the PEG "
+                f"model's {_MAX_GROWTH_PCT:.0f}% design range — a growth "
+                "multiple on that base would be clamped fiction, so valuing "
+                "on sales instead (less reliable)."
+            )
+        else:
+            sales_opening = (
+                "No per-share earnings to anchor a P/E multiple — valuing on sales "
+                "instead (less reliable)."
+            )
         reasoning = [
             # Batch 33: the sales path is only reachable with a positive TTM
             # net margin, so TTM earnings ARE positive here — what is missing
             # is per-share earnings data to anchor a P/E multiple (e.g. ET,
             # an MLP that files no XBRL EPS facts). The old "No positive TTM
             # earnings" claim was false for every company on this path.
-            "No per-share earnings to anchor a P/E multiple — valuing on sales "
-            "instead (less reliable).",
+            sales_opening,
             ps_line,
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
             f"({upside:+.1f}% implied upside).",

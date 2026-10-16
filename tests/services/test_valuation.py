@@ -55,15 +55,20 @@ def test_peg_buy_threshold():
 
 def test_growth_clamped():
     # Batch 62: 100% growth is OUTSIDE the 40% model maximum — the old
-    # behavior clamped the multiple and printed a target; the honest
-    # behavior is Watch/unavailable (the clamped multiple was fiction and
-    # the TTM base usually a one-off snapback, e.g. ALL +697%).
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.signal == "Watch"
-    assert v.method == "unavailable"
-    assert v.target_price is None
-    assert v.confidence == "Low"
-    assert any("outside the model's 40% design range" in p for p in v.reasoning)
+    # behavior clamped the multiple and printed a target; batch 62 made it
+    # Watch/unavailable (the clamped multiple was fiction and the TTM base
+    # usually a one-off snapback, e.g. ALL +697%). Batch 74 reroutes it to
+    # the sales fallback instead: with a positive margin and revenue data
+    # the name gets a real signal on the durable top-line input.
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.target_price is not None
+    assert any("outside the PEG model's 40% design range" in p for p in v.reasoning)
+    # Without margin data the reroute cannot price — still honest Watch.
+    v2 = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v2.signal == "Watch"
+    assert v2.method == "unavailable"
 
 
 def test_rate_guardrail_binds_at_high_yield():
@@ -378,29 +383,79 @@ def test_reit_guard_sits_after_margin_guard():
     assert any("non-operating" in r for r in v.reasoning)
 
 
-def test_hyper_growth_is_watch():
-    # Mirror the ALL case: 135.4% growth printed Strong Buy +697% — the
-    # multiple was clamped fiction on an investment-gain-inflated base.
-    # Growth beyond the 40% model maximum is outside the design envelope.
-    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=232.60,
-              ten_year_yield_pct=2.0)
-    assert v.signal == "Watch"
-    assert v.method == "unavailable"
-    assert v.target_price is None
-    assert v.confidence == "Low"
-    assert any("outside the model's 40% design range" in r for r in v.reasoning)
-    assert v.growth_pct == pytest.approx(135.4)
+def test_hyper_growth_reroutes_to_sales():
+    # Batch 74: EPS growth beyond the 40% model maximum no longer returns
+    # Watch — the PEG path is skipped (its growth input is the unreliable
+    # one) but the margin-anchored sales fallback prices revenue growth
+    # instead. Mirror the ALL case: 135.4% EPS growth, 20% net margin, 10%
+    # revenue growth — the old code printed Watch; the reroute values it on
+    # sales: 1B revenue x (15x fair P/E x 20% margin) / 10M shares = $300.
+    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=200.0,
+              ten_year_yield_pct=2.0, ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.signal == "Strong Buy"
+    assert v.target_price == pytest.approx(300.0)
+    assert v.upside_pct == pytest.approx(50.0)
+    assert v.fair_multiple == pytest.approx(3.0)
+    assert v.growth_pct == pytest.approx(10.0)  # revenue growth: the input used
+    assert v.confidence == "Medium"  # sales path never claims High
+    assert any("outside the PEG model's 40% design range" in r for r in v.reasoning)
+    assert any("valuing on sales instead" in r for r in v.reasoning)
+    # Batch-33 honesty: per-share earnings exist here, so the "no
+    # per-share earnings" line must not appear on the reroute.
+    assert not any("No per-share earnings" in r for r in v.reasoning)
 
 
 def test_hyper_growth_boundary():
-    # The guard is strictly > 40%: exactly 40% keeps the PEG path (capped
-    # multiple, Medium confidence via the cap guardrail); 40.1% declines.
+    # The reroute is strictly > 40%: exactly 40% keeps the PEG path (capped
+    # multiple, Medium confidence via the cap guardrail); 40.1% reroutes to
+    # sales (with margin data to price it).
     v = _base(eps_growth_pct=40.0, ten_year_yield_pct=2.0)
     assert v.method == "peg"
     assert v.fair_multiple == pytest.approx(40.0)
-    v2 = _base(eps_growth_pct=40.1, ten_year_yield_pct=2.0)
-    assert v2.signal == "Watch"
-    assert v2.method == "unavailable"
+    v2 = _base(eps_growth_pct=40.1, ten_year_yield_pct=2.0,
+               ttm_net_income=200_000_000.0)
+    assert v2.method == "sales"
+    assert v2.target_price is not None
+
+
+def test_hyper_growth_negative_margin_stays_watch():
+    # Batch 74: the reroute needs a positive margin to anchor the sales
+    # multiple — a hyper-growth name with negative TTM margin (e.g. INTC)
+    # keeps the honest Watch copy from the margin guard.
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=55.1, current_price=30.0,
+              ttm_net_income=-500_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("no positive TTM net margin" in r for r in v.reasoning)
+
+
+def test_hyper_growth_ps_cap_named():
+    # Batch 74: the 10x P/S cap still binds on the reroute (high-margin
+    # hyper-growth) — the guardrail note must name it and cap confidence
+    # at Medium (batch-45 honesty class).
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=124.7, current_price=190.0,
+              revenue_growth_pct=83.4, ten_year_yield_pct=5.3,
+              ttm_revenue=300_000_000_000.0, ttm_net_income=191_000_000_000.0,
+              shares_outstanding=24_500_000_000.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(10.0)
+    assert v.confidence == "Medium"
+    assert any("above the 10× cap" in r for r in v.reasoning)
+    assert any("outside the PEG model's 40% design range" in r for r in v.reasoning)
+
+
+def test_hyper_growth_revenue_growth_clamp_named():
+    # Batch 74: revenue growth above 40% is clamped by the same fair-P/E
+    # curve — the guardrail note names the binding 40% cap (batch-40/45
+    # honesty class), it doesn't silently drive the multiple.
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=876.9, current_price=100.0,
+              revenue_growth_pct=256.3, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert any("growth 256.3% hit the 40% cap" in r for r in v.reasoning)
+    assert v.confidence == "Medium"
 
 
 # ── Batch 40: honest floor copy when the 8x P/E floor binds on positive growth
@@ -481,14 +536,18 @@ def test_high_growth_cap_plus_rate_copy_honest():
 
 def test_growth_clamped_names_model_maximum():
     # Batch 62: 100% growth is outside the 40% model maximum — the card no
-    # longer clamps and names the cap; it declines with the design-range
-    # copy (mirror the ALL case: +697% Strong Buy on 135% growth).
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.signal == "Watch"
-    assert v.method == "unavailable"
-    assert v.target_price is None
-    assert any("outside the model's 40% design range" in p for p in v.reasoning)
-    assert any("until growth normalizes into the model's range" in p for p in v.reasoning)
+    # longer clamps the PEG multiple and names the cap. Batch 74 reroutes
+    # it to the sales fallback instead of Watch (mirror the ALL case:
+    # +697% Strong Buy on 135% growth was clamped fiction on the PEG path).
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.target_price is not None
+    assert any("outside the PEG model's 40% design range" in p for p in v.reasoning)
+    # Without margin data the reroute cannot price — still honest Watch.
+    v2 = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v2.signal == "Watch"
+    assert v2.method == "unavailable"
 
 
 def test_rate_only_band_copy_honest():
