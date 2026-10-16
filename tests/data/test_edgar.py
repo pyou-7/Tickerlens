@@ -2,6 +2,8 @@
 
 import pytest
 
+import httpx
+
 from tickerlens.data.edgar import EdgarClient
 
 
@@ -101,3 +103,112 @@ def test_submissions_fresh_kwarg_bypasses_cache(tmp_path) -> None:
     client._get = _stub_get({"n": 2})
     assert client.submissions("0000320193", fresh=True) == {"n": 2}
     assert client._get.call_count == 1
+
+
+# ── serve-stale-on-error (batch 76) ──────────────────────────────────────────
+
+
+def _age_cache(client: EdgarClient, url: str, *, suffix: str = ".json") -> None:
+    cache_file = client._cache_file(url)
+    if suffix != ".json":
+        cache_file = cache_file.with_suffix(suffix)
+    old = _time.time() - 3600
+    os.utime(cache_file, (old, old))
+
+
+def _stub_get_raises(exc: Exception = httpx.ConnectTimeout("boom")) -> MagicMock:
+    return MagicMock(side_effect=exc)
+
+
+def test_fetch_json_serves_stale_cache_on_fetch_error(tmp_path) -> None:
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    client._get = _stub_get({"n": 1})
+    url = "https://www.sec.gov/files/company_tickers.json"
+    assert client.fetch_json(url) == {"n": 1}
+
+    _age_cache(client, url)
+
+    client._get = _stub_get_raises()
+    assert client.fetch_json(url) == {"n": 1}  # stale, never raises
+
+
+def test_fetch_json_still_raises_with_no_cache(tmp_path) -> None:
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    client._get = _stub_get_raises()
+    url = "https://www.sec.gov/files/company_tickers.json"
+    with pytest.raises(httpx.ConnectTimeout):
+        client.fetch_json(url)
+
+
+def test_fetch_json_serves_stale_on_http_error_status(tmp_path) -> None:
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    client._get = _stub_get({"n": 1})
+    url = "https://www.sec.gov/files/company_tickers.json"
+    assert client.fetch_json(url) == {"n": 1}
+
+    _age_cache(client, url)
+
+    bad = MagicMock()
+    bad.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "503", request=MagicMock(), response=MagicMock()
+    )
+    client._get = MagicMock(return_value=bad)
+    assert client.fetch_json(url) == {"n": 1}
+
+
+def test_fetch_json_failure_cooldown_skips_live_retry(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(EdgarClient, "FAILURE_COOLDOWN_SECONDS", 300)
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    client._get = _stub_get({"n": 1})
+    url = "https://www.sec.gov/files/company_tickers.json"
+    assert client.fetch_json(url) == {"n": 1}
+
+    _age_cache(client, url)
+
+    client._get = _stub_get_raises()
+    assert client.fetch_json(url) == {"n": 1}
+    assert client._get.call_count == 1
+
+    # Within the cooldown the live fetch is not attempted again: the stale
+    # copy is served straight away (this is what prevented the ~10 min
+    # stall in the batch-75 incident).
+    assert client.fetch_json(url) == {"n": 1}
+    assert client._get.call_count == 1
+
+
+def test_fetch_json_recovers_after_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(EdgarClient, "FAILURE_COOLDOWN_SECONDS", 0)
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    client._get = _stub_get({"n": 1})
+    url = "https://www.sec.gov/files/company_tickers.json"
+    assert client.fetch_json(url) == {"n": 1}
+
+    _age_cache(client, url)
+
+    client._get = _stub_get_raises()
+    assert client.fetch_json(url) == {"n": 1}
+
+    # Once the cooldown lapses the live fetch is retried and success clears
+    # the failure record (next failure goes live again, not to stale-only).
+    client._get = _stub_get({"n": 2})
+    assert client.fetch_json(url) == {"n": 2}
+    assert client._get.call_count == 1
+
+    _age_cache(client, url)
+    client._get = _stub_get_raises()
+    assert client.fetch_json(url) == {"n": 2}
+    assert client._get.call_count == 1
+
+
+def test_fetch_text_serves_stale_on_error(tmp_path) -> None:
+    client = _fresh_client(tmp_path, cache_ttl_seconds=60)
+    text_stub = MagicMock()
+    text_stub.text = "<html>old</html>"
+    client._get = MagicMock(return_value=text_stub)
+    url = "https://www.sec.gov/Archives/edgar/data/320193/index.html"
+    assert client.fetch_text(url) == "<html>old</html>"
+
+    _age_cache(client, url, suffix=".html")
+
+    client._get = _stub_get_raises()
+    assert client.fetch_text(url) == "<html>old</html>"
