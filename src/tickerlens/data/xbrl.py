@@ -328,6 +328,14 @@ EPS_DISTRIBUTED_TAG: dict[Metric, str] = {
 }
 
 
+# Weighted-average share-count tags for the batch-78 NI/shares EPS
+# derivation (annual-only EPS filers).
+SHARES_TAG: dict[Metric, str] = {
+    Metric.EPS_BASIC: "WeightedAverageNumberOfSharesOutstandingBasic",
+    Metric.EPS_DILUTED: "WeightedAverageNumberOfDilutedSharesOutstanding",
+}
+
+
 def _has_distributed_eps_facts(companyfacts: dict[str, Any], metric: Metric) -> bool:
     """True when the filer tags a distributed-EPS component for ``metric``.
 
@@ -1025,7 +1033,7 @@ def quarterly_income_metric(
         _split_adjust_facts([fact for _, facts in candidates for fact in facts])
         if eps_annual_fallback is not None:
             _split_adjust_facts(eps_annual_fallback[1])
-    return _merge_gap_fill(
+    merged = _merge_gap_fill(
         [
             _income_series_for_tag(
                 metric,
@@ -1038,6 +1046,21 @@ def quarterly_income_metric(
             for i, (tag, facts) in enumerate(candidates)
         ]
     )
+    if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+        # Batch 78: filers that tag EPS only in the 10-K (General Dynamics
+        # has no quarterly EarningsPerShareDiluted fact since 2019) leave
+        # every quarter EPS-less. Their 10-Qs do tag quarterly net income
+        # and weighted-average shares, and total EPS is definitionally
+        # NI / shares for the same period, so derive the missing quarters
+        # arithmetically. Filed EPS facts always win (skip_ends); the
+        # two-class guard below keeps the derivation off filers whose
+        # reported EPS allocates income to participating securities.
+        derived = _eps_from_income_shares(
+            companyfacts, fiscal_year_end, metric, {p.end for p in merged}
+        )
+        if derived:
+            merged = _merge_gap_fill([merged, derived])
+    return merged
 
 
 def _income_series_for_tag(
@@ -2065,6 +2088,86 @@ def _derive_q4_income(
             )
         )
     return results
+
+
+def _eps_from_income_shares(
+    companyfacts: dict[str, Any],
+    fiscal_year_end: str | None,
+    metric: Metric,
+    skip_ends: set[dt.date],
+) -> list[PeriodMetric]:
+    """Derive quarterly EPS as net income / weighted-average shares.
+
+    Batch 78: filers that tag EPS only in the 10-K (General Dynamics has no
+    quarterly EarningsPerShareDiluted fact since 2019) leave every quarter
+    EPS-less. Their 10-Qs do tag quarterly net income and weighted-average
+    shares, and total EPS is definitionally NI / shares for the same
+    period, so the missing quarters are derived arithmetically. Never
+    overrides a filed EPS fact (``skip_ends``), and never runs for two-class
+    filers (distributed-EPS facts present), where NI/shares does not equal
+    reported EPS.
+
+    Q4 usually has no quarterly share-count fact (the 10-K tags the annual
+    average), so Q4's share count is the share-month residual
+    (12·FY_avg − 9·9M_avg)/3 — the same construction as _implied_q4_eps.
+    """
+    if _has_distributed_eps_facts(companyfacts, metric):
+        return []
+    shares_tag = SHARES_TAG[metric]
+    try:
+        _, share_facts = _select_tag_facts(
+            companyfacts,
+            (shares_tag,),
+            "shares",
+            staleness_window=_QUARTERLY_FACT_WINDOW,
+            metric_name=metric.value,
+        )
+    except KeyError:
+        return []
+    shares_by_end = {
+        f.end: f
+        for f in _dedup_by_end(share_facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+    }
+    annual_by_end = {
+        f.end: f for f in _dedup_by_end(share_facts, 340, 380, fiscal_year_end)
+    }
+    ytd9m_by_start = _by_start(_dedup_by_end(share_facts, 240, 290, fiscal_year_end))
+    try:
+        ni_series = quarterly_income_metric(
+            companyfacts, Metric.NET_INCOME, fiscal_year_end
+        )
+    except KeyError:
+        return []
+    derived: list[PeriodMetric] = []
+    for ni in ni_series:
+        if ni.end in skip_ends:
+            continue
+        value: float | None = None
+        share = shares_by_end.get(ni.end)
+        if share is not None and share.val:
+            value = ni.value / share.val
+        elif ni.fp == "Q4":
+            # No quarterly share count: residual from the 10-K annual and
+            # 9M averages, matched on the fiscal-year start.
+            annual = annual_by_end.get(ni.end)
+            ytd = ytd9m_by_start.get(annual.start) if annual else None
+            if annual and ytd and annual.val and ytd.val:
+                q4_shares = (12 * annual.val - 9 * ytd.val) / 3
+                if q4_shares > 0:
+                    value = ni.value / q4_shares
+        if value is None:
+            continue
+        derived.append(
+            _metric_value(
+                metric,
+                f"Derived:{shares_tag}/NetIncomeLoss",
+                ni.fy,
+                ni.fp,
+                ni.end,
+                round(value, 4),
+            )
+        )
+    return derived
 
 
 # Implied-share-count coherence tolerances for the Q4 EPS derivation.

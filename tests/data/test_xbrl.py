@@ -526,6 +526,8 @@ def make_companyfacts(
     depreciation_values: list[tuple[str, str, float, int, str]] | None = None,
     disposition_gain_values: list[tuple[str, str, float, int, str]] | None = None,
     impairment_values: list[tuple[str, str, float, int, str]] | None = None,
+    diluted_shares_values: list[tuple[str, str, float, int, str]] | None = None,
+    basic_shares_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -583,6 +585,14 @@ def make_companyfacts(
         )
     if impairment_values is not None:
         us_gaap["ImpairmentOfRealEstate"] = units("USD", impairment_values)
+    if diluted_shares_values is not None:
+        us_gaap["WeightedAverageNumberOfDilutedSharesOutstanding"] = units(
+            "shares", diluted_shares_values
+        )
+    if basic_shares_values is not None:
+        us_gaap["WeightedAverageNumberOfSharesOutstandingBasic"] = units(
+            "shares", basic_shares_values
+        )
     return {"facts": {"us-gaap": us_gaap}}
 
 
@@ -3286,3 +3296,119 @@ def test_is_bank_insurer_sic_boundaries() -> None:
     assert not _is_bank_insurer_sic(6798)
     assert not _is_bank_insurer_sic(None)
     assert not _is_bank_insurer_sic("n/a")
+
+
+def _gd_like_companyfacts(**overrides) -> dict:
+    """General-Dynamics-shaped facts: EPS tagged only in the 10-K (annual),
+    while 10-Qs tag quarterly net income and weighted-average shares."""
+    ni = [
+        ("2025-01-01", "2025-03-31", 990_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 1_010_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 1_060_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 3_060_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 4_200_000_000, 2025, "FY"),
+    ]
+    diluted_shares = [
+        ("2025-01-01", "2025-03-31", 270_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 270_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 273_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 271_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 272_000_000, 2025, "FY"),
+    ]
+    basic_shares = [
+        ("2025-01-01", "2025-03-31", 268_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 268_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 271_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 269_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 270_000_000, 2025, "FY"),
+    ]
+    kwargs = dict(
+        revenue_values=[
+            ("2025-01-01", "2025-03-31", 13_480_000_000, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 13_040_000_000, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 12_910_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 53_810_000_000, 2025, "FY"),
+        ],
+        net_income_values=ni,
+        basic_eps_values=[("2025-01-01", "2025-12-31", 15.90, 2025, "FY")],
+        diluted_eps_values=[("2025-01-01", "2025-12-31", 15.45, 2025, "FY")],
+        opcf_values=[],
+        capex_values=[],
+        diluted_shares_values=diluted_shares,
+        basic_shares_values=basic_shares,
+    )
+    kwargs.update(overrides)
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_derived_from_ni_over_shares_when_no_quarterly_eps_facts() -> None:
+    # Regression (batch 78): General Dynamics tags EarningsPerShareDiluted
+    # only in the 10-K (no quarterly fact since 2019), so every quarter was
+    # EPS-less. Quarterly NI / quarterly weighted-average shares derives
+    # the missing quarters; Q4 uses the share-month residual since the 10-K
+    # tags only the annual share average.
+    companyfacts = _gd_like_companyfacts()
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2, q3, q4 = (dt.date(2025, m, d) for m, d in [(3, 31), (6, 30), (9, 30), (12, 31)])
+    assert diluted[q1].value == round(990_000_000 / 270_000_000, 4) == 3.6667
+    assert diluted[q2].value == round(1_010_000_000 / 270_000_000, 4) == 3.7407
+    assert diluted[q3].value == round(1_060_000_000 / 273_000_000, 4) == 3.8828
+    # Q4 NI 1.14B over residual shares (12*272M − 9*271M)/3 = 275M
+    assert diluted[q4].value == round(1_140_000_000 / 275_000_000, 4) == 4.1455
+    assert diluted[q4].source_tag == (
+        "Derived:WeightedAverageNumberOfDilutedSharesOutstanding/NetIncomeLoss"
+    )
+    assert basic[q1].value == round(990_000_000 / 268_000_000, 4) == 3.694
+    assert basic[q4].value == round(1_140_000_000 / 273_000_000, 4) == 4.1758
+    # Derived FY2025 quarters reconcile to the filed annual EPS (4dp rounding)
+    assert abs(sum(diluted[e].value for e in (q1, q2, q3, q4)) - 15.45) < 0.02
+
+
+def test_eps_ni_shares_derivation_never_overrides_filed_eps() -> None:
+    # A filed quarterly EPS fact always wins; the derivation only fills ends
+    # the chain lacks.
+    companyfacts = _gd_like_companyfacts(
+        diluted_eps_values=[("2025-01-01", "2025-03-31", 3.70, 2025, "Q1")],
+    )
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1 = dt.date(2025, 3, 31)
+    q2 = dt.date(2025, 6, 30)
+    assert diluted[q1].value == 3.70
+    assert diluted[q1].source_tag == "EarningsPerShareDiluted"
+    assert diluted[q2].value == 3.7407
+    assert diluted[q2].source_tag.startswith("Derived:")
+
+
+def test_eps_ni_shares_derivation_skipped_for_two_class_filers() -> None:
+    # A filer tagging distributed-EPS components splits total EPS into
+    # pieces; NI/shares does not equal reported EPS, so the derivation
+    # stays off and the quarter stays honestly blank.
+    companyfacts = _gd_like_companyfacts(
+        diluted_eps_values=[("2025-01-01", "2025-03-31", 4.23, 2025, "Q1")],
+        distributed_diluted_eps_values=[
+            ("2025-01-01", "2025-03-31", 1.10, 2025, "Q1"),
+        ],
+    )
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert diluted[dt.date(2025, 3, 31)].value == 4.23  # filed fact kept
+    assert all(not m.source_tag.startswith("Derived:") for m in diluted.values())
+    assert dt.date(2025, 6, 30) not in diluted
+
+
+def test_eps_ni_shares_derivation_absent_without_share_facts() -> None:
+    # No weighted-average share facts (Visa/Berkshire shape): nothing to
+    # derive from, quarters stay honestly blank instead of fabricated.
+    companyfacts = _gd_like_companyfacts(
+        diluted_shares_values=None, basic_shares_values=None
+    )
+    assert quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231") == []
+    assert quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231") == []
