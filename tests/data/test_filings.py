@@ -2,6 +2,7 @@ from datetime import date
 
 from tickerlens.data.filings import (
     AnnualFiling,
+    _html_to_text,
     extract_risk_factors,
     filing_doc_url,
     latest_annual_filing,
@@ -91,6 +92,90 @@ def test_extract_risk_factors_stops_at_cybersecurity_item_1c() -> None:
     result = extract_risk_factors(html)
     assert result is not None
     assert "security program" not in result
+
+
+def test_extract_risk_factors_rescues_span_split_heading() -> None:    # DFIN-prepared 10-Ks (MSFT, BRK.B, MCD, INTC, ...) split the real heading
+    # across adjacent <span>s with no whitespace: "RIS</span><span>K FACTORS".
+    # The old tag->space join corrupted this to "RIS K FACTORS", so the real
+    # heading never matched and only the TOC stub survived -> None.
+    html = f"""
+    <html><body>
+      <table>
+        <tr><td><a href="#item_1a_risk_factors">Risk Factors</a></td><td>14</td></tr>
+        <tr><td>Item 1B. Unresolved Staff Comments</td><td>29</td></tr>
+      </table>
+      <p id="item_1a_risk_factors"><span>ITEM 1A. RIS</span><span>K FACTORS</span></p>
+      <p>{_REAL_BODY}</p>
+      <p><span>ITEM 1B. UNRESOLVED STAFF COMMENTS</span></p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert result.strip() != "14"
+
+
+def test_extract_risk_factors_matches_em_dash_heading_separator() -> None:
+    # Dell's 10-K heads the section "ITEM 1A — RISK FACTORS" (em dash); the
+    # separator class must cover it or only the TOC stub matches -> None.
+    body = "We face material operational and financial risks. " * 20
+    html = (
+        "<body><table><tr><td>Item 1A. Risk Factors</td><td>16</td></tr></table>"
+        f"<p>ITEM 1A — RISK FACTORS</p><p>{body}</p>"
+        "<p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p></body>"
+    )
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "material operational and financial risks" in result
+
+
+def test_extract_risk_factors_falls_back_to_bare_caps_heading() -> None:
+    # McDonald's/Citi style: no "Item 1A" prefix anywhere, one standalone
+    # all-caps "RISK FACTORS" line heads the real section.
+    body = "Our business results are subject to a variety of risks. " * 20
+    html = (
+        "<body><table><tr><td>Item 1A Risk Factors</td><td>27</td></tr></table>"
+        f"<p>Some Company 2025 Annual Report 26</p><p>RISK FACTORS</p><p>{body}</p>"
+        "<p>Item 1B. Unresolved Staff Comments</p></body>"
+    )
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "subject to a variety of risks" in result
+
+
+def test_extract_risk_factors_ignores_caps_running_headers() -> None:
+    # Honeywell style: "RISK FACTORS" repeats as a running page header — the
+    # fallback must not fire on ambiguity.
+    body = "We face material operational and financial risks. " * 4  # < floor
+    headers = "<p>RISK FACTORS</p>".join(f"<p>page {i} filler</p>" for i in range(6))
+    html = f"<body>{headers}<p>{body}</p></body>"
+    assert extract_risk_factors(html) is None
+
+
+def test_extract_risk_factors_no_fallback_when_real_heading_is_cross_ref() -> None:
+    # BNY/WFC style: the real "ITEM 1A. RISK FACTORS" heading matched but the
+    # section is only an incorporation-by-reference stub — the fallback must
+    # not second-guess the document's own structure, even when the lone caps
+    # line heads a long section that would pass the floor on its own.
+    long_body = "See our annual report for the full discussion of risks. " * 20
+    html = (
+        "<body><p>ITEM 1A. RISK FACTORS</p>"
+        "<p>The information required by this Item is set forth in our Annual Report.</p>"
+        "<p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p><p>None.</p>"
+        f"<p>RISK FACTORS</p><p>{long_body}</p>"
+        "<p>ITEM 2. PROPERTIES</p></body>"
+    )
+    assert extract_risk_factors(html) is None
+
+
+def test_html_to_text_concatenates_adjacent_inline_spans() -> None:
+    # Adjacent inline elements with no whitespace render concatenated in a
+    # browser; the linearizer must not invent a space between them.
+    assert _html_to_text("<p>RIS</span><span>K FACTORS</p>") == "RISK FACTORS"
+    # Genuine whitespace between elements is preserved.
+    assert _html_to_text("<p><span>Q3</span> <span>revenue</span></p>") == "Q3 revenue"
+    # Non-inline tags still separate content (table cells must not glue).
+    assert _html_to_text("<td>foo</td><td>bar</td>") == "foo bar"
 
 
 def test_latest_annual_filing_picks_most_recent_10k() -> None:

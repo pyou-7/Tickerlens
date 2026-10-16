@@ -35,7 +35,9 @@ class AnnualFiling:
 # The real Item 1A section is bounded below by the next item heading. Different
 # filers jump to 1B (Unresolved Staff Comments) or straight to 2 (Properties);
 # some recent filings also use "1C" (Cybersecurity).
-_RISK_START_RE = re.compile(r"item\s*1a\.?\s*[:.\-–]*\s*risk\s+factors", re.IGNORECASE)
+# The separator class covers the heading punctuation filers use between "1A"
+# and "Risk Factors": Dell renders "ITEM 1A — RISK FACTORS" (em dash).
+_RISK_START_RE = re.compile(r"item\s*1a\.?\s*[:.\-–—]*\s*risk\s+factors", re.IGNORECASE)
 _RISK_END_RE = re.compile(
     r"item\s*1b\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1c\.?\s*[:.\-–]*\s*cybersecurity"
@@ -47,6 +49,18 @@ _RISK_END_RE = re.compile(
 # certainly a table-of-contents entry, not the real section — treat as "not
 # found" rather than surface a stub. Real Item 1A sections run many KB.
 _MIN_SECTION_CHARS = 500
+
+# Primary "Item 1A ... Risk Factors" matches shorter than this are TOC stubs
+# (a page number before the next item marker). When no primary candidate even
+# reaches this length, the heading wasn't found in Item-1A form and the bare
+# all-caps "RISK FACTORS" fallback may apply; a longer-but-subfloor section
+# means the real heading matched and holds only a cross-reference
+# (incorporation by reference — honestly None, never second-guessed).
+_MIN_TOC_STUB_CHARS = 50
+
+# Bare all-caps section heading used by filers with no "Item 1A" prefix
+# (McDonald's, Citi). Matched as a standalone line only.
+_RISK_CAPS_LINE_RE = re.compile(r"^RISK FACTORS$", re.MULTILINE)
 
 # Below this length the document is almost certainly not a real press release
 # (an error page, a bare 8-K shell, or a stub) — treat as "not found".
@@ -167,13 +181,32 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     text = _html_to_text(document_html)
 
     best_section: str | None = None
+    longest_primary = 0
     for match in _RISK_START_RE.finditer(text):
         start = match.end()
         end_match = _RISK_END_RE.search(text, start)
         end = end_match.start() if end_match else len(text)
         section = text[start:end].strip(" .:-–")
+        longest_primary = max(longest_primary, len(section))
         if best_section is None or len(section) > len(best_section):
             best_section = section
+
+    if (best_section is None or len(best_section) < _MIN_SECTION_CHARS) and (
+        longest_primary < _MIN_TOC_STUB_CHARS
+    ):
+        # Fallback: some filers head the section with a bare "RISK FACTORS"
+        # line and no "Item 1A" prefix (McDonald's, Citi). Only when exactly
+        # one standalone all-caps line exists — several means running page
+        # headers (Honeywell), where a positional guess would misfire. The
+        # longest_primary guard keeps this from second-guessing documents
+        # whose real Item 1A heading matched but holds only a cross-reference
+        # (BNY/WFC incorporate Item 1A by reference — correctly None).
+        caps = list(_RISK_CAPS_LINE_RE.finditer(text))
+        if len(caps) == 1:
+            start = caps[0].end()
+            end_match = _RISK_END_RE.search(text, start)
+            end = end_match.start() if end_match else len(text)
+            best_section = text[start:end].strip(" .:-–")
 
     if best_section is None or len(best_section) < _MIN_SECTION_CHARS:
         logger.info("Risk Factors section not confidently located in filing")
@@ -352,6 +385,19 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
+    # Inline formatting tags carry no whitespace of their own: adjacent inline
+    # elements with no whitespace between them render concatenated in a
+    # browser. Replacing them with a space corrupts words that filers split
+    # across <span>s — DFIN-prepared 10-Ks render "ITEM 1A. RISK FACTORS" as
+    # "RIS</span><span>K FACTORS", which the old space-join turned into
+    # "RIS K FACTORS" and hid the real Item 1A heading (TOC-only match, so
+    # extract_risk_factors returned None for MSFT/GE/MCD/INTC/BRK.B/...).
+    text = re.sub(
+        r"(?i)</?(?:span|a|b|i|em|strong|u|font|sup|sub|small|big|label|abbr|"
+        r"acronym|cite|code|dfn|kbd|samp|var|mark|q|s|strike|tt|wbr)\b[^>]*>",
+        "",
+        text,
+    )
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = _html.unescape(text).replace("\xa0", " ")
     # Zero-width / BOM characters are invisible junk that some filers' exhibits
