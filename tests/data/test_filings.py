@@ -501,3 +501,119 @@ def test_extract_highlights_ignores_zwsp_and_furnished_parenthetical() -> None:
     assert "Furnished herewith" not in hl
     assert "Media Inquiries" not in hl
     assert zwsp not in hl
+
+
+def test_extract_risk_factors_matches_legacy_parenthesized_item_1a() -> None:
+    # Halliburton style: legacy "Item 1(a)" numbering as a full heading line,
+    # closed below by "Item 1(b)". The doc also carries two traps that must not
+    # match: a TOC entry with "Item 1(a)." and "Risk Factors" on separate lines,
+    # and a mid-sentence cross-reference ("see Part I, Item 1(a). Risk Factors").
+    html = f"""
+    <html><body>
+      <p>Item 1(a).</p><p>Risk Factors</p><p>9</p>
+      <p>Item 1. Business. We provide services worldwide.</p>
+      <p>For information related to environmental matters, see Notes to Consolidated
+      Financial Statements, Note 11 and Part I, Item 1(a). Risk Factors.</p>
+      <p>Item 1(a). Risk Factors.</p>
+      <p>{_REAL_BODY}</p>
+      <p>Item 1(b). Unresolved Staff Comments.</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    # Bounded below by the legacy 1(b) end marker.
+    assert "None." not in result
+    # The TOC split-lines entry and the mid-sentence cross-reference must not
+    # win longest-section-wins: no Business or cross-ref text may bleed in.
+    assert "provide services worldwide" not in result
+    assert "environmental matters" not in result
+
+
+def test_extract_risk_factors_matches_legacy_item_1a_spaced_parens() -> None:
+    # ICE style: all-caps legacy numbering, with a space inside the parens of
+    # the closing marker ("ITEM 1 (B). UNRESOLVED STAFF COMMENTS").
+    html = f"""
+    <html><body>
+      <p>ITEM 1(A). RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 1 (B). UNRESOLVED STAFF COMMENTS</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert "None." not in result
+
+
+def test_extract_risk_factors_matches_runin_heading() -> None:
+    # GE Aerospace style: "RISK FACTORS." directly followed by prose on the
+    # same line — no standalone heading line, no "Item 1A" prefix.
+    intro = "The following discussion of the material factors that may make an investment speculative or risky. "
+    html = f"""
+    <html><body>
+      <p>RISK FACTORS. {intro}{_REAL_BODY}</p>
+      <p>STRATEGIC RISKS. Strategic risk relates to business plans. {_REAL_BODY}</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    # The section starts after the run-in heading, with the heading consumed.
+    assert result.startswith("The following discussion")
+    assert "material factors that may make an investment" in result
+
+
+def test_extract_risk_factors_falls_back_to_title_case_heading() -> None:
+    # Intel / Morgan Stanley style: title-case "Risk Factors" with no item
+    # prefix. The TOC entry (followed by a page number) and the running page
+    # headers (also followed by page numbers) must be excluded; only the real
+    # heading — followed by prose — is viable.
+    html = f"""
+    <html><body>
+      <p>Risk Factors</p><p>37</p>
+      <p>MD&amp;A. Results of operations.</p>
+      <p>Risk Factors</p>
+      <p>{_REAL_BODY}</p>
+      <p>Risk Factors</p><p>38</p>
+      <p>We are in a highly competitive and rapidly changing industry. {_REAL_BODY}</p>
+      <p>Item 1B. Unresolved Staff Comments</p><p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert "None." not in result
+    # The TOC page number must not leak into the extracted section.
+    assert "Results of operations" not in result
+
+
+def test_extract_risk_factors_longest_caps_section_beats_running_headers() -> None:
+    # Honeywell style: the real all-caps heading plus identical running page
+    # headers later in the section — all followed by prose. Longest-section-wins
+    # picks the real (earliest) heading, not a mid-section fragment.
+    html = f"""
+    <html><body>
+      <p>TABLE OF CONTENTS</p>
+      <p>RISK FACTORS</p>
+      <p>Our business results are subject to many risks. {_REAL_BODY}</p>
+      <p>30 Honeywell International Inc.</p>
+      <p>TABLE OF CONTENTS</p>
+      <p>RISK FACTORS</p>
+      <p>Regulatory and economic changes may affect our flexibility. {_REAL_BODY}</p>
+      <p>ITEM 1B. Unresolved Staff Comments</p><p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "Our business results are subject to many risks" in result
+    assert "Regulatory and economic changes" in result
+    assert "None." not in result
+
+
+def test_extract_risk_factors_ignores_title_case_toc_entry() -> None:
+    # A title-case "Risk Factors" TOC entry followed by a page number is not a
+    # viable fallback candidate — with no real heading, the answer stays None.
+    html = "<html><body><p>Risk Factors</p><p>37</p><p>Item 1. Business. We make things.</p></body></html>"
+    assert extract_risk_factors(html) is None

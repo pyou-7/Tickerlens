@@ -37,9 +37,18 @@ class AnnualFiling:
 # some recent filings also use "1C" (Cybersecurity).
 # The separator class covers the heading punctuation filers use between "1A"
 # and "Risk Factors": Dell renders "ITEM 1A — RISK FACTORS" (em dash).
-_RISK_START_RE = re.compile(r"item\s*1a\.?\s*[:.\-–—]*\s*risk\s+factors", re.IGNORECASE)
+_RISK_START_RE = re.compile(
+    r"item\s*1a\.?\s*[:.\-–—]*\s*risk\s+factors"
+    # Legacy parenthesized numbering, matched as a full heading line only:
+    # horizontal whitespace (never newlines), so the TOC's split "Item 1(a)."
+    # / "Risk Factors" lines and mid-sentence cross-references ("see Part I,
+    # Item 1(a). Risk Factors") cannot match. (Halliburton, ICE.)
+    r"|^[ \t]*item[ \t]*1[ \t]*\([ \t]*a[ \t]*\)\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _RISK_END_RE = re.compile(
     r"item\s*1b\.?\s*[:.\-–]*\s*unresolved"
+    r"|item\s*1\s*\(\s*b\s*\)\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1c\.?\s*[:.\-–]*\s*cybersecurity"
     r"|item\s*2\.?\s*[:.\-–]*\s*properties",
     re.IGNORECASE,
@@ -61,6 +70,30 @@ _MIN_TOC_STUB_CHARS = 50
 # Bare all-caps section heading used by filers with no "Item 1A" prefix
 # (McDonald's, Citi). Matched as a standalone line only.
 _RISK_CAPS_LINE_RE = re.compile(r"^RISK FACTORS$", re.MULTILINE)
+
+# Bare title-case standalone heading, same no-prefix situation (Intel,
+# Morgan Stanley). Matched as a standalone line only; the prose-follow check
+# in extract_risk_factors excludes TOC entries and running page headers.
+_RISK_TITLE_LINE_RE = re.compile(r"^Risk Factors$", re.MULTILINE)
+
+# Run-in heading: "RISK FACTORS." directly followed by prose on the same line
+# (GE Aerospace: "RISK FACTORS. The following discussion of the material
+# factors..."). The uppercase lookahead keeps table fragments out.
+_RISK_RUNIN_RE = re.compile(r"^[ \t]*RISK FACTORS[.:][ \t]+(?=[A-Z])", re.MULTILINE)
+
+# A standalone heading-line candidate is only viable when the next non-blank
+# line looks like body prose. TOC entries and running page headers are
+# followed by page numbers or item labels ("37", "1A 13") — short fragments,
+# never prose. A real section heading is followed by its opening paragraph.
+_PROSE_FOLLOW_MIN_CHARS = 20
+
+
+def _followed_by_prose(text: str, pos: int) -> bool:
+    for line in text[pos:].splitlines():
+        stripped = line.strip()
+        if stripped:
+            return len(stripped) >= _PROSE_FOLLOW_MIN_CHARS
+    return False
 
 # Below this length the document is almost certainly not a real press release
 # (an error page, a bare 8-K shell, or a stub) — treat as "not found".
@@ -194,19 +227,31 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     if (best_section is None or len(best_section) < _MIN_SECTION_CHARS) and (
         longest_primary < _MIN_TOC_STUB_CHARS
     ):
-        # Fallback: some filers head the section with a bare "RISK FACTORS"
-        # line and no "Item 1A" prefix (McDonald's, Citi). Only when exactly
-        # one standalone all-caps line exists — several means running page
-        # headers (Honeywell), where a positional guess would misfire. The
-        # longest_primary guard keeps this from second-guessing documents
-        # whose real Item 1A heading matched but holds only a cross-reference
-        # (BNY/WFC incorporate Item 1A by reference — correctly None).
-        caps = list(_RISK_CAPS_LINE_RE.finditer(text))
-        if len(caps) == 1:
-            start = caps[0].end()
+        # Fallback: filers that head the section with no "Item 1A" prefix.
+        # Candidates are bare all-caps lines (McDonald's, Citi), bare
+        # title-case lines (Intel, Morgan Stanley), and run-in "RISK FACTORS."
+        # headings (GE Aerospace). A standalone-line candidate must be followed
+        # by prose — this excludes TOC entries and running page headers, which
+        # are followed by page numbers or item labels. The longest resulting
+        # section wins, mirroring the primary path: running headers later in
+        # the section yield shorter sections than the real heading (Honeywell).
+        # The two guards above keep this from second-guessing documents whose
+        # real Item 1A heading matched but holds only a cross-reference
+        # (BNY/WFC incorporate Item 1A by reference — honestly None).
+        viable: list[Any] = [
+            m
+            for m in list(_RISK_CAPS_LINE_RE.finditer(text))
+            + list(_RISK_TITLE_LINE_RE.finditer(text))
+            if _followed_by_prose(text, m.end())
+        ]
+        viable.extend(_RISK_RUNIN_RE.finditer(text))
+        for match in viable:
+            start = match.end()
             end_match = _RISK_END_RE.search(text, start)
             end = end_match.start() if end_match else len(text)
-            best_section = text[start:end].strip(" .:-–")
+            section = text[start:end].strip(" .:-–")
+            if best_section is None or len(section) > len(best_section):
+                best_section = section
 
     if best_section is None or len(best_section) < _MIN_SECTION_CHARS:
         logger.info("Risk Factors section not confidently located in filing")
