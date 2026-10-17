@@ -1605,3 +1605,19 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Carried follow-ups rechecked:** XOM self-heal (blocked on FY2026 10-K, ~Feb 2027 — companyfacts NI frames still end CY2026Q1); V/BRK.B quarterly EPS tagging still not resumed; SPG dominant-quarter self-heal waits on the Q4-2026 filing.
 
 **Tests:** none added; suite 712 green. **Blast radius:** none (docs + validation log only). No template change.
+
+## Batch 82 (2026-10-17) — round-28 seeds; seed-time pending-filing note fix
+
+**Seeds:** ABT, AFL, ANET, COR, HLT, MPC — all 8 quarters, clean. DB at 215 companies.
+
+**Finding:** Deep audit surfaced zero XBRL data defects but one real pipeline gap. Every suspicious value verified against raw companyfacts (CIK-level) as the filer's own number: MPC Q2-2026 EPS 17.73 (own 10-Q fact, one-time gain); COR Q2-FY2026 EPS 8.40 (own 10-Q fact; Cencora's lumpy GAAP quarters are filer-real); COR's absent `Liabilities` tag is correctly covered by `_derive_missing_balance_sheet` (stored A = L + E exactly); ANET's Dec-2024 4:1 split rescaled exactly once (2.33 → 0.58 restated), confirming the batch-80 share-basis classification on a new real filer.
+
+**Defect — seed-time pending-filing note missing:** ABT's Q2-FY2026 10-Q was filed 2026-07-28 but companyfacts has no Q2 facts yet (EDGAR ingestion lag, ~2.5 months by design), so the quarter is legitimately absent — yet `fetch_and_persist` never called `_update_pending_filing_note`, leaving the freshly seeded company with no amber honesty note until a page view ran the freshness check. The batch-53 refresh path had the note; the seed path didn't.
+
+**Fix:** `fetch_and_persist` now calls `self._update_pending_filing_note(ticker, cik, submissions)` after the seed commit — mirrors the refresh path, never raises, reuses the just-warmed companyfacts cache. ABT re-seeded live: note renders on the overview page ("Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet — showing Q1 FY2026…").
+
+**Tests:** 2 new hermetic tests in `tests/services/test_pending_filing_note.py` (ABT-shaped seed sets the note; current seed leaves it clear); new test verified to fail pre-fix. `test_fetch_and_persist_pull_uses_live_edgar` updated to `assert_any_call(fresh=True)` — the seed-time note re-reads the warmed TTL cache after the deliberate fresh pull; the "deliberate pull bypasses cache" intent is unchanged. Suite 714 green, `git diff --check` clean. Live on :8123 (no restart needed — backend-only, no template change): 8/8 routes 200.
+
+**Blast radius:** `src/tickerlens/services/financials.py` (one call in `fetch_and_persist`), tests. No valuation, briefing, peers, calendar, or template changes.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (companyfacts NI frames end CY2026Q1; heals on FY2026 10-K, Feb 2027); V/BRK.B quarterly EPS tagging not resumed (still unfixable from the feed); SPG dominant-quarter self-heal waits on Q4-2026 filing; pending-filing cohort at 14 (prior 13 + ABT now honestly noted).
