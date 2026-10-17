@@ -2920,7 +2920,10 @@ def test_fetch_and_persist_pull_uses_live_edgar(
     svc.fetch_and_persist("AAPL", periods=4, session=session)
 
     mock_edgar.submissions.assert_called_with("0000320193", fresh=True)
-    mock_edgar.companyfacts.assert_called_with("0000320193", fresh=True)
+    # Batch 82: the seed-time pending-filing note re-reads the (just-warmed)
+    # TTL cache after the pull, so the deliberate pull itself must still be
+    # the fresh one — assert it happened, not that it was the last call.
+    mock_edgar.companyfacts.assert_any_call("0000320193", fresh=True)
 
 
 # ── quarters_count / partial-year disclosure (batch 39) ───────────────────────

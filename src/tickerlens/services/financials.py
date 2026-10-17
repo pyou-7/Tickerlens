@@ -856,6 +856,14 @@ class FinancialsService:
             if session is None and self._session is None:
                 db.close()
 
+        # Batch 82: the pull just settled — (re)compute the "filed but EDGAR
+        # hasn't ingested" note at seed time too, so a newly seeded company
+        # whose latest filing lags in companyfacts (e.g. ABT's Q2-2026 10-Q,
+        # filed 2026-07-28, still absent from the feed) shows the honesty note
+        # without waiting for a page-view-triggered freshness check. Mirrors
+        # the refresh path; never raises.
+        self._update_pending_filing_note(ticker, cik, submissions)
+
         return rows
 
     def refresh_financials_if_stale(self, ticker: str) -> bool:

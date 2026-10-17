@@ -658,3 +658,77 @@ def test_vs_page_omits_note_when_none() -> None:
     # The amber note block is the only amber-950/40 on the vs page (the Hold
     # signal badge uses amber-950/50).
     assert "amber-950/40" not in html
+
+
+# ── seed-time note (batch 82) ─────────────────────────────────────────────────
+
+def _seed_facts(end: str) -> dict:
+    """companyfacts with one quarter of duration facts ending ``end``.
+
+    Mirrors the minimal hermetic fixture in test_financials.py so the seed
+    path extracts exactly one stored quarter through ``end``.
+    """
+    fact = {
+        "start": (dt.date.fromisoformat(end) - dt.timedelta(days=90)).isoformat(),
+        "end": end,
+        "fy": 2026,
+        "fp": "Q1",
+        "form": "10-Q",
+        "filed": "2026-04-29",
+    }
+    usd = lambda val: {"units": {"USD": [{**fact, "val": val}]}}  # noqa: E731
+    usdps = lambda val: {"units": {"USD/shares": [{**fact, "val": val}]}}  # noqa: E731
+    return {"facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": usd(95_000),
+        "NetIncomeLoss": usd(24_780),
+        "EarningsPerShareBasic": usdps(1.65),
+        "EarningsPerShareDiluted": usdps(1.64),
+        "NetCashProvidedByUsedInOperatingActivities": usd(30_300),
+        "PaymentsToAcquirePropertyPlantAndEquipment": usd(800),
+    }}}
+
+
+def _seed_submissions(*triples: tuple[str, str, str]) -> dict:
+    """(form, filingDate, reportDate) triples -> submissions feed w/ identity."""
+    return {
+        "name": "Abbott Laboratories",
+        "tickers": ["ABT"],
+        "fiscalYearEnd": "1231",
+        "filings": {"recent": _subs(*triples)["filings"]["recent"]},
+    }
+
+
+def _seed_svc(session: Session, submissions: dict, companyfacts: dict) -> FinancialsService:
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000001800"
+    mock_edgar.submissions.return_value = submissions
+    mock_edgar.companyfacts.return_value = companyfacts
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_fetch_and_persist_sets_pending_note_at_seed_time(session: Session) -> None:
+    # Batch 82 (ABT shape): the seed pull ingests only through Q1 FY2026
+    # while a Q2 FY2026 10-Q (filed 2026-07-28) sits in submissions with no
+    # facts in companyfacts yet. The seed must set the amber honesty note
+    # itself — previously the page stayed note-less until a page view ran
+    # the freshness check.
+    subs = _seed_submissions(
+        ("10-Q", "2026-07-28", "2026-06-30"),
+        ("10-Q", "2026-04-29", "2026-03-31"),
+    )
+    svc = _seed_svc(session, subs, _seed_facts("2026-03-31"))
+
+    svc.fetch_and_persist("ABT", periods=8, session=session, enrich=False)
+
+    note = session.get(Company, "0000001800").pending_filing_note
+    assert note is not None and "Q2 FY2026" in note
+
+
+def test_fetch_and_persist_leaves_note_clear_when_current(session: Session) -> None:
+    # No pending filing: the seed must not invent a note.
+    subs = _seed_submissions(("10-Q", "2026-04-29", "2026-03-31"))
+    svc = _seed_svc(session, subs, _seed_facts("2026-03-31"))
+
+    svc.fetch_and_persist("ABT", periods=8, session=session, enrich=False)
+
+    assert session.get(Company, "0000001800").pending_filing_note is None
