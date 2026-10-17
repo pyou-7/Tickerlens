@@ -1548,3 +1548,24 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Alternatives considered:** storing the annual EPS fact on the Q4 row (rejected — would misread as quarterly EPS); extending the continuing-ops fallback (rejected — GD's 10-Qs tag no per-share facts at all, nothing to extend); leaving the quarters blank (rejected — the exact inputs sit in the same filings, and blank EPS degrades the valuation card to unavailable).
 
 **Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if their tagging resumes).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 79 (2026-10-16): fresh-ticker hunt round 25 — GIS/MKC/SJM/CLX/CPB/TSN seeded, clean audit
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences (GIS May FY; MKC Nov FY; SJM Apr FY; CLX Jun FY; CPB Jul FY; TSN Sep FY). Balance-sheet identities hold on all 48 quarters. Descriptions present for all 6, no pending-filing notes, EPS complete on every row. DB at 197.
+
+**Decision:** no code change — the round found nothing to fix. This is a deliberate outcome, not a gap: the three suspicious quarters were each verified against raw companyfacts and proved genuine, which is exactly what the audit is for (batch-45/69 precedent). Recording the forensics keeps the pattern reusable.
+
+**Why the audit went deep on these three:**
+- MKC FY2026Q1 EPS $3.77 against otherwise ~$0.4–0.8 quarters: the filed 10-Q fact for end 2026-02-28 is 3.77, and NI $1,016.2M / 269.4M diluted shares = 3.77 — coherent, a real one-off gain quarter.
+- GIS FY2026Q4 EPS −$3.74: the 10-K tags TWO EPS facts for end 2026-05-31 — −$0.16 with frame=CY2025 (the FY2026 annual fact) and −$3.74 with frame=CY2026Q2 (the Q4 quarter fact). Frame-aware selection chose the quarterly fact; the four FY2026 quarters sum to the filed annual NI −$87.6M to the dollar. The dual-frame shape is the pipeline's home turf (batch-51/61) and it held.
+- SJM FY2026Q3 EPS −$6.79: two NI facts for end 2026-01-31 — −$526.8M with start 2025-05-01 (9M YTD) and −$724.2M with start 2025-11-01 (the 3-month quarter). The quarter-length fact was chosen; stored Q1+Q2+Q3 NI sums to the filed 9M −$526.8M exactly. The −$6.79 quarter is a genuine impairment quarter (same shape as SJM's FY2025Q3/Q4 −$6.22/−$6.84 rows).
+
+**Benign warnings, pinned for the record:** TSN's seed log said "No XBRL facts for total_liabilities" and "No XBRL facts for eps_basic". Neither is a defect. Tyson tags no plain `Liabilities` concept at all (only granular ones); the composite chain (Current + Noncurrent) derives liabilities at a 0.000% identity gap — the warning is `_safe` noise before the composite fill. eps_basic is filled from diluted EPS by the designed `_fill_missing_eps_basic` path (documented whole-chain selection), not fabricated. No action.
+
+**Detection boundary / honesty boundaries:** unchanged. Valuation outputs on the new seeds were spot-checked rather than assumed: CPB's Strong Sell is genuine (TTM diluted EPS $1.36, −32.3% YoY → 8× floor, rationale discloses the guardrail hit and caps confidence at Medium); GIS's Watch/UNAVAILABLE is the batch-62 design-envelope guard behaving as designed.
+
+**Alternatives considered:** inventing a code task to fill the batch (rejected — the loop's rule: if a batch finds nothing to improve, say so); re-running the dual-frame forensics as a unit test (rejected — the shapes are already covered by the batch-51/61/78 frame-selection tests; these are data confirmations, not code paths).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if tagging resumes).
