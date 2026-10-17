@@ -617,3 +617,44 @@ def test_extract_risk_factors_ignores_title_case_toc_entry() -> None:
     # viable fallback candidate — with no real heading, the answer stays None.
     html = "<html><body><p>Risk Factors</p><p>37</p><p>Item 1. Business. We make things.</p></body></html>"
     assert extract_risk_factors(html) is None
+
+
+def test_extract_risk_factors_matches_dotted_item_1a() -> None:
+    # Clorox style: dotted "ITEM 1.A. RISK FACTORS" standalone heading line,
+    # closed below by dotted "ITEM 1.B. UNRESOLVED STAFF COMMENTS". The dotted
+    # alternative is full-line anchored like the legacy parenthesized one, so
+    # a mid-sentence "see Item 1.A. Risk Factors" cross-reference cannot match
+    # and steal longest-section-wins.
+    html = f"""
+    <html><body>
+      <p>For more information on risks from cybersecurity threats, see
+      &ldquo;Risk Factors&rdquo; in Item 1.A. of this Annual Report on Form 10-K.</p>
+      <p>ITEM 1.A. RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 1.B. UNRESOLVED STAFF COMMENTS</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    # Bounded below by the dotted 1.B end marker.
+    assert "None." not in result
+    # The mid-sentence cross-reference must not win longest-section-wins.
+    assert "cybersecurity threats" not in result
+
+
+def test_extract_risk_factors_dotted_heading_requires_standalone_line() -> None:
+    # The dotted form must not match when "ITEM 1.A." and "RISK FACTORS" are
+    # split across TOC lines — only the standalone heading line qualifies.
+    html = f"""
+    <html><body>
+      <p>ITEM 1.A.</p><p>RISK FACTORS</p><p>9</p>
+      <p>ITEM 1.A. RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 2. PROPERTIES</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result

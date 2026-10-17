@@ -43,14 +43,22 @@ _RISK_START_RE = re.compile(
     # horizontal whitespace (never newlines), so the TOC's split "Item 1(a)."
     # / "Risk Factors" lines and mid-sentence cross-references ("see Part I,
     # Item 1(a). Risk Factors") cannot match. (Halliburton, ICE.)
-    r"|^[ \t]*item[ \t]*1[ \t]*\([ \t]*a[ \t]*\)\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$",
+    r"|^[ \t]*item[ \t]*1[ \t]*\([ \t]*a[ \t]*\)\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$"
+    # Dotted numbering, also full-line only for the same reason (Clorox's
+    # 10-K heads the section "ITEM 1.A. RISK FACTORS" as a standalone line;
+    # an inline match could catch a mid-sentence "see Item 1.A. Risk Factors"
+    # cross-reference and steal longest-section-wins).
+    r"|^[ \t]*item[ \t]*1[ \t]*\.[ \t]*a[ \t]*\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _RISK_END_RE = re.compile(
     r"item\s*1b\.?\s*[:.\-–]*\s*unresolved"
+    r"|item\s*1\s*\.\s*b\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1\s*\(\s*b\s*\)\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1c\.?\s*[:.\-–]*\s*cybersecurity"
-    r"|item\s*2\.?\s*[:.\-–]*\s*properties",
+    r"|item\s*1\s*\.\s*c\.?\s*[:.\-–]*\s*cybersecurity"
+    r"|item\s*2\.?\s*[:.\-–]*\s*properties"
+    r"|item\s*2\s*\.\s*[:.\-–]*\s*properties",
     re.IGNORECASE,
 )
 
