@@ -7,9 +7,11 @@ import httpx
 from tickerlens.data.wikipedia import (
     _best_title,
     _fetch_extract,
+    _normalize_words,
     _relevance_overlap,
     _search_title,
     _search_titles,
+    _squashed,
     _strict_title_match,
     _strip_corp_suffix,
     _title_relevant,
@@ -587,3 +589,47 @@ def test_best_title_alias_rejects_wrong_company_grainger() -> None:
         side_effect=_search_by_query(mapping),
     ):
         assert _best_title("W.W. GRAINGER, INC.", ticker="GWW") is None
+
+
+def test_diacritic_fold_first_word_agreement() -> None:
+    """Batch 80 (live EL case): 'Estée Lauder Companies' is the exact right
+    article for 'ESTEE LAUDER COMPANIES INC', but the é defeated first-word
+    agreement and the lead-word fallback, leaving EL description-less. NFKD
+    folding makes accented and ASCII spellings of the same word compare
+    equal across every relevance path."""
+    assert _title_relevant("Estée Lauder Companies", "ESTEE LAUDER COMPANIES INC", "EL") is True
+    # The person page is still declined by the parenthetical exclusion.
+    assert _title_relevant("Estée Lauder (businesswoman)", "ESTEE LAUDER COMPANIES INC", "EL") is False
+
+
+def test_diacritic_fold_strict_title_match() -> None:
+    """The suffix-stripped fallback's word-set equality also folds, so
+    'ESTEE LAUDER COMPANIES' matches the 'Estée Lauder Companies' article."""
+    assert _strict_title_match("Estée Lauder Companies", "ESTEE LAUDER COMPANIES") is True
+    # A merely similar accented title still fails: folding can't create
+    # equality between different names.
+    assert _strict_title_match("Estée Lauder", "ESTEE LAUDER COMPANIES") is False
+
+
+def test_diacritic_fold_primitives() -> None:
+    assert _normalize_words("Estée Lauder Companies") == ["estee", "lauder", "companies"]
+    assert _squashed("Estée") == "estee"
+    assert _word_set("Estée Lauder Companies") == {"estee", "lauder", "companies"}
+    # Pure-ASCII inputs are byte-identical to before the fold.
+    assert _normalize_words("COCA COLA CO") == ["coca", "cola"]
+    assert _squashed("DOMINOS PIZZA INC") == "dominospizzainc"
+
+
+def test_best_title_picks_accented_top_hit() -> None:
+    """Batch 80: the EL search shape — top hit is the company article, but
+    pre-fix every relevance path rejected it on the accent, so the primary
+    search yielded nothing relevant."""
+    hits = [
+        "Estée Lauder Companies",
+        "Estée Lauder (businesswoman)",
+        "Ronald Lauder",
+        "William P. Lauder",
+        "Tom Ford (brand)",
+    ]
+    with patch("tickerlens.data.wikipedia._search_titles", return_value=hits):
+        assert _best_title("ESTEE LAUDER COMPANIES INC", "EL") == "Estée Lauder Companies"

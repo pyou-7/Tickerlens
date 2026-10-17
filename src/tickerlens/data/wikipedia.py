@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 import httpx
 
@@ -107,13 +108,32 @@ def _bare_title_words(title: str) -> set[str]:
     return set(_normalize_words(bare))
 
 
+def _fold(text: str) -> str:
+    """Strip diacritics so accented and ASCII spellings of a word compare equal.
+
+    Batch 80 (live EL case): \"Estée Lauder Companies\" is the exact right
+    article for \"ESTEE LAUDER COMPANIES INC\", but the é defeated first-word
+    agreement and the lead-word fallback, and the suffix-stripped fallback's
+    word-set equality — every relevance path failed on one accent. SEC legal
+    names are ASCII; Wikipedia titles keep the diacritics. NFKD + combining-
+    mark strip maps é->e, ü->u, etc. so the same word compares equal on both
+    sides. This cannot misattribute: it only makes already-identical words
+    compare equal — the relevance paths still require full word agreement
+    (or full-title equality for the strict paths), never prefix matching.
+    """
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
+    )
+
+
 def _squashed(text: str) -> str:
     """Lowercase alphanumeric-only form, stop words retained.
 
     Used for exact-name comparison, where stop-word removal would be lossy:
     "Domino's Pizza Group plc" must not equal "DOMINOS PIZZA INC".
+    Diacritics are folded (batch 80) so "Estée" matches "ESTEE".
     """
-    return "".join(ch for ch in text.lower() if ch.isalnum())
+    return "".join(ch for ch in _fold(text).lower() if ch.isalnum())
 
 
 def _bare_title(title: str) -> str:
@@ -240,9 +260,11 @@ def _word_set(text: str) -> set[str]:
 
     Unlike _normalize_words (which drops <=2-char tokens for relevance
     scoring), "3M" and "D. R." must survive here for exact-name matching.
+    Diacritics are folded (batch 80) so "Estée Lauder Companies" equals the
+    suffix-stripped SEC name "ESTEE LAUDER COMPANIES".
     """
     words: set[str] = set()
-    for chunk in _bare_title(text).replace("-", " ").split():
+    for chunk in _bare_title(_fold(text)).replace("-", " ").split():
         w = chunk.lower().replace("'", "").replace("’", "").strip(".,;:!?\"()&")
         if w and w not in _STOP_WORDS:
             words.add(w)
@@ -279,10 +301,11 @@ def _normalize_words(text: str) -> list[str]:
     Hyphens split into words ("Kimberly-Clark" -> kimberly, clark),
     apostrophes and punctuation are stripped ("Domino's" -> dominos), so
     SEC-style names ("COCA COLA CO", "DOMINOS PIZZA INC") match their
-    Wikipedia titles ("The Coca-Cola Company", "Domino's").
+    Wikipedia titles ("The Coca-Cola Company", "Domino's"). Diacritics are
+    folded (batch 80) so "Estée" matches SEC-ASCII "ESTEE".
     """
     words: list[str] = []
-    for chunk in text.replace("-", " ").split():
+    for chunk in _fold(text).replace("-", " ").split():
         # Interior apostrophes ("Domino's" -> dominos) as well as edge punctuation
         w = chunk.lower().replace("'", "").replace("’", "").strip(".,;:!?\"()")
         if w and w not in _STOP_WORDS and len(w) > 2:
