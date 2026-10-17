@@ -246,6 +246,16 @@
               {% endfor %}
             </tr>
             {% endif %}
+            {% set temp_ns = namespace(show=false) %}
+            {% for row in rows[-8:] %}{% if row.temporary_equity_is_third_leg %}{% set temp_ns.show = true %}{% endif %}{% endfor %}
+            {% if temp_ns.show %}
+            <tr class="bg-slate-50/50">
+              <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Temporary equity <span class="text-xs font-normal text-slate-400">(mezzanine)</span></td>
+              {% for row in rows[-8:] %}
+              <td class="py-1.5 px-2 text-right">{{ fmt_large(row.temporary_equity if row.temporary_equity_is_third_leg else none) }}</td>
+              {% endfor %}
+            </tr>
+            {% endif %}
             <tr class="bg-slate-50/50">
               <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Stockholders' Equity</td>
               {% for row in rows[-8:] %}

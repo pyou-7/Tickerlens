@@ -463,6 +463,9 @@ class BalanceSheet(BaseModel):
     cash_and_equivalents: float | None = None
     # Mezzanine equity (redeemable NCI) — between liabilities and equity.
     redeemable_nci: float | None = None
+    # Mezzanine equity (parent-attributable temporary equity, e.g.
+    # convertible preferred stock) — same treatment.
+    temporary_equity: float | None = None
 
 
 class BalanceSheetChange(BaseModel):
@@ -472,6 +475,7 @@ class BalanceSheetChange(BaseModel):
     total_equity: float | None = None
     cash_and_equivalents: float | None = None
     redeemable_nci: float | None = None
+    temporary_equity: float | None = None
 
 
 class SignalChange(BaseModel):
@@ -707,6 +711,7 @@ class CompareDeltas(BaseModel):
     total_equity: MetricDelta = MetricDelta()
     cash_and_equivalents: MetricDelta = MetricDelta()
     redeemable_nci: MetricDelta = MetricDelta()
+    temporary_equity: MetricDelta = MetricDelta()
 
 
 class CompareContext(BaseModel):
@@ -2757,16 +2762,16 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
     def _row(
         label: str, section: str, kind: str, attr: str
     ) -> RangeTableRow:
-        if label == "Redeemable NCI (mezzanine)":
+        if label in ("Redeemable NCI (mezzanine)", "Temporary equity (mezzanine)"):
             # Same third-leg gate as the detail/compare tables: a stored
             # mezzanine value only renders where it explains an identity gap.
             values = [
-                r.redeemable_nci
+                getattr(r, attr)
                 if mezzanine_is_third_leg(
                     r.total_assets,
                     r.total_liabilities,
                     r.total_equity,
-                    r.redeemable_nci,
+                    getattr(r, attr),
                 )
                 else None
                 for r in window_rows
@@ -2790,15 +2795,16 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
         _row("Total Assets", "balance", "money", "total_assets"),
         _row("Total Liabilities", "balance", "money", "total_liabilities"),
         _row("Redeemable NCI (mezzanine)", "balance", "money", "redeemable_nci"),
+        _row("Temporary equity (mezzanine)", "balance", "money", "temporary_equity"),
         _row("Total Equity", "balance", "money", "total_equity"),
         _row("Cash & Equivalents", "balance", "money", "cash_and_equivalents"),
     ]
-    # The mezzanine row is noise for the ~90% of filers that carry no
-    # redeemable NCI — drop it unless at least one quarter has a value.
+    # The mezzanine rows are noise for the ~90% of filers that carry no
+    # mezzanine — drop each unless at least one quarter has a value.
     rows = [
         r
         for r in rows
-        if r.label != "Redeemable NCI (mezzanine)"
+        if r.label not in ("Redeemable NCI (mezzanine)", "Temporary equity (mezzanine)")
         or any(v is not None for v in r.values)
     ]
 
@@ -2875,6 +2881,16 @@ def _to_bs(row: QuarterlyFinancial) -> BalanceSheet:
             )
             else None
         ),
+        temporary_equity=(
+            row.temporary_equity
+            if mezzanine_is_third_leg(
+                row.total_assets,
+                row.total_liabilities,
+                row.total_equity,
+                row.temporary_equity,
+            )
+            else None
+        ),
     )
 
 
@@ -2885,6 +2901,7 @@ def _bs_change(current: BalanceSheet, prior: BalanceSheet) -> BalanceSheetChange
         total_equity=_pct_change(current.total_equity, prior.total_equity),
         cash_and_equivalents=_pct_change(current.cash_and_equivalents, prior.cash_and_equivalents),
         redeemable_nci=_pct_change(current.redeemable_nci, prior.redeemable_nci),
+        temporary_equity=_pct_change(current.temporary_equity, prior.temporary_equity),
     )
 
 
@@ -2912,6 +2929,9 @@ def _compare_periods(a: PeriodData, b: PeriodData) -> CompareDeltas:
         ),
         redeemable_nci=_metric_delta(
             a.balance_sheet.redeemable_nci, b.balance_sheet.redeemable_nci
+        ),
+        temporary_equity=_metric_delta(
+            a.balance_sheet.temporary_equity, b.balance_sheet.temporary_equity
         ),
     )
 
@@ -3216,6 +3236,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             total_equity=row.total_equity,
             cash_and_equivalents=row.cash_and_equivalents,
             redeemable_nci=row.redeemable_nci,
+            temporary_equity=row.temporary_equity,
             updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
         )
         .on_conflict_do_update(
@@ -3234,6 +3255,7 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "total_equity": row.total_equity,
                 "cash_and_equivalents": row.cash_and_equivalents,
                 "redeemable_nci": row.redeemable_nci,
+                "temporary_equity": row.temporary_equity,
                 "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
             },
         )
@@ -3253,6 +3275,7 @@ _CSV_METRICS: list[tuple[str, str, str, str]] = [
     ("Total Assets", "", "", "total_assets"),
     ("Total Liabilities", "", "", "total_liabilities"),
     ("Redeemable NCI (mezzanine)", "", "", "redeemable_nci"),
+    ("Temporary equity (mezzanine)", "", "", "temporary_equity"),
     ("Total Equity", "", "", "total_equity"),
     ("Cash & Equivalents", "", "", "cash_and_equivalents"),
 ]

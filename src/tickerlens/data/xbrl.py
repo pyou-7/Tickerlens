@@ -34,6 +34,11 @@ class Metric(StrEnum):
     # Filers that carry it (e.g. S&P Global's $4.9B, AT&T's $2.0B) otherwise
     # render Assets != Liabilities + Equity.
     REDEEMABLE_NCI = "redeemable_nci"
+    # Parent-attributable temporary equity (e.g. convertible preferred stock
+    # classified in mezzanine — Keurig Dr Pepper's $4.418B Q1-FY2026 issuance
+    # financing the JDE Peet's acquisition). Same mezzanine treatment as
+    # redeemable NCI: part of neither liabilities nor permanent equity.
+    TEMPORARY_EQUITY = "temporary_equity"
     # FFO components (batch 72): funds from operations = net income +
     # depreciation/amortization − gains on property dispositions (+ real-estate
     # impairments). Duration facts extracted with the same quarterly machinery
@@ -103,6 +108,9 @@ class QuarterlyFinancials(BaseModel):
     # part of neither. Rendered as its own balance-sheet line; subtracted
     # when the accounting identity derives a missing leg.
     redeemable_nci: float | None = None
+    # Mezzanine equity (parent-attributable temporary equity, e.g.
+    # convertible preferred stock) — same treatment as redeemable NCI.
+    temporary_equity: float | None = None
 
     @property
     def period(self) -> str:
@@ -242,6 +250,14 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
         tags=("RedeemableNoncontrollingInterestEquityCarryingAmount",),
         unit="USD",
     ),
+    # Parent-attributable temporary equity is filed under the carrying-amount
+    # tag on the filers checked (KDP's $4.418B convertible preferred stock,
+    # 2026-10-17); the liquidation-preference tag is a disclosure amount,
+    # not the carrying amount, so the chain is one tag.
+    Metric.TEMPORARY_EQUITY: ConceptSpec(
+        tags=("TemporaryEquityCarryingAmountAttributableToParent",),
+        unit="USD",
+    ),
     # FFO components (batch 72). Depreciation: filers use either the
     # cash-flow-statement tag (Realty Income files
     # DepreciationDepletionAndAmortization) or the plainer variant (Digital
@@ -287,6 +303,7 @@ BALANCE_SHEET_METRICS: tuple[Metric, ...] = (
     Metric.TOTAL_EQUITY,
     Metric.CASH_AND_EQUIVALENTS,
     Metric.REDEEMABLE_NCI,
+    Metric.TEMPORARY_EQUITY,
 )
 
 
@@ -505,6 +522,7 @@ def extract_recent_quarterly_financials(
                 total_equity=balance_sheet[Metric.TOTAL_EQUITY].get(item.end),
                 cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
                 redeemable_nci=balance_sheet[Metric.REDEEMABLE_NCI].get(item.end),
+                temporary_equity=balance_sheet[Metric.TEMPORARY_EQUITY].get(item.end),
             )
         )
     rows = _dedupe_period_labels(rows)
@@ -2006,6 +2024,7 @@ def _reconcile_balance_sheet_identity(
     if not all(m in chosen for m in need):
         return
     mezz_by_end = chosen.get(Metric.REDEEMABLE_NCI, {})
+    temp_by_end = chosen.get(Metric.TEMPORARY_EQUITY, {})
     ends = (
         set(chosen[Metric.TOTAL_ASSETS])
         & set(chosen[Metric.TOTAL_LIABILITIES])
@@ -2016,20 +2035,26 @@ def _reconcile_balance_sheet_identity(
         l = chosen[Metric.TOTAL_LIABILITIES][end].val  # noqa: E741
         e = chosen[Metric.TOTAL_EQUITY][end].val
         mezz_fact = mezz_by_end.get(end)
-        mezz = mezz_fact.val if mezz_fact is not None else 0.0
+        temp_fact = temp_by_end.get(end)
+        mezz = sum(
+            f.val for f in (mezz_fact, temp_fact) if f is not None
+        )
         if abs(a - l - mezz - e) <= _identity_tolerance(a):
             continue
         accns = {
             chosen[m][end].accn for m in need if chosen[m][end].accn is not None
         }
-        if mezz_fact is not None and mezz_fact.accn is not None:
-            accns.add(mezz_fact.accn)
+        for f in (mezz_fact, temp_fact):
+            if f is not None and f.accn is not None:
+                accns.add(f.accn)
         if len(accns) < 2:
             continue
         # All candidate facts for this end, grouped by filing.
         per_accn: dict[str, dict[Metric, XbrlFact]] = {}
-        metrics = need + (
-            (Metric.REDEEMABLE_NCI,) if Metric.REDEEMABLE_NCI in chosen else ()
+        metrics = need + tuple(
+            m
+            for m in (Metric.REDEEMABLE_NCI, Metric.TEMPORARY_EQUITY)
+            if m in chosen
         )
         for m in metrics:
             spec = CONCEPTS[m]
@@ -2053,10 +2078,10 @@ def _reconcile_balance_sheet_identity(
             legs = per_accn[accn]
             if not all(m in legs for m in need):
                 continue
-            mz = (
-                legs[Metric.REDEEMABLE_NCI].val
-                if Metric.REDEEMABLE_NCI in legs
-                else 0.0
+            mz = sum(
+                legs[m].val
+                for m in (Metric.REDEEMABLE_NCI, Metric.TEMPORARY_EQUITY)
+                if m in legs
             )
             a2 = legs[Metric.TOTAL_ASSETS].val
             if (
@@ -2070,13 +2095,12 @@ def _reconcile_balance_sheet_identity(
             ):
                 for m in need:
                     chosen[m][end] = legs[m]
-                if Metric.REDEEMABLE_NCI in chosen:
-                    if Metric.REDEEMABLE_NCI in legs:
-                        chosen[Metric.REDEEMABLE_NCI][end] = legs[
-                            Metric.REDEEMABLE_NCI
-                        ]
-                    else:
-                        chosen[Metric.REDEEMABLE_NCI].pop(end, None)
+                for m in (Metric.REDEEMABLE_NCI, Metric.TEMPORARY_EQUITY):
+                    if m in chosen:
+                        if m in legs:
+                            chosen[m][end] = legs[m]
+                        else:
+                            chosen[m].pop(end, None)
                 logger.info(
                     "Balance-sheet basis reconciled for %s: mixed filings %s "
                     "violated A=L+mezz+E by %.1fM; using %s",
@@ -2109,11 +2133,16 @@ def _derive_missing_balance_sheet(
     liabilities = balance_sheet[Metric.TOTAL_LIABILITIES]
     assets = balance_sheet[Metric.TOTAL_ASSETS]
     equity = balance_sheet[Metric.TOTAL_EQUITY]
-    mezz = balance_sheet.get(Metric.REDEEMABLE_NCI, {})
+    mezz_nci = balance_sheet.get(Metric.REDEEMABLE_NCI, {})
+    mezz_temp = balance_sheet.get(Metric.TEMPORARY_EQUITY, {})
+
+    def _mezz(end: dt.date) -> float:
+        return mezz_nci.get(end, 0.0) + mezz_temp.get(end, 0.0)
+
     for end in sorted(set(assets) & set(equity)):
-        liabilities.setdefault(end, assets[end] - equity[end] - mezz.get(end, 0.0))
+        liabilities.setdefault(end, assets[end] - equity[end] - _mezz(end))
     for end in sorted(set(assets) & set(liabilities)):
-        equity.setdefault(end, assets[end] - liabilities[end] - mezz.get(end, 0.0))
+        equity.setdefault(end, assets[end] - liabilities[end] - _mezz(end))
 
 
 # SEC's fiscalYearEnd is a fixed MMDD, but 52/53-week filers use floating

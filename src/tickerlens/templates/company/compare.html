@@ -209,6 +209,9 @@
         {% if ctx.a.balance_sheet.redeemable_nci is not none or ctx.b.balance_sheet.redeemable_nci is not none %}
         {{ cmp_row("Redeemable NCI (mezzanine)", ctx.a.balance_sheet.redeemable_nci, ctx.b.balance_sheet.redeemable_nci, ctx.deltas.redeemable_nci) }}
         {% endif %}
+        {% if ctx.a.balance_sheet.temporary_equity is not none or ctx.b.balance_sheet.temporary_equity is not none %}
+        {{ cmp_row("Temporary equity (mezzanine)", ctx.a.balance_sheet.temporary_equity, ctx.b.balance_sheet.temporary_equity, ctx.deltas.temporary_equity) }}
+        {% endif %}
         {{ cmp_row("Total Equity", ctx.a.balance_sheet.total_equity, ctx.b.balance_sheet.total_equity, ctx.deltas.total_equity) }}
         {{ cmp_row("Cash & Equivalents", ctx.a.balance_sheet.cash_and_equivalents, ctx.b.balance_sheet.cash_and_equivalents, ctx.deltas.cash_and_equivalents) }}
       </tbody>

@@ -76,6 +76,10 @@ class QuarterlyFinancial(Base):
     # liabilities and equity, part of neither). Auto-migrated by
     # ensure_schema(); backfilled by batch 59.
     redeemable_nci: Mapped[float | None] = mapped_column(Float)
+    # Mezzanine equity: parent-attributable temporary equity (e.g.
+    # convertible preferred stock in mezzanine — KDP's $4.418B Q1-FY2026
+    # issuance). Auto-migrated by ensure_schema(); backfilled by batch 83.
+    temporary_equity: Mapped[float | None] = mapped_column(Float)
     # Earnings-release highlights, extracted from the period's 8-K ex-99 exhibit.
     # Owned by enrich_company (best-effort); never wiped on transient failure.
     press_release_highlights: Mapped[str | None] = mapped_column(Text)
@@ -103,4 +107,15 @@ class QuarterlyFinancial(Base):
             self.total_liabilities,
             self.total_equity,
             self.redeemable_nci,
+        )
+
+    @property
+    def temporary_equity_is_third_leg(self) -> bool:
+        """Whether this quarter's temporary-equity value renders as its own
+        balance-sheet row (see :func:`mezzanine_is_third_leg`)."""
+        return mezzanine_is_third_leg(
+            self.total_assets,
+            self.total_liabilities,
+            self.total_equity,
+            self.temporary_equity,
         )

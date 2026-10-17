@@ -74,3 +74,20 @@ def test_ensure_schema_adds_redeemable_nci_column(tmp_path) -> None:
 
     cols_after = {c["name"] for c in inspect(engine).get_columns("quarterly_financials")}
     assert "redeemable_nci" in cols_after
+
+
+def test_ensure_schema_adds_temporary_equity_column(tmp_path) -> None:
+    # Batch 83: pre-existing DBs lack quarterly_financials.temporary_equity;
+    # the startup migration must add it so the mezzanine line persists.
+    db = tmp_path / "old.db"
+    engine = get_engine(f"sqlite:///{db}")
+    create_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE quarterly_financials DROP COLUMN temporary_equity"))
+    cols_before = {c["name"] for c in inspect(engine).get_columns("quarterly_financials")}
+    assert "temporary_equity" not in cols_before
+
+    ensure_schema(engine)
+
+    cols_after = {c["name"] for c in inspect(engine).get_columns("quarterly_financials")}
+    assert "temporary_equity" in cols_after
