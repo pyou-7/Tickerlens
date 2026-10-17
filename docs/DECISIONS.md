@@ -1621,3 +1621,17 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Blast radius:** `src/tickerlens/services/financials.py` (one call in `fetch_and_persist`), tests. No valuation, briefing, peers, calendar, or template changes.
 
 **Carried follow-ups rechecked:** XOM self-heal still pending (companyfacts NI frames end CY2026Q1; heals on FY2026 10-K, Feb 2027); V/BRK.B quarterly EPS tagging not resumed (still unfixable from the feed); SPG dominant-quarter self-heal waits on Q4-2026 filing; pending-filing cohort at 14 (prior 13 + ABT now honestly noted).
+
+## Batch 83 (2026-10-17) — round-29 seeds; parent-temporary-equity mezzanine extraction
+
+**Seeds:** CTVA, DG, KDP, PCAR, RSG, TDG — all 8 quarters, clean. DB at 221 companies.
+
+**Finding:** Deep audit surfaced one real defect class. KDP's Q1/Q2 FY2026 balance sheets had an identity gap of exactly **$4.418B** both quarters (5–6%). Forensics against raw companyfacts (CIK-verified): `us-gaap:TemporaryEquityCarryingAmountAttributableToParent` = $4.418B — convertible preferred stock KDP issued in Q1 FY2026 to finance the JDE Peet's acquisition ($4.5B liquidation preference). Mezzanine equity (between liabilities and permanent equity, part of neither), and the batch-59 mezzanine pipeline never extracted this tag family — it only knew `RedeemableNoncontrollingInterestEquityCarryingAmount`. Every suspicious EPS on the other five tickers verified as filer-real (CTVA seasonal H2 losses; TDG quarter-length facts).
+
+**Fix:** new `Metric.TEMPORARY_EQUITY` extracted per quarter as an instant balance-sheet metric → new nullable `quarterly_financials.temporary_equity` column (auto-migrated by `ensure_schema()`; backfilled DB-wide from cached companyfacts: 7 companies, 39 rows — KDP's 2 quarters; MPLX's $203M temp equity on FY2024Q3/Q4, which the gate correctly shows as a third leg on those two historical quarters only). `_reconcile_balance_sheet_identity` and `_derive_missing_balance_sheet` now sum both mezzanine legs; a conditional "Temporary equity (mezzanine)" row renders on the detail balance-sheet table, range table, compare, tearsheet trends matrix, and CSV exports — under the same third-leg gate as redeemable NCI, so filers whose equity already includes the line (the batch-60 double-count shape) stay hidden. KDP's sheet now closes to the dollar and the row renders at $4.42B.
+
+**Tests:** 13 new (8 hermetic extraction/derivation incl. a both-legs-sum case, 4 third-leg gate incl. both-legs coexistence, 1 schema-migration). `test_compare_yearly_passes_mode_and_years` mock updated for the new `deltas.temporary_equity` field. Suite 727 green, `git diff --check` clean. Styled screenshot verified before commit (screenshot gate): the new row matches the existing table styling exactly — strictly-better data fix, no redesign.
+
+**Blast radius:** `data/xbrl.py` (new metric + two-leg identity math), `models/quarterly_financial.py` (column + `temporary_equity_is_third_leg` property), `services/financials.py` (BalanceSheet/BalanceSheetChange/CompareDeltas fields, gated row in 5 surfaces, persistence upsert), 3 templates (one conditional row each). No valuation, briefing, peers, calendar, or styling changes.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B quarterly EPS tagging not resumed (still unfixable); pending-filing cohort at 14 (EDGAR ~2.5-month companyfacts lag, by design — ABT's seed-time note from batch 82 renders correctly).
