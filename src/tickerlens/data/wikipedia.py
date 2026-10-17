@@ -245,9 +245,13 @@ def _strip_corp_suffix(name: str) -> str:
     """Strip a trailing SEC state tag ("/MA/") and one corporate suffix token.
 
     "AMERICAN TOWER CORP /MA/" -> "AMERICAN TOWER"; "3M CO" -> "3M".
+    EDGAR also emits the tag with a space after the slash
+    ("VERTEX PHARMACEUTICALS INC / MA" — batch 84: the old regex required
+    the state code to touch the slash, so the spaced form survived and the
+    suffix-stripped Wikipedia fallback never fired, leaving VRTX undescribed).
     Never returns an empty string.
     """
-    n = re.sub(r"\s*/[A-Z]{2}/?\s*$", "", name).strip()
+    n = re.sub(r"\s*/\s*[A-Z]{2}/?\s*$", "", name).strip()
     n = re.sub(r"[\s,&]+$", "", n)
     toks = n.split()
     if len(toks) > 1 and toks[-1].rstrip(".,").lower() in _CORP_SUFFIXES:

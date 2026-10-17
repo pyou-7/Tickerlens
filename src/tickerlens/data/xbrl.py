@@ -766,12 +766,19 @@ def _split_share_restatements(
     """Detect share-count restatements: (restating date, scale, old, new).
 
     A stock split restates comparative weighted-average share counts at the
-    inverse ratio (DD's 1-for-3 reverse split restated 2025Q2 diluted shares
-    419.7M -> 139.9M in the 2026-08-04 10-Q; NOW's 5-for-1 split restated
-    2025Q2 shares 209.3M -> 1,046.7M in the 2026-07-23 10-Q). The same vote
-    machinery as per-share split detection finds these; per restating filing
-    the median old/new values across restated periods are the levels (batch
-    80: anchors the filing-level share-basis classification).
+    split ratio: an r-for-1 split multiplies them by r (KLAC's 10:1 restated
+    FY2025 diluted shares 133.75M -> 1,337.5M in the 2026-08-06 10-K), while
+    a 1-for-r reverse split divides them by r (DD's 1-for-3 restated 2025Q2
+    diluted shares 419.7M -> 139.9M in the 2026-08-04 10-Q; NOW's 5-for-1
+    restated 2025Q2 shares 209.3M -> 1,046.7M in the 2026-07-23 10-Q). The
+    same vote machinery as per-share split detection finds these; per
+    restating filing the median old/new values across restated periods are
+    the levels (batch 80: anchors the filing-level share-basis
+    classification). Batch 84: the ratio check used to accept only the
+    reverse direction (1/r), so forward-split share restatements were never
+    found — _filing_share_basis stayed empty and quarterly pre-split facts
+    with no quarterly post-split XBRL reference (KLAC) were left on the
+    old basis, 10x off from the restated quarters.
     """
     by_period: dict[tuple[dt.date | None, dt.date], dict[dt.date, float]] = {}
     for fact in share_facts:
@@ -788,7 +795,8 @@ def _split_share_restatements(
                 continue
             ratio = val_b / val_a
             if any(
-                abs(ratio - 1 / r) / (1 / r) <= _SPLIT_RATIO_TOLERANCE
+                abs(ratio - r) / r <= _SPLIT_RATIO_TOLERANCE
+                or abs(ratio - 1 / r) / (1 / r) <= _SPLIT_RATIO_TOLERANCE
                 for r in _SPLIT_RATIOS
             ):
                 olds.setdefault(filed_b, []).append(val_a)

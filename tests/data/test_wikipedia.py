@@ -325,6 +325,7 @@ def test_strip_corp_suffix() -> None:
     assert _strip_corp_suffix("MPLX LP") == "MPLX"
     assert _strip_corp_suffix("3M CO") == "3M"
     assert _strip_corp_suffix("Maplebear Inc.") == "Maplebear"
+    assert _strip_corp_suffix("VERTEX PHARMACEUTICALS INC / MA") == "VERTEX PHARMACEUTICALS"
     assert _strip_corp_suffix("Atlassian") == "Atlassian"
     assert _strip_corp_suffix("3M") == "3M"
     # Never empties the name.

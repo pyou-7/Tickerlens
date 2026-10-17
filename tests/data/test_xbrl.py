@@ -5,6 +5,8 @@ import pytest
 from tickerlens.data.xbrl import (
     Metric,
     UnsupportedFilerError,
+    XbrlFact,
+    _split_share_restatements,
     balance_sheet_metric,
     concept_facts,
     extract_recent_quarterly_financials,
@@ -3599,3 +3601,92 @@ def test_forward_split_share_restatement_in_later_filing() -> None:
     assert by_end[dt.date(2024, 9, 30)] < 1.0  # not the old-basis 2.07
     # Post-split facts untouched.
     assert by_end[dt.date(2026, 3, 31)] == 0.45
+
+
+def _share_fact(start: str, end: str, val: float, filed: str) -> XbrlFact:
+    return XbrlFact(
+        start=dt.date.fromisoformat(start),
+        end=dt.date.fromisoformat(end),
+        val=val,
+        filed=dt.date.fromisoformat(filed),
+        form="10-K" if end.endswith("06-30") else "10-Q",
+    )
+
+
+def test_forward_split_share_restatement_detected() -> None:
+    """Batch 84 (live KLAC case): a 10-for-1 split restates comparative share
+    counts UP by the split ratio (133.75M -> 1,337.5M). The old check only
+    accepted the reverse-split direction (1/r), so forward-split share
+    restatements were silently missed and the filing share-basis map stayed
+    empty."""
+    restatements = _split_share_restatements(
+        [
+            _share_fact("2024-07-01", "2025-06-30", 133_750_000, "2025-08-08"),
+            _share_fact("2024-07-01", "2025-06-30", 1_337_502_000, "2026-08-06"),
+        ]
+    )
+    assert len(restatements) == 1
+    filed, scale, old, new = restatements[0]
+    assert filed == dt.date(2026, 8, 6)
+    assert abs(scale - 10.0) / 10.0 < 0.03
+    assert old < new  # forward split: shares multiply
+
+
+def _klac_forward_split_companyfacts() -> dict:
+    """Mirror the live KLAC 10:1 split (2026-08-06): the 10-K restates only
+    ANNUAL comparatives in XBRL, so there is no quarterly post-split
+    reference for the neighborhood heuristic — the quarterly facts can only
+    be classified through the filing share basis."""
+    eps = [
+        # Annual comparatives restated 10x in the 10-K -> the split event
+        # (two corroborating groups, as the detector requires).
+        fact("2023-07-01", "2024-06-30", 28.00, 2024, "FY", filed="2024-08-08"),
+        fact("2023-07-01", "2024-06-30", 2.80, 2024, "FY", filed="2026-08-06"),
+        fact("2024-07-01", "2025-06-30", 33.50, 2025, "FY", filed="2025-08-08"),
+        fact("2024-07-01", "2025-06-30", 3.35, 2025, "FY", filed="2026-08-06"),
+        fact("2025-07-01", "2026-06-30", 3.66, 2026, "FY", filed="2026-08-06"),
+        # Quarterly facts from pre-split 10-Qs (old basis); the 10-K tags no
+        # quarterly EPS comparatives.
+        fact("2025-07-01", "2025-09-30", 8.47, 2026, "Q1", filed="2025-10-31"),
+        fact("2025-10-01", "2025-12-31", 8.68, 2026, "Q2", filed="2026-01-30"),
+        fact("2026-01-01", "2026-03-31", 9.12, 2026, "Q3", filed="2026-04-30"),
+    ]
+    shares = [
+        fact("2025-07-01", "2025-09-30", 132_381_000, 2026, "Q1", filed="2025-10-31"),
+        fact("2025-10-01", "2025-12-31", 132_009_000, 2026, "Q2", filed="2026-01-30"),
+        fact("2026-01-01", "2026-03-31", 131_750_000, 2026, "Q3", filed="2026-04-30"),
+        fact("2024-07-01", "2025-06-30", 133_750_000, 2025, "FY", filed="2025-08-08"),
+        fact("2024-07-01", "2025-06-30", 1_337_502_000, 2025, "FY", filed="2026-08-06"),
+        fact("2025-07-01", "2026-06-30", 1_319_633_000, 2026, "FY", filed="2026-08-06"),
+    ]
+    return {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+
+
+def test_forward_split_quarterly_rescaled_via_share_basis() -> None:
+    """Batch 84: with no quarterly post-split XBRL reference, the
+    neighborhood heuristic stays conservative — but the filing share basis
+    (now fed by forward-split share restatements) positively identifies the
+    pre-split 10-Q filings, so the whole quarterly series lands on the
+    post-split basis instead of mixing 10x-off quarters."""
+    series = quarterly_income_metric(
+        _klac_forward_split_companyfacts(), Metric.EPS_DILUTED, "0630"
+    )
+    by_end = {item.end: item.value for item in series}
+    for end, old_val in [
+        (dt.date(2025, 9, 30), 8.47),
+        (dt.date(2025, 12, 31), 8.68),
+        (dt.date(2026, 3, 31), 9.12),
+    ]:
+        assert abs(by_end[end] - old_val / 10) / (old_val / 10) < 0.05
+        assert by_end[end] < 1.5  # not the old-basis ~9
+    # No quarter left on the old (~10x) basis.
+    assert all(v < 1.5 for v in by_end.values())
