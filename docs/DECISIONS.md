@@ -1593,3 +1593,15 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Alternatives considered:** fixing DD by hand-editing stored rows (rejected — the heuristic defect would recur on the next split filer; the sweep proved it already had with NOW); a DBA alias for EL (rejected — the legal name reaches the right article, the checker just couldn't see through the accent; the general fix covers all accented filers); leaving the fallback's independent detection (rejected — the 0.5x fabrication is a real false-positive class).
 
 **Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if tagging resumes).
+
+## Batch 81 (2026-10-17) — round-27 clean audit; no code change
+
+**Seeds:** CSCO, CMCSA, CVS, AEP, AON, CCL — all 8 quarters, clean. DB at 209 companies.
+
+**Finding:** Deep audit surfaced zero defect classes. Every suspicious value verified against raw companyfacts (CIK-level) as the filer's own number: CMCSA's $11.123B Q2-2025 NI, CVS's −$3.975B Q3-2025 NI, CSCO's NI/shares-derived Q4-FY2026 EPS 0.9703 (batch-78 path working correctly on a new annual-only filer), AON's 7.83 quarter correctly taking the finance P/B composite (not the EPS-growth guard path).
+
+**Decision:** No code change this batch (per the standing rule: never invent work when the audit is clean). The batch-55 amber pending-filing note is doing its job for AEP (Q2 FY2026 filed Jul 30, 2026, still not in companyfacts) and the 12-ticker cohort behind it.
+
+**Carried follow-ups rechecked:** XOM self-heal (blocked on FY2026 10-K, ~Feb 2027 — companyfacts NI frames still end CY2026Q1); V/BRK.B quarterly EPS tagging still not resumed; SPG dominant-quarter self-heal waits on the Q4-2026 filing.
+
+**Tests:** none added; suite 712 green. **Blast radius:** none (docs + validation log only). No template change.
