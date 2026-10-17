@@ -3412,3 +3412,190 @@ def test_eps_ni_shares_derivation_absent_without_share_facts() -> None:
     )
     assert quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231") == []
     assert quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231") == []
+
+
+def _dupont_reverse_split_companyfacts() -> dict:
+    """Mirror the live DD case (batch 80): a 1-for-3 reverse split restated in
+    the 2026-08-04 10-Q (diluted shares 419.7M -> 139.9M for 2025Q2). The
+    pre-split quarters' EPS values overlap the post-split range (2026Q1's
+    0.39 sits nearer post-split 0.42 than rescaled 1.17 sits to 1.05), so the
+    EPS-neighborhood heuristic cannot classify them — the filings' own share
+    counts must decide, or the stored series mixes bases.
+    """
+    eps = [
+        fact("2025-10-01", "2025-12-31", -0.30, 2025, "Q4", filed="2026-02-17"),
+        fact("2026-01-01", "2026-03-31", 0.39, 2026, "Q1", filed="2026-05-05"),
+        fact("2025-04-01", "2025-06-30", 0.14, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 0.42, 2025, "Q2", filed="2026-08-04"),
+        fact("2025-01-01", "2025-06-30", -1.27, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-01-01", "2025-06-30", -3.79, 2025, "Q2", filed="2026-08-04"),
+        fact("2026-04-01", "2026-06-30", 1.05, 2026, "Q2", filed="2026-08-04"),
+    ]
+    shares = [
+        fact("2025-10-01", "2025-12-31", 419_200_000, 2025, "Q4", filed="2026-02-17"),
+        fact("2026-01-01", "2026-03-31", 412_800_000, 2026, "Q1", filed="2026-05-05"),
+        fact("2025-04-01", "2025-06-30", 419_700_000, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 139_900_000, 2025, "Q2", filed="2026-08-04"),
+        fact("2026-04-01", "2026-06-30", 137_200_000, 2026, "Q2", filed="2026-08-04"),
+    ]
+    return {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+
+
+def test_reverse_split_share_basis_rescales_overlapping_quarters() -> None:
+    """Batch 80: pre-split filings are identified by their old-basis share
+    counts and rescaled even when their EPS values overlap the post-split
+    range — the whole series lands on the latest basis."""
+    series = quarterly_income_metric(
+        _dupont_reverse_split_companyfacts(), Metric.EPS_DILUTED, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert abs(by_end[dt.date(2025, 12, 31)] - (-0.30 * 3)) < 1e-9
+    assert abs(by_end[dt.date(2026, 3, 31)] - (0.39 * 3)) < 1e-9
+    # Restated/new-basis facts are untouched.
+    assert by_end[dt.date(2025, 6, 30)] == 0.42
+    assert by_end[dt.date(2026, 6, 30)] == 1.05
+
+
+def test_reverse_split_post_split_filing_before_restatement_untouched() -> None:
+    """Batch 80: a filing after the split effective date but before any
+    restating filing reports new-basis share counts, so its facts are
+    positively identified as post-split and left alone (the NFLX Q1-2026
+    shape, decided by share counts rather than the neighborhood heuristic).
+    """
+    eps = [
+        fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-04-01", "2025-06-30", 0.72, 2025, "Q2", filed="2026-07-17"),
+        fact("2025-01-01", "2025-06-30", 13.8, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-01-01", "2025-06-30", 1.38, 2025, "Q2", filed="2026-07-17"),
+        fact("2026-01-01", "2026-03-31", 1.23, 2026, "Q1", filed="2026-04-17"),
+    ]
+    shares = [
+        fact("2025-04-01", "2025-06-30", 450_000_000, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-04-01", "2025-06-30", 45_000_000, 2025, "Q2", filed="2026-07-17"),
+        fact("2026-01-01", "2026-03-31", 44_000_000, 2026, "Q1", filed="2026-04-17"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 6, 30)] == 0.72
+    assert by_end[dt.date(2026, 3, 31)] == 1.23
+
+
+def test_split_fallback_reuses_primary_chain_events() -> None:
+    """Batch 80: the continuing-ops annual-fallback list must reuse the
+    primary chain's split events, never detect its own. DD's 2026 10-K halved
+    continuing-ops EPS when Qnity moved to discontinued operations — the
+    independent detection read that 0.50x reclassification as a 2:1 split and
+    would have rescaled the fallback's annual facts."""
+    from unittest.mock import patch
+
+    import tickerlens.data.xbrl as xbrl_mod
+
+    eps = [
+        fact("2025-04-01", "2025-06-30", 0.14, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 0.42, 2025, "Q2", filed="2026-08-04"),
+        fact("2025-01-01", "2025-06-30", -1.27, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-01-01", "2025-06-30", -3.79, 2025, "Q2", filed="2026-08-04"),
+    ]
+    cont_ops = [
+        # Discontinued-ops reclassification (not a split): 2026 10-K halves
+        # the continuing-ops annuals. Two corroborating groups, so the old
+        # independent detection fabricated a 0.50x "split event" here.
+        fact("2024-01-01", "2024-12-31", 2.00, 2024, "FY", filed="2025-02-14"),
+        fact("2024-01-01", "2024-12-31", 1.00, 2024, "FY", filed="2026-02-17"),
+        fact("2023-01-01", "2023-12-31", 1.80, 2023, "FY", filed="2024-02-15"),
+        fact("2023-01-01", "2023-12-31", 0.90, 2023, "FY", filed="2026-02-17"),
+        fact("2025-01-01", "2025-12-31", 2.50, 2025, "FY", filed="2026-02-17"),
+    ]
+    discontinued = [
+        fact("2025-01-01", "2025-12-31", 100_000_000, 2025, "FY", filed="2026-02-17"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "IncomeLossFromContinuingOperationsPerDilutedShare": {
+                    "units": {"USD/shares": cont_ops}
+                },
+                "IncomeLossFromDiscontinuedOperations": {"units": {"USD": discontinued}},
+            }
+        }
+    }
+    real_adjust = xbrl_mod._split_adjust_facts
+    calls: list[dict] = []
+
+    def spy(facts, *, events=None, share_facts=None):
+        calls.append({"n": len(facts), "scales": sorted(e.scale for e in events)})
+        return real_adjust(facts, events=events, share_facts=share_facts)
+
+    with patch.object(xbrl_mod, "_split_adjust_facts", side_effect=spy):
+        quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    assert len(calls) == 2
+    primary_scales, fallback_scales = calls[0]["scales"], calls[1]["scales"]
+    assert len(primary_scales) == 1 and abs(primary_scales[0] - 3.0) < 1e-9
+    # The fallback reuses the primary chain's 3.0x event; the fabricated
+    # 0.50x discontinued-ops "event" is gone.
+    assert len(fallback_scales) == 1 and abs(fallback_scales[0] - 3.0) < 1e-9
+
+
+def test_forward_split_share_restatement_in_later_filing() -> None:
+    """Batch 80 (live NOW case): a 5-for-1 split whose EPS comparatives were
+    restated in the 2026-01-29 10-K but whose share-count comparatives were
+    only restated in the 2026-07-23 10-Q. The basis classification matches
+    the share restatement by inverse-ratio scale within the date window, not
+    by same-filing date, so pre-split filings are still positively
+    identified as old-basis and rescaled."""
+    eps = [
+        fact("2024-07-01", "2024-09-30", 2.07, 2024, "Q3", filed="2024-10-24"),
+        fact("2024-07-01", "2024-09-30", 2.07, 2024, "Q3", filed="2025-10-30"),
+        fact("2023-01-01", "2023-12-31", 8.42, 2023, "FY", filed="2025-01-30"),
+        fact("2023-01-01", "2023-12-31", 1.68, 2023, "FY", filed="2026-01-29"),
+        fact("2024-01-01", "2024-12-31", 6.84, 2024, "FY", filed="2025-01-30"),
+        fact("2024-01-01", "2024-12-31", 1.37, 2024, "FY", filed="2026-01-29"),
+        fact("2026-01-01", "2026-03-31", 0.45, 2026, "Q1", filed="2026-04-23"),
+    ]
+    shares = [
+        fact("2024-07-01", "2024-09-30", 209_000_000, 2024, "Q3", filed="2024-10-24"),
+        fact("2025-07-01", "2025-09-30", 209_505_000, 2025, "Q3", filed="2025-10-30"),
+        # Share restatement lands one filing later than the EPS restatement.
+        fact("2025-01-01", "2025-06-30", 209_343_000, 2025, "Q2", filed="2025-07-24"),
+        fact("2025-01-01", "2025-06-30", 1_046_712_000, 2025, "Q2", filed="2026-07-23"),
+        fact("2026-01-01", "2026-03-31", 1_039_884_000, 2026, "Q1", filed="2026-04-23"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Pre-split quarters rescaled to the post-split basis via the share-basis
+    # classification, not left on the old basis (within 1% of the exact /5 —
+    # the rescale uses the observed median restatement ratio).
+    assert abs(by_end[dt.date(2024, 9, 30)] - 2.07 / 5) / (2.07 / 5) < 0.01
+    assert by_end[dt.date(2024, 9, 30)] < 1.0  # not the old-basis 2.07
+    # Post-split facts untouched.
+    assert by_end[dt.date(2026, 3, 31)] == 0.45

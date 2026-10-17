@@ -734,8 +734,133 @@ _SPLIT_MIN_CORROBORATING_GROUPS = 2
 # splits (same ratio, well separated in time) stay distinct.
 _SPLIT_MERGE_MAX_DAYS = 400
 
+# A filing's share basis is new (post-split) when its latest-period share
+# count sits within this of the restated new-basis level, old (pre-split)
+# when within this of the old level. Splits move the count by >=2x while
+# buyback/issuance drift between a filing's current period and the restated
+# comparative stays far below this (batch 80).
+_SHARE_BASIS_TOLERANCE = 0.25
 
-def _split_adjust_facts(facts: list[XbrlFact]) -> None:
+
+def _split_share_restatements(
+    share_facts: list[XbrlFact],
+) -> list[tuple[dt.date, float, float, float]]:
+    """Detect share-count restatements: (restating date, scale, old, new).
+
+    A stock split restates comparative weighted-average share counts at the
+    inverse ratio (DD's 1-for-3 reverse split restated 2025Q2 diluted shares
+    419.7M -> 139.9M in the 2026-08-04 10-Q; NOW's 5-for-1 split restated
+    2025Q2 shares 209.3M -> 1,046.7M in the 2026-07-23 10-Q). The same vote
+    machinery as per-share split detection finds these; per restating filing
+    the median old/new values across restated periods are the levels (batch
+    80: anchors the filing-level share-basis classification).
+    """
+    by_period: dict[tuple[dt.date | None, dt.date], dict[dt.date, float]] = {}
+    for fact in share_facts:
+        if fact.start is None or not fact.val:
+            continue
+        by_period.setdefault((fact.start, fact.end), {})[fact.filed] = fact.val
+    olds: dict[dt.date, list[float]] = {}
+    news: dict[dt.date, list[float]] = {}
+    scales: dict[dt.date, list[float]] = {}
+    for (start, end), by_filed in by_period.items():
+        ordered = sorted(by_filed.items())
+        for (filed_a, val_a), (filed_b, val_b) in zip(ordered, ordered[1:]):
+            if val_a == 0:
+                continue
+            ratio = val_b / val_a
+            if any(
+                abs(ratio - 1 / r) / (1 / r) <= _SPLIT_RATIO_TOLERANCE
+                for r in _SPLIT_RATIOS
+            ):
+                olds.setdefault(filed_b, []).append(val_a)
+                news.setdefault(filed_b, []).append(val_b)
+                scales.setdefault(filed_b, []).append(ratio)
+    restatements: list[tuple[dt.date, float, float, float]] = []
+    for filed in olds:
+        o = sorted(olds[filed])
+        n = sorted(news[filed])
+        s = sorted(scales[filed])
+        restatements.append(
+            (filed, s[len(s) // 2], o[len(o) // 2], n[len(n) // 2])
+        )
+    return restatements
+
+
+def _filing_share_basis(
+    share_facts: list[XbrlFact], events: list[_SplitEvent]
+) -> dict[dt.date, bool]:
+    """Map filing date -> True when the filing reports new (post-split) shares.
+
+    For each split event, the restated comparative share counts give the
+    old/new basis levels. The share restatement usually rides in the same
+    filing as the per-share restatement, but not always (NOW's 5-for-1: EPS
+    restated in the 2026-01-29 10-K, shares in the 2026-07-23 10-Q), so the
+    match is by inverse-ratio scale within a generous date window, closest
+    date winning. A filing (before the restating filing) whose latest-period
+    share count sits near the new level is post-split, near the old level
+    pre-split. Filings with no share facts — or events with no share
+    restatement — stay absent: unknown, not pre-split (batch 80: the caller
+    falls back to the EPS-neighborhood heuristic for those).
+    """
+    restatements = _split_share_restatements(share_facts)
+    latest_by_filed: dict[dt.date, XbrlFact] = {}
+    for fact in share_facts:
+        if not fact.val:
+            continue
+        prev = latest_by_filed.get(fact.filed)
+        if prev is None or fact.end > prev.end:
+            latest_by_filed[fact.filed] = fact
+    basis: dict[dt.date, bool] = {}
+    for event in events:
+        target = 1 / event.scale
+        cands = [
+            (filed, old_level, new_level)
+            for filed, share_scale, old_level, new_level in restatements
+            if abs(share_scale - target) / target <= _SPLIT_RATIO_TOLERANCE
+            and abs((filed - event.date).days) <= _SPLIT_MERGE_MAX_DAYS
+        ]
+        if not cands:
+            continue
+        filed_r, old_level, new_level = min(cands, key=lambda c: abs((c[0] - event.date).days))
+        for filed, fact in latest_by_filed.items():
+            if filed >= event.date or filed in basis:
+                continue
+            if abs(fact.val - new_level) / new_level <= _SHARE_BASIS_TOLERANCE:
+                basis[filed] = True
+            elif abs(fact.val - old_level) / old_level <= _SHARE_BASIS_TOLERANCE:
+                basis[filed] = False
+    return basis
+
+
+def _split_basis_share_facts(
+    companyfacts: dict[str, Any], metric: Metric
+) -> list[XbrlFact]:
+    """Weighted-average share facts for split-basis classification (batch 80).
+
+    Best-effort: [] when the filer tags no share counts — the basis check
+    then falls back to the EPS-neighborhood heuristic, preserving the
+    pre-batch-80 behavior for sparse filers and hermetic tests.
+    """
+    try:
+        _, facts = _select_tag_facts(
+            companyfacts,
+            (SHARES_TAG[metric],),
+            "shares",
+            staleness_window=_QUARTERLY_FACT_WINDOW,
+            metric_name=metric.value,
+        )
+    except KeyError:
+        return []
+    return facts
+
+
+def _split_adjust_facts(
+    facts: list[XbrlFact],
+    *,
+    events: list[_SplitEvent] | None = None,
+    share_facts: list[XbrlFact] | None = None,
+) -> None:
     """Rescale pre-split per-share facts to the latest filing's share basis.
 
     After a stock split the filer restates comparative per-share facts in
@@ -745,9 +870,22 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
     "trend" and a -13.58 derived Q4. Facts are mutated in place; callers
     pass freshly built lists.
 
+    ``events`` may be supplied to share one detection across fact lists
+    (batch 80): the continuing-ops annual-fallback list must reuse the
+    primary chain's events, never detect its own — discontinued-ops
+    reclassifications restate continuing-ops per-share facts at ratios that
+    can coincide with split ratios (DD's 2026 10-K halved continuing-ops
+    EPS when Qnity moved to discontinued ops; the 0.50x "event" it
+    fabricated would have rescaled the fallback's annual facts). A real
+    split always restates the primary tag's comparatives too, so sharing
+    loses no detection.
+
     Classification per fact:
     - its period was demonstrably restated at a split ratio → pre-split,
       rescale unconditionally;
+    - its filing's share basis is known (batch 80) → the filing's own
+      latest-period share count decides: pre-split filings rescale, no
+      neighborhood guesswork;
     - otherwise (e.g. NFLX's Q3-2025, filed pre-split but never restated
       since) → rescale only if the rescaled value is clearly closer, in
       ratio terms, to some post-split reference than the original is to
@@ -755,9 +893,17 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
       (NFLX's Q1-2026, filed 2026-04-17, before the restating 10-Q) are
       left alone.
     """
-    events = _detect_split_events(facts)
+    if events is None:
+        events = _detect_split_events(facts)
     if not events:
         return
+    # Batch 80: the EPS-neighborhood heuristic cannot classify a pre-split
+    # fact whose value overlaps the post-split range (DD's 1-for-3 reverse
+    # split: 2026Q1's 0.39 sits nearer post-split 0.42 than rescaled 1.17
+    # sits to 1.05, so the heuristic left it — and five siblings — on the
+    # old basis, a mixed-basis series). The filing's own share count is
+    # decisive where available; the heuristic remains the fallback.
+    basis = _filing_share_basis(share_facts, events) if share_facts else {}
     min_event_date = min(event.date for event in events)
     # Post-split reference values: restated comparatives (latest filed wins)
     # and any fact filed on/after the first restating filing. Keyed by
@@ -788,7 +934,7 @@ def _split_adjust_facts(facts: list[XbrlFact]) -> None:
         if fact.end in {e for event in events for e in event.period_ends}:
             fact.val *= scale
             continue
-        if _is_pre_split_basis(fact, scale, certain):
+        if _is_pre_split_basis(fact, scale, certain, basis):
             fact.val *= scale
 
 
@@ -819,8 +965,15 @@ def _is_pre_split_basis(
     fact: XbrlFact,
     scale: float,
     certain: dict[tuple[dt.date | None, dt.date], float],
+    basis: dict[dt.date, bool] | None = None,
 ) -> bool:
     """Decide whether a pre-event filing's fact is on the pre-split basis.
+
+    When the filing's share basis is known (batch 80), it decides outright:
+    a pre-split filing's facts are old-basis even when their values overlap
+    the post-split range (DD's 2026Q1 0.39), and a post-split filing's facts
+    are new-basis even before any restating filing exists (NFLX's Q1-2026).
+    Unknown filings fall through to the neighborhood heuristic below.
 
     Compares the original and rescaled values against the post-split
     references (same duration class) in *ratio* terms: a pre-split fact's
@@ -833,6 +986,10 @@ def _is_pre_split_basis(
     +11.42 neighborhood had the opposite sign; FY2026Q1 1.29 because the
     neighborhood was inflated by a gain quarter — batch 51).
     """
+    if basis is not None and fact.filed in basis:
+        # The filing's share count positively identifies its basis: False
+        # (old) → pre-split, rescale; True (new) → post-split, leave alone.
+        return not basis[fact.filed]
     if fact.start is None:
         return False
     quarterly = (fact.end - fact.start).days <= _QUARTERLY_MAX_DAYS
@@ -1029,10 +1186,22 @@ def quarterly_income_metric(
     # old basis — mixing them produced a bogus -87% "trend" and a -13.58
     # derived Q4. Rescale pre-split facts to the latest basis first so the
     # Q4 share-implied derivation below also sees consistent NI/EPS pairs.
+    # Split events are detected once on the primary (total-EPS) chain and
+    # shared with the continuing-ops annual-fallback list (batch 80);
+    # filing share-basis classification uses weighted-average share facts.
     if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
-        _split_adjust_facts([fact for _, facts in candidates for fact in facts])
+        primary_facts = [fact for _, facts in candidates for fact in facts]
+        split_events = _detect_split_events(primary_facts)
+        split_share_facts = _split_basis_share_facts(companyfacts, metric)
+        _split_adjust_facts(
+            primary_facts, events=split_events, share_facts=split_share_facts
+        )
         if eps_annual_fallback is not None:
-            _split_adjust_facts(eps_annual_fallback[1])
+            _split_adjust_facts(
+                eps_annual_fallback[1],
+                events=split_events,
+                share_facts=split_share_facts,
+            )
     merged = _merge_gap_fill(
         [
             _income_series_for_tag(
