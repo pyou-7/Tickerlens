@@ -500,6 +500,10 @@ def extract_recent_quarterly_financials(
     # only). Basic wins wherever it exists; diluted fills only missing ends,
     # so the displayed "EPS (Basic)" never blanks for a filed quarter.
     eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
+    # Batch 87: diluted EPS can never exceed basic EPS; the independent
+    # batch-12 Q4 derivations can invert the ranking on filing-rounded
+    # inputs (BBY FY2026Q4). Clamp the corrupted diluted leg to basic.
+    eps_diluted = _reconcile_eps_basic_diluted(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
     # FFO components (batch 72): funds from operations = net income +
@@ -610,6 +614,42 @@ def _fill_missing_eps_basic(
                 source_tag=m.source_tag,
             )
     return sorted(by_end.values(), key=lambda item: item.end)
+
+
+def _reconcile_eps_basic_diluted(
+    basic: list[PeriodMetric], diluted: list[PeriodMetric]
+) -> list[PeriodMetric]:
+    """Clamp diluted EPS to basic EPS wherever the ranking inverts.
+
+    Diluted EPS can never exceed basic EPS — anti-dilutive securities are
+    excluded from the diluted share count, never added — so any
+    diluted > basic pair is corrupt by definition. The batch-12
+    share-implied Q4 derivation computes the two legs independently, and
+    filing-rounded 9M inputs get 3x leverage through the
+    (12·FY_avg − 9·9M_avg)/3 share-month residual, so a 2-decimal 9M EPS
+    can invert the ranking (BBY FY2026Q4 derived 2.5584 basic vs 2.5798
+    diluted). The diluted leg is the corrupted one; clamp it to basic —
+    the two differ by fractions of a percent, so no information is lost.
+    This also subsumes the batch-12 "residual sub-cent flips" limitation
+    (DLTR FY2025Q4: 2.5434/2.548) and corrects loss quarters, where
+    diluted must equal basic (DLTR FY2024Q4: −17.18/−17.17).
+    """
+    by_end = {m.end: m for m in basic}
+    fixed: list[PeriodMetric] = []
+    for m in diluted:
+        b = by_end.get(m.end)
+        if b is not None and m.value > b.value:
+            logger.warning(
+                "diluted EPS %.4f exceeds basic EPS %.4f for %s %s — "
+                "clamping diluted to basic (arithmetically impossible)",
+                m.value,
+                b.value,
+                m.metric.value,
+                m.end,
+            )
+            m = m.model_copy(update={"value": b.value})
+        fixed.append(m)
+    return sorted(fixed, key=lambda item: item.end)
 
 
 def _successor_label(fy: int, fp: str) -> tuple[int, str] | None:

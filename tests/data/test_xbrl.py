@@ -4,8 +4,10 @@ import pytest
 
 from tickerlens.data.xbrl import (
     Metric,
+    PeriodMetric,
     UnsupportedFilerError,
     XbrlFact,
+    _reconcile_eps_basic_diluted,
     _split_share_restatements,
     balance_sheet_metric,
     concept_facts,
@@ -2103,6 +2105,84 @@ def test_q4_eps_falls_back_when_eps_zero() -> None:
         m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
     }
     assert metrics[dt.date(2025, 12, 31)].value == -8.17
+
+
+def _eps_pair(
+    end: dt.date, basic: float, diluted: float, fp: str = "Q4", fy: int = 2026
+) -> tuple[PeriodMetric, PeriodMetric]:
+    return (
+        PeriodMetric(
+            metric=Metric.EPS_BASIC, fy=fy, fp=fp, end=end, value=basic,
+            source_tag="EarningsPerShareBasic",
+        ),
+        PeriodMetric(
+            metric=Metric.EPS_DILUTED, fy=fy, fp=fp, end=end, value=diluted,
+            source_tag="EarningsPerShareDiluted",
+        ),
+    )
+
+
+def test_reconcile_eps_clamps_flipped_diluted_to_basic() -> None:
+    # BBY FY2026Q4-shaped: the batch-12 share-implied derivation produced
+    # 2.5584 basic / 2.5798 diluted — arithmetically impossible. The
+    # diluted leg is clamped to basic.
+    b, d = _eps_pair(dt.date(2026, 1, 31), 2.5584, 2.5798)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert len(fixed) == 1
+    assert fixed[0].value == 2.5584
+    assert fixed[0].end == dt.date(2026, 1, 31)
+
+
+def test_reconcile_eps_leaves_healthy_pairs_alone() -> None:
+    b, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.48)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == 1.48  # untouched
+
+
+def test_reconcile_eps_equalizes_loss_quarter_pair() -> None:
+    # Loss quarters: diluted must equal basic (anti-dilutive securities are
+    # excluded). DLTR FY2024Q4 filed −17.18/−17.17.
+    b, d = _eps_pair(dt.date(2025, 2, 1), -17.18, -17.17)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -17.18
+
+
+def test_reconcile_eps_ignores_unpaired_diluted() -> None:
+    _, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.50)
+    fixed = _reconcile_eps_basic_diluted([], [d])
+    assert fixed[0].value == 1.50  # no basic leg: no basis to judge
+
+
+def test_q4_eps_flip_never_reaches_rows() -> None:
+    # End-to-end: BBY FY2026-shaped facts (coarsely rounded 2dp 9M EPS)
+    # derive a flipped Q4 pair pre-fix (2.5584 basic vs 2.5798 diluted);
+    # the stored row must never carry diluted > basic.
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-02-02", "2025-11-01", 28_000_000_000, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 41_000_000_000, 2026, "FY"),
+        ],
+        net_income_values=[
+            ("2025-02-02", "2025-11-01", 528_000_000, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 1_069_000_000, 2026, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-02-02", "2025-11-01", 2.50, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 5.06, 2026, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-02-02", "2025-11-01", 2.48, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 5.04, 2026, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="0131", periods=4
+    )
+    q4 = next(r for r in rows if r.fp == "Q4")
+    assert q4.eps_basic is not None and q4.eps_diluted is not None
+    assert q4.eps_diluted <= q4.eps_basic
 
 
 def _hal_like_companyfacts(
