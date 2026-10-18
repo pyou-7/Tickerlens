@@ -1731,3 +1731,17 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Live:** server restarted for the new code (kill by explicit PID). 10/10 routes 200 (home, 6 new overviews, MTD/CHD detail, /calendar). 6 round-33 seeds enrich in 12–36s each (bounded; previously unbounded). No template change (backend-only); screenshot gate N/A. DB at 245 companies.
 
 **Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging not resumed (still unfixable from the feed); pending-filing cohort at 16. New: highlights-extractor pre-headline `Contact:` block coverage (CHD/HUM/ORCL/SPG).
+
+**Batch 90 — press-release highlights `Contact:`-block coverage (CHD-style pre-headline contact blocks):**
+
+**Context:** CHD showed 0/8 press-release highlights while guidance extracted 8/8. Forensics on the live Q2-2026 ex-99 showed the release opens with a company masthead (`Church & Dwight Co., Inc.`), a bare `Contact:` header, and name/title/phone detail lines before the real headline. The old headline pass picked the masthead (first non-admin/non-contact line), and the bare `Contact:` matched the boilerplate regex's `contacts?(\s|:)` *terminator* in the lede fallback — designed for trailing contacts sections — so the lede broke before any content and the whole extraction returned None. Same format family as Oracle's exhibits (CHD/HUM/ORCL/SPG were the deferred cohort).
+
+**Alternatives considered:** extending `_CONTACT_LINE_RE` with the bare form (rejected — that regex's matches are *skipped line-by-line*, which would leave the name/title/phone detail lines in the lede; the block must be skipped as a unit); treating the bare header as boilerplate-terminator but in the headline pass only (rejected — the header precedes the headline, so terminating there still yields no content); inferring the headline as the first all-caps line (rejected — too format-specific; JNJ-style title-case headlines are the common case).
+
+**Tests:** 3 new — CHD-style fixture (masthead + bare `Contact:` + name/title/phone + all-caps headline; asserts the real headline is picked, masthead is not, contact details absent), Oracle-style fixture (title-case headline + trailing `Contacts:` section; asserts trailing block skipped and `About` terminates), and a `_skip_contact_block` bound test (a misfired header can never skip more than 8 detail lines).
+
+**Blast radius:** extractor-only, backend. All 38 pre-existing filings tests green unchanged (JNJ media/investor-contact and Deere formats verified unaffected). Live backfill for CHD: 8/8 quarters filled; the detail page's any-None lazy trigger will self-heal HUM/ORCL/SPG on their next detail visit without a re-seed.
+
+**Live:** dev server restarted for the new code (kill by explicit PID). `/company/CHD` 200, `/company/CHD/detail/data` 200 rendering the true headline with 70 words Available. No template change; screenshot gate N/A. DB at 245 companies.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing — and SPG's exhibit is a combined release+supplement packet with a TOC, a different defect class than the Contact block (its masthead is now skipped but the narrative-start-past-TOC fix is separate); V/BRK.B/STZ quarterly EPS tagging still unfixable from the feed; pending-filing cohort at 16.
