@@ -587,7 +587,8 @@ def extract_recent_quarterly_financials(
             )
         )
     rows = _dedupe_period_labels(rows)
-    return _repair_sequence_breaks(rows)
+    rows = _repair_sequence_breaks(rows)
+    return _repair_stale_fy_wraps(rows)
 
 
 def _fill_missing_eps_basic(
@@ -826,6 +827,48 @@ def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFi
         ):
             row.fy, row.fp = expected
         held.add((row.fy, row.fp))
+    return rows
+
+
+def _repair_stale_fy_wraps(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:
+    """Relabel quarters whose filer never incremented the fiscal-year focus.
+
+    Some filers' 10-Q XBRL templates carry a stale ``fy`` (fiscal-year focus):
+    MTD's Q1/Q2-2025 10-Qs tag 2025-03-31/2025-06-30 as fy=2024, and WDAY's
+    2025 10-Qs tag three quarters fy=2025 — while their 10-Ks and Q3 10-Qs use
+    the correct ending-year convention (verified against raw SEC JSON).
+    ``_dedupe_period_labels`` only arbitrates collisions and
+    ``_repair_sequence_breaks`` needs a 3-long backbone, so these
+    consistent-but-wrong runs slip through (batch 89).
+
+    The invariant is local and convention-independent: labels advance one
+    quarter-step per period, so a row claiming exactly one year behind the
+    successor expectation (same fp) is mislabeled — regardless of
+    beginning/end-year convention or 52/53-week calendars. Walk ends
+    ascending; relabel such rows — but only when the target label is unheld,
+    so a genuinely shifted convention (SKYD's FY2025Q4 -> FY2025Q1 wrap,
+    whose "fixed" targets are held by later rows) is left alone instead of
+    being collided. Cascading follows naturally because each row's expectation
+    derives from the previous row's final label; a genuine coverage gap
+    changes fp, so it can never match the same-fp signature.
+    """
+    ordered = sorted(rows, key=lambda r: r.end)
+    held = {(r.fy, r.fp) for r in ordered}
+    prev: tuple[int, str] | None = None
+    for row in ordered:
+        if prev is not None:
+            expected = _successor_label(*prev)
+            claim = (row.fy, row.fp)
+            if (
+                expected is not None
+                and claim != expected
+                and claim == (expected[0] - 1, expected[1])
+                and expected not in held
+            ):
+                held.discard(claim)
+                row.fy, row.fp = expected
+                held.add(expected)
+        prev = (row.fy, row.fp)
     return rows
 
 

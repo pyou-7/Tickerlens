@@ -3873,3 +3873,104 @@ def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
         {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
     )
     assert all(item.fp != "Q4" for item in series)
+
+
+def test_repair_stale_fy_wraps_mtd_shape() -> None:
+    """Batch 89: MTD's Q1/Q2-2025 10-Qs tag 2025-03-31/2025-06-30 as fy=2024
+    (stale fiscal-year focus; verified against raw SEC JSON) while the 10-K
+    and Q3 10-Q use the ending-year convention. The Q4->Q1 wrap must increment
+    fy, so both rows move to FY2025."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2024, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2024, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2024, "Q3"), (2024, "Q4"),
+        (2025, "Q1"), (2025, "Q2"),
+        (2025, "Q3"), (2025, "Q4"),
+        (2026, "Q1"), (2026, "Q2"),
+    ]
+
+
+def test_repair_stale_fy_wraps_wday_cascade() -> None:
+    """Batch 89: WDAY's three 2025 10-Qs all carry the stale fy=2025; the
+    repair cascades through consecutive stale rows until the labels rejoin
+    the sequence at the 10-K-anchored FY2026Q4."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2027, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2024, "Q3"), (2025, "Q4"),
+        (2026, "Q1"), (2026, "Q2"), (2026, "Q3"),
+        (2026, "Q4"), (2027, "Q1"), (2027, "Q2"),
+    ]
+
+
+def test_repair_stale_fy_wraps_skyd_held_target_untouched() -> None:
+    """Batch 89: SKYD's whole series uses a shifted convention, so the
+    "repaired" targets are held by later rows — the unheld-target guard must
+    leave the series alone instead of manufacturing collisions."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    before = [(r.fy, r.fp) for r in rows]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == before
+
+
+def test_repair_stale_fy_wraps_clean_sequence_untouched() -> None:
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+    ]
+    before = [(r.fy, r.fp) for r in rows]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == before
+
+
+def test_repair_stale_fy_wraps_gap_never_repaired() -> None:
+    """A genuine coverage gap (Q1 -> Q3) changes fp, so it can never match the
+    same-fp signature and is left alone — but the later stale wrap is still
+    repaired, since a gap earlier in the series does not legitimize it."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2026, 3, 31)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2025, "Q1"), (2025, "Q3"), (2025, "Q4"), (2026, "Q1"),
+    ]
