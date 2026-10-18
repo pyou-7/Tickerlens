@@ -1672,3 +1672,23 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B quarterly EPS tagging not resumed (still unfixable); pending-filing cohort at 14 (EDGAR ~2.5-month companyfacts lag, by design).
 
 **Tests:** none added; suite 735 green, `git diff --check` clean. **Blast radius:** none (docs only). No template change; screenshot gate N/A.
+
+## Batch 87 (2026-10-18) — round-32 seeds; derived-EPS basic/diluted ranking guard
+
+**Seeds:** BBY, DLTR, EIX, STZ, VMC, EXPE — all 8 quarters, clean. DB at 239 companies.
+
+**Finding:** Deep audit surfaced one real defect class. BBY's FY2026Q4 shows diluted EPS $2.5798 above basic $2.5584 — arithmetically impossible (anti-dilutive securities are excluded from the diluted count, never added). Forensics against raw companyfacts (CIK-verified): the inputs are honest — FY2026 NI $1,069M / EPS $5.06/$5.04 and 9M NI $528M / EPS $2.50/$2.48 (the "two facts, same end" pair is the normal YTD-vs-quarterly split: start=2025-02-02 vs start=2025-08-03, not a restatement). The corruption is in the batch-12 share-implied derivation itself: basic and diluted are derived independently, and the 2-decimal 9M EPS gets 3x leverage through the (12·FY_avg − 9·9M_avg)/3 share-month residual, so filing-rounded inputs invert the ranking (implied Q4 diluted shares 209.7M came out below basic 211.4M). A DB-wide scan found 49 inverted pairs across 44 tickers — all derivation artifacts, including the batch-78 NI/shares path (DD FY2025Q1 −4.23/−4.20) and loss quarters where diluted must equal basic (COIN FY2025Q4 −2.49/−2.31, the largest flip at 0.18). Every other suspicious value verified as filer-real: DLTR's FY2024Q4 −$3.70B NI is the filer's own 10-K Q4 stub (start=2024-11-03, fp="FY" mislabel — the batch-13 relabel machinery handled it; 9M + Q4 = FY to the dollar); VMC's Q3→Q4 FY2024 balance-sheet jump (+$2.7B assets, +$1.6B LT debt) is a real debt-financed acquisition, identical in the 10-K and every later comparative. STZ files no EPS tags at all (dimensional per-class EPS, like V) — data-source limit, documented.
+
+**Fix:** new `_reconcile_eps_basic_diluted(basic, diluted)` in `data/xbrl.py`, called in `extract_recent_quarterly_financials` after `_fill_missing_eps_basic`. Any diluted > basic pair is corrupt by definition, so the diluted leg is clamped to basic (the legs differ by fractions of a percent — nothing is lost; logs a warning per correction). Series-level placement catches flips from every derivation path, and subsumes the batch-12 "residual sub-cent flips" limitation (DLTR FY2025Q4 2.5434/2.548 now 2.5434/2.5434).
+
+**Alternatives considered:** recomputing the diluted leg via precision-rounded subtraction at reconcile time (rejected — the annual/9M facts aren't in scope at the series level, and the clamp is the invariant-preserving minimum); fixing only inside `_derive_q4_income` (rejected — it sees one metric at a time, and the batch-78 path would still flip); raising basic to diluted (rejected — basic is the binding constraint; the error is always diluted overshooting).
+
+**Tests:** 5 new in `tests/data/test_xbrl.py` (reconciler unit: BBY-shaped flip clamped, healthy pair untouched, loss-quarter equalized, unpaired diluted ignored; end-to-end BBY-shaped fixture asserting the stored row has diluted ≤ basic — verified to fail pre-fix). Suite 740 green (735 + 5), `git diff --check` clean.
+
+**Blast radius:** `data/xbrl.py` (one new function + one call site), tests. No valuation, briefing, peers, calendar, template, or schema changes. Backfill: 49 diluted values corrected DB-wide from cached companyfacts (44 tickers), 0 basic changed, 0 errors; 0 flipped pairs remain.
+
+**Live:** Server restarted via the launcher script (kill by explicit PID). 6/6 routes 200 (BBY overview needed one retry — transient quote-refresh stall); BBY detail HTML no longer carries 2.5798. No template change (backend-only); screenshot gate N/A.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging not resumed (still unfixable from the feed); pending-filing cohort at 16 (14 carried + EIX/VMC seed-time notes; EDGAR ~2.5-month companyfacts lag, by design).
+
+**Tests:** 5 new; suite 740 green, `git diff --check` clean. **Blast radius:** `data/xbrl.py` + tests. No template change; screenshot gate N/A.
