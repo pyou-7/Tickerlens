@@ -2050,8 +2050,17 @@ class FinancialsService:
         except Exception:
             detail = None
         rows = self.get_stored_quarters(ticker, session=session)
+        # SIC drives REIT-aware thesis copy in generate_ai_analysis (batch 88);
+        # a local Company lookup — no network, never raises the briefing.
+        sic: str | None = None
+        try:
+            db = session or self._session or get_session()
+            company = db.get(Company, overview.cik)
+            sic = company.sic if company else None
+        except Exception:
+            sic = None
         return generate_ai_analysis(
-            overview=overview, detail=detail, valuation=val, rows=rows
+            overview=overview, detail=detail, valuation=val, rows=rows, sic=sic
         )
 
     def refresh_watchlist_quotes(

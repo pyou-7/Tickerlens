@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from tickerlens.models.quarterly_financial import QuarterlyFinancial
 from tickerlens.services.financials import CompanyOverview, DetailContext
 from tickerlens.services.valuation import ValuationSignal
+from tickerlens.data.xbrl import _is_mreit_sic
 
 
 # Revenue growth below this magnitude is noise, not a demand signal:
@@ -94,31 +95,46 @@ def _solvency_score(assets_to_liabilities: float, sector: str | None) -> int:
     return 40
 
 
-def _revenue_thesis_tail(sector: str | None) -> str:
+def _revenue_thesis_tail(sector: str | None, is_reit: bool = False) -> str:
     """Sector-aware close for the revenue-growth thesis.
 
     "Healthy demand across commercial segments" is wrong-register for banks,
-    insurers, and brokers, whose "revenue" is net interest / fee income.
+    insurers, and brokers, whose "revenue" is net interest / fee income
+    (batch 41). It is equally wrong for REITs (batch 88): a mortgage REIT's
+    revenue is net interest spread, an equity REIT's is rental income —
+    neither is end-market "demand". Unknown sector gets a neutral close:
+    with no sector data (e.g. ARCC, whose Company.sic is NULL), the
+    industrial register is an ungrounded claim.
     """
+    if is_reit:
+        return "reflecting portfolio income and balance-sheet dynamics."
     sec = (sector or "").lower()
     if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
         return "reflecting balance-sheet growth and fee-income momentum."
+    if sector is None:
+        return "reflecting the quarter's operating performance."
     return "reflecting healthy demand across commercial segments."
 
 
-def _revenue_decline_tail(sector: str | None) -> str:
+def _revenue_decline_tail(sector: str | None, is_reit: bool = False) -> str:
     """Sector-aware close for the revenue-decline thesis.
 
     Mirrors _revenue_thesis_tail: financials' "revenue" is net interest /
     fee income, so "soft demand in end markets" would be wrong-register.
+    REITs and unknown-sector filers get the same treatment as the growth
+    tail (batch 88).
     """
+    if is_reit:
+        return "a softer quarter for portfolio income and balance-sheet dynamics."
     sec = (sector or "").lower()
     if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
         return "a softer quarter for balance-sheet growth and fee income."
+    if sector is None:
+        return "a softer quarter for operating performance."
     return "signaling soft demand in its end markets this quarter."
 
 
-def _margin_thesis_tail(sector: str | None) -> str:
+def _margin_thesis_tail(sector: str | None, is_reit: bool = False) -> str:
     """Sector-aware close for the net-margin thesis.
 
     "Operational leverage and pricing discipline" is industrial-register
@@ -126,11 +142,19 @@ def _margin_thesis_tail(sector: str | None) -> str:
     underwriting, and fee income — not operating leverage. The batch-46
     audit found every financial-sector ticker (JPM, BNY, MET, SCHW, NLY,
     AIG) rendering the industrial line. Same key set as the revenue tails
-    (batch 41).
+    (batch 41). REITs get FFO-honest copy (batch 88): GAAP net margin for a
+    REIT is distorted by depreciation and unrealized gains (NLY rendered
+    "186.4% ... operational leverage"), and the valuation model already
+    prices REITs on FFO. Unknown sector gets a neutral close rather than
+    an ungrounded industrial claim (ARCC).
     """
+    if is_reit:
+        return "with REIT profitability better read through funds from operations than GAAP net margin."
     sec = (sector or "").lower()
     if any(k in sec for k in ("bank", "securit", "insurance", "financ")):
         return "demonstrating spread discipline and fee-income efficiency."
+    if sector is None:
+        return "with net margin reflecting the quarter's profitability."
     return "demonstrating operational leverage and pricing discipline."
 
 
@@ -187,9 +211,18 @@ def generate_ai_analysis(
     detail: DetailContext | None = None,
     valuation: ValuationSignal | None = None,
     rows: list[QuarterlyFinancial] | None = None,
+    sic: str | int | None = None,
 ) -> AIAnalysis:
-    """Generate institutional AI fundamental analysis synthesis (PRD §4.4)."""
+    """Generate institutional AI fundamental analysis synthesis (PRD §4.4).
+
+    ``sic`` (optional) drives REIT-aware thesis copy via _is_mreit_sic;
+    when omitted, only the sector string is used and REIT copy applies to
+    the "Real Estate" sector label.
+    """
     tier_label, tier_focus = _determine_cap_tier(overview.market_cap)
+    is_reit = _is_mreit_sic(sic) or (
+        overview.sector is not None and "real estate" in overview.sector.lower()
+    )
 
     # 1. Growth Evaluation
     rev_yoy = overview.yoy.revenue if overview.yoy and overview.yoy.revenue is not None else 0.0
@@ -303,14 +336,14 @@ def generate_ai_analysis(
     elif rev_yoy > 0:
         theses.append(
             f"Top-line revenue grew {rev_yoy:+.1f}% YoY in {overview.latest_label}, "
-            f"{_revenue_thesis_tail(overview.sector)}"
+            f"{_revenue_thesis_tail(overview.sector, is_reit=is_reit)}"
         )
     else:
         # A decline is not "growth": the old branch rendered
         # "grew -18.5% ... fee-income momentum" (COIN Q2 FY2026).
         theses.append(
             f"Top-line revenue declined {abs(rev_yoy):.1f}% YoY in {overview.latest_label}, "
-            f"{_revenue_decline_tail(overview.sector)}"
+            f"{_revenue_decline_tail(overview.sector, is_reit=is_reit)}"
         )
     # Earnings thesis (batch 42): the briefing previously had no EPS line
     # at all, so a collapsing quarter read as pure upside — DUOL's
@@ -360,7 +393,7 @@ def generate_ai_analysis(
             )
     if net_margin > 0:
         theses.append(
-            f"Trailing net margin of {net_margin:.1f}% {_margin_thesis_tail(overview.sector)}"
+            f"Trailing net margin of {net_margin:.1f}% {_margin_thesis_tail(overview.sector, is_reit=is_reit)}"
         )
     if ttm_fcf > 0:
         theses.append(

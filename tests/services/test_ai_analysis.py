@@ -550,3 +550,93 @@ def test_ai_analysis_margin_thesis_industrial_unchanged() -> None:
     margin = _margin_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
     assert margin is not None
     assert margin == "Trailing net margin of 32.7% demonstrating operational leverage and pricing discipline."
+
+
+def _rev_thesis(analysis) -> str | None:
+    return next(
+        (t for t in analysis.theses if "Top-line revenue" in t), None
+    )
+
+
+def test_ai_analysis_reit_revenue_growth_tail() -> None:
+    """Batch 88: REITs (SIC 6798) must not render the industrial
+    "healthy demand across commercial segments" demand narrative — an
+    mREIT's revenue is net interest spread (NLY rendered it at +78.7%)."""
+    overview = _bank_overview(
+        sector="Real Estate",
+        yoy=KPIChange(revenue=78.7, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+    )
+    rev = _rev_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[], sic="6798"))
+    assert rev is not None
+    assert "healthy demand" not in rev
+    assert "portfolio income and balance-sheet dynamics" in rev
+
+
+def test_ai_analysis_reit_revenue_decline_tail() -> None:
+    """Batch 88: REIT revenue declines get the REIT register, not
+    "soft demand in its end markets"."""
+    overview = _bank_overview(
+        sector="Real Estate",
+        yoy=KPIChange(revenue=-5.0, net_income=-2.0, eps_diluted=-3.0, free_cash_flow=8.0),
+    )
+    rev = _rev_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[], sic="6798"))
+    assert rev is not None
+    assert "end markets" not in rev
+    assert "softer quarter for portfolio income" in rev
+
+
+def test_ai_analysis_reit_margin_tail_ffo_honest() -> None:
+    """Batch 88: REIT net-margin thesis must not claim "operational
+    leverage and pricing discipline" (NLY rendered it at 186.4% GAAP
+    margin); REIT profitability is read through FFO, matching the
+    valuation model's FFO path."""
+    overview = _bank_overview(sector="Real Estate")
+    margin = _margin_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[], sic="6798"))
+    assert margin is not None
+    assert "operational leverage" not in margin
+    assert "pricing discipline" not in margin
+    assert "funds from operations" in margin
+
+
+def test_ai_analysis_reit_detected_from_sector_label() -> None:
+    """Batch 88: the REIT register also fires on the "Real Estate" sector
+    label when no SIC is passed (e.g. callers without the Company row)."""
+    overview = _bank_overview(
+        sector="Real Estate",
+        yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+    )
+    margin = _margin_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[]))
+    assert margin is not None
+    assert "funds from operations" in margin
+
+
+def test_ai_analysis_unknown_sector_neutral_register() -> None:
+    """Batch 88: with no sector data (e.g. ARCC, whose Company.sic is
+    NULL), the briefing must not assert the industrial register —
+    "healthy demand" / "operational leverage" are ungrounded claims."""
+    overview = _bank_overview(
+        sector=None,
+        yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+    )
+    analysis = generate_ai_analysis(overview=overview, valuation=None, rows=[])
+    rev = _rev_thesis(analysis)
+    assert rev is not None
+    assert "healthy demand" not in rev
+    assert "operating performance" in rev
+    margin = _margin_thesis(analysis)
+    assert margin is not None
+    assert "operational leverage" not in margin
+    assert "pricing discipline" not in margin
+    assert "reflecting the quarter's profitability" in margin
+
+
+def test_ai_analysis_non_reit_real_sector_not_applied() -> None:
+    """Batch 88 guard: a non-6798 SIC keeps the industrial register even
+    if the sector string mentions real estate adjacent labels."""
+    overview = _bank_overview(
+        sector="Technology",
+        yoy=KPIChange(revenue=10.0, net_income=12.0, eps_diluted=11.0, free_cash_flow=8.0),
+    )
+    rev = _rev_thesis(generate_ai_analysis(overview=overview, valuation=None, rows=[], sic="7372"))
+    assert rev is not None
+    assert "healthy demand across commercial segments" in rev
