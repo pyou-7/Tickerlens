@@ -393,6 +393,63 @@ def _has_discontinued_ops_facts(companyfacts: dict[str, Any]) -> bool:
     return False
 
 
+def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.date]:
+    """FY start dates whose 10-K reclassified a component to discontinued
+    ops after the last 10-Q — the interim and annual income-statement facts
+    are then on different bases, and FY − 9M fabricates Q4.
+
+    Batch 85 (OXY/OxyChem, verified against the 2025 10-K, which reports
+    OxyChem "separately as discontinued operations ... for all periods
+    presented"): the Q3-2025 10-Q tags 9M
+    IncomeLossFromDiscontinuedOperationsNetOfTax = 0, but the 2025 10-K
+    tags FY = $262M. The 10-Q's 9M Revenues ($19.84B) still included
+    OxyChem while the 10-K's FY Revenues ($21.59B) excludes it, so FY − 9M
+    produced a $1.75B Q4 against a real ~$5.4B. A missing Q4 is honest; a
+    mixed-basis Q4 is a fabrication.
+
+    Fires only on the filer's own proof: a tagged 9M interim zero followed
+    by a tagged nonzero annual for the same fiscal year. Filers with
+    ongoing discontinued ops tag nonzero interims and never trip it;
+    filers that don't tag the interim line at all are left alone
+    (fail-safe: no worse than today). Deliberately no materiality floor —
+    the derivation is then wrong by exactly the discontinued component's
+    9M amount, which companyfacts cannot supply, so any proven break
+    abstains.
+    """
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    raw: list[XbrlFact] = []
+    for tag in _DISCONTINUED_OPS_TAGS:
+        for item in us_gaap.get(tag, {}).get("units", {}).get("USD", []):
+            if (
+                item.get("form") not in {"10-Q", "10-K"}
+                or not item.get("end")
+                or not item.get("start")
+            ):
+                continue
+            try:
+                raw.append(XbrlFact.model_validate(item))
+            except Exception:
+                continue
+    if not raw:
+        return set()
+    annual = _dedup_by_end(raw, 340, 380, None)
+    interim_9m = _dedup_by_end(raw, 240, 290, None)
+    breaks: set[dt.date] = set()
+    for af in annual:
+        if af.form != "10-K" or not af.val:
+            continue
+        for mf in interim_9m:
+            if (
+                mf.start == af.start
+                and mf.form == "10-Q"
+                and mf.val == 0
+                and mf.filed < af.filed
+            ):
+                breaks.add(af.start)
+                break
+    return breaks
+
+
 def extract_recent_quarterly_financials(
     companyfacts: dict[str, Any],
     *,
@@ -1228,6 +1285,12 @@ def quarterly_income_metric(
                 events=split_events,
                 share_facts=split_share_facts,
             )
+    # Batch 85: a discontinued-ops reclassification between the last 10-Q
+    # and the 10-K leaves interim and annual income-statement facts on
+    # different bases — Q4 derivation must abstain for those fiscal years
+    # (OXY FY2025Q4 revenue $1.75B vs ~$5.4B real). Computed once; every
+    # tag in the chain shares it.
+    basis_break_starts = _discontinued_basis_break_starts(companyfacts)
     merged = _merge_gap_fill(
         [
             _income_series_for_tag(
@@ -1237,6 +1300,7 @@ def quarterly_income_metric(
                 fiscal_year_end,
                 ni_facts,
                 eps_annual_fallback=eps_annual_fallback if i == 0 else None,
+                basis_break_starts=basis_break_starts,
             )
             for i, (tag, facts) in enumerate(candidates)
         ]
@@ -1265,6 +1329,7 @@ def _income_series_for_tag(
     fiscal_year_end: str | None,
     ni_facts: list[XbrlFact] | None = None,
     eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None,
+    basis_break_starts: set[dt.date] | None = None,
 ) -> list[PeriodMetric]:
     """Quarterly series from one tag: standalone quarters + derived Q4s."""
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
@@ -1275,6 +1340,7 @@ def _income_series_for_tag(
         fiscal_year_end,
         ni_facts=ni_facts,
         eps_annual_fallback=eps_annual_fallback,
+        basis_break_starts=basis_break_starts,
     )
     return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
 
@@ -1346,9 +1412,11 @@ def quarterly_cash_flow_metric(
     candidates = _chain_candidates(
         companyfacts, spec.tags, spec.unit, metric_name=metric.value
     )
+    # Batch 85: discontinued-ops basis-break guard (see quarterly_income_metric).
+    basis_break_starts = _discontinued_basis_break_starts(companyfacts)
     return _merge_gap_fill(
         [
-            _cash_flow_series_for_tag(metric, tag, facts, fiscal_year_end)
+            _cash_flow_series_for_tag(metric, tag, facts, fiscal_year_end, basis_break_starts)
             for tag, facts in candidates
         ]
     )
@@ -1434,6 +1502,7 @@ def _flight_equipment_capex(
         "+".join(components),
         sorted(summed.values(), key=lambda fact: fact.end),
         fiscal_year_end,
+        _discontinued_basis_break_starts(companyfacts),
     )
 
 
@@ -1442,6 +1511,7 @@ def _cash_flow_series_for_tag(
     source_tag: str,
     facts: list[XbrlFact],
     fiscal_year_end: str | None,
+    basis_break_starts: set[dt.date] | None = None,
 ) -> list[PeriodMetric]:
     """Uncumulative quarterly cash-flow series from one tag's YTD facts."""
     q1s = _dedup_by_end(facts, 75, _QUARTERLY_FACT_MAX_DAYS, fiscal_year_end)
@@ -1474,7 +1544,10 @@ def _cash_flow_series_for_tag(
             results.append(_metric_value(metric, source_tag, fy, "Q2", h1.end, h1.val - q1.val))
         if m9 and h1:
             results.append(_metric_value(metric, source_tag, fy, "Q3", m9.end, m9.val - h1.val))
-        if year and m9:
+        # Batch 85: same discontinued-ops basis-break guard as the income
+        # path — a 10-K reclassification between the 10-Q and the 10-K
+        # leaves the YTD and annual cash-flow facts on different bases.
+        if year and m9 and not (basis_break_starts and start in basis_break_starts):
             results.append(
                 _metric_value(metric, source_tag, fy, "Q4", year.end, year.val - m9.val)
             )
@@ -1762,7 +1835,13 @@ def _finance_total_revenue(
     if newest is None or (dt.date.today() - newest).days > _MAX_TAG_STALENESS_DAYS:
         return []
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    q4 = _derive_q4_income(
+        facts,
+        source_tag,
+        Metric.REVENUE,
+        fiscal_year_end,
+        basis_break_starts=_discontinued_basis_break_starts(companyfacts),
+    )
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
@@ -1790,7 +1869,13 @@ def _bdc_quarterly_revenue(
         )
         return []
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    q4 = _derive_q4_income(
+        facts,
+        source_tag,
+        Metric.REVENUE,
+        fiscal_year_end,
+        basis_break_starts=_discontinued_basis_break_starts(companyfacts),
+    )
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
@@ -1830,7 +1915,13 @@ def _bank_quarterly_revenue(
             )
             return []
         standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-        q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+        q4 = _derive_q4_income(
+        facts,
+        source_tag,
+        Metric.REVENUE,
+        fiscal_year_end,
+        basis_break_starts=_discontinued_basis_break_starts(companyfacts),
+    )
         component_series.append(
             _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
         )
@@ -1912,7 +2003,13 @@ def _mreit_quarterly_revenue(
         )
         return []
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(facts, source_tag, Metric.REVENUE, fiscal_year_end)
+    q4 = _derive_q4_income(
+        facts,
+        source_tag,
+        Metric.REVENUE,
+        fiscal_year_end,
+        basis_break_starts=_discontinued_basis_break_starts(companyfacts),
+    )
     return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
@@ -2186,6 +2283,7 @@ def _derive_q4_income(
     fiscal_year_end: str | None,
     ni_facts: list[XbrlFact] | None = None,
     eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None,
+    basis_break_starts: set[dt.date] | None = None,
 ) -> list[PeriodMetric]:
     annual = _dedup_by_end(facts, 340, 380, fiscal_year_end)
     # Same 240-day floor as quarterly_cash_flow_metric's m9 window (52/53-week
@@ -2222,6 +2320,12 @@ def _derive_q4_income(
 
     results: list[PeriodMetric] = []
     for start, ytd in ytd_by_start.items():
+        # Batch 85: a discontinued-ops reclassification between the 10-Q
+        # and the 10-K leaves the 9M and FY facts on different bases —
+        # deriving Q4 would fabricate (OXY FY2025Q4 revenue $1.75B vs
+        # ~$5.4B real). Skip the FY; a missing Q4 is honest.
+        if basis_break_starts and start in basis_break_starts:
+            continue
         annual_fact = annual_by_start.get(start)
         from_fallback = False
         if annual_fact is None:

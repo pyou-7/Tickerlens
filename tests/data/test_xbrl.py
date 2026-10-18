@@ -3690,3 +3690,106 @@ def test_forward_split_quarterly_rescaled_via_share_basis() -> None:
         assert by_end[end] < 1.5  # not the old-basis ~9
     # No quarter left on the old (~10x) basis.
     assert all(v < 1.5 for v in by_end.values())
+
+
+def _oxy_discontinued_facts(interim_val: float) -> dict:
+    """Mirror the OXY/OxyChem case: the 10-Q tags 9M discontinued-ops
+    income 0, the 10-K tags FY nonzero — the reclassification happened
+    between the filings."""
+    return {
+        "IncomeLossFromDiscontinuedOperationsNetOfTax": {
+            "units": {
+                "USD": [
+                    fact(
+                        "2025-01-01", "2025-09-30", interim_val, 2025, "Q3",
+                        filed="2025-11-10",
+                    ),
+                    fact(
+                        "2025-01-01", "2025-12-31", 262_000_000, 2025, "FY",
+                        filed="2026-02-18",
+                    ),
+                ]
+            }
+        }
+    }
+
+
+def _oxy_revenue_facts() -> dict:
+    return {
+        "Revenues": {
+            "units": {
+                "USD": [
+                    fact("2025-01-01", "2025-03-31", 6_600_000_000, 2025, "Q1"),
+                    fact("2025-04-01", "2025-06-30", 6_617_000_000, 2025, "Q2"),
+                    fact("2025-07-01", "2025-09-30", 6_624_000_000, 2025, "Q3"),
+                    fact(
+                        "2025-01-01", "2025-09-30", 19_841_000_000, 2025, "Q3",
+                        filed="2025-11-10",
+                    ),
+                    fact(
+                        "2025-01-01", "2025-12-31", 21_593_000_000, 2025, "FY",
+                        filed="2026-02-18",
+                    ),
+                ]
+            }
+        }
+    }
+
+
+def test_discontinued_basis_break_detected() -> None:
+    """Batch 85 (live OXY case): 9M discontinued-ops income tagged 0 in the
+    10-Q but nonzero in the 10-K for the same fiscal year — the FY start is
+    a basis break."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(0)}}
+    assert _discontinued_basis_break_starts(companyfacts) == {dt.date(2025, 1, 1)}
+
+
+def test_discontinued_basis_break_ignores_ongoing_discontinued_ops() -> None:
+    """Filers with ongoing discontinued ops tag nonzero interims — no
+    reclassification happened between the filings, so no break."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(50_000_000)}}
+    assert _discontinued_basis_break_starts(companyfacts) == set()
+
+
+def test_discontinued_basis_break_skips_fabricated_q4() -> None:
+    """End-to-end batch-85 regression: with the OxyChem reclassification,
+    Q4 revenue derivation (FY − 9M = $1.75B vs ~$5.4B real) is skipped — a
+    missing Q4 is honest. Without the reclassification the derivation
+    still fires (control)."""
+    broken = {"facts": {"us-gaap": {**_oxy_revenue_facts(), **_oxy_discontinued_facts(0)}}}
+    series = quarterly_income_metric(broken, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert dt.date(2025, 12, 31) not in by_end
+    # The standalone quarters are untouched.
+    assert by_end[dt.date(2025, 9, 30)] == 6_624_000_000
+
+    clean = {"facts": {"us-gaap": _oxy_revenue_facts()}}
+    series = quarterly_income_metric(clean, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 12, 31)] == pytest.approx(1_752_000_000)
+
+
+def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
+    """The cash-flow un-cumulation (year − 9M) has the same exposure and
+    the same guard."""
+    us_gaap = {
+        "NetCashProvidedByUsedInOperatingActivities": {
+            "units": {
+                "USD": [
+                    fact("2025-01-01", "2025-09-30", 9_000_000_000, 2025, "Q3",
+                         filed="2025-11-10"),
+                    fact("2025-01-01", "2025-12-31", 10_000_000_000, 2025, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        },
+        **_oxy_discontinued_facts(0),
+    }
+    series = quarterly_cash_flow_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
+    )
+    assert all(item.fp != "Q4" for item in series)

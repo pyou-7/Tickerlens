@@ -634,3 +634,34 @@ def test_best_title_picks_accented_top_hit() -> None:
     ]
     with patch("tickerlens.data.wikipedia._search_titles", return_value=hits):
         assert _best_title("ESTEE LAUDER COMPANIES INC", "EL") == "Estée Lauder Companies"
+
+
+def test_best_title_accepts_ticker_titled_company_article() -> None:
+    """Batch 85 regression: Wikipedia titles the TJX Companies article
+    "TJX" — the strict stripped-name match can never accept it, so the
+    fallback must accept the article titled exactly the ticker."""
+
+    def fake_search(query: str, limit: int = 5) -> list[str]:
+        if "INC" in query:
+            return []  # primary: the legal name poisons Wikipedia's ranking
+        return ["TJX", "TJ Maxx", "HomeGoods"]
+
+    with patch(
+        "tickerlens.data.wikipedia._search_titles", side_effect=fake_search
+    ):
+        assert _best_title("TJX COMPANIES INC /DE/", "TJX") == "TJX"
+
+
+def test_best_title_ticker_title_requires_exact_ticker() -> None:
+    """The ticker-title acceptance must not fire on near matches: an
+    article merely containing the ticker is still declined."""
+
+    def fake_search(query: str, limit: int = 5) -> list[str]:
+        if "INC" in query:
+            return []
+        return ["TJX Logistics", "TJ Maxx"]
+
+    with patch(
+        "tickerlens.data.wikipedia._search_titles", side_effect=fake_search
+    ):
+        assert _best_title("TJX COMPANIES INC /DE/", "TJX") is None

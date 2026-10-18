@@ -168,7 +168,12 @@ def _best_title(company_name: str, ticker: str | None = None) -> str | None:
     query ("Atlassian Corp company" poisons Wikipedia's ranking while
     "Atlassian company" hits the article). Acceptance is strict — the
     candidate must be an article *named* the stripped company name — so
-    merely similar articles are declined, never misattributed.
+    merely similar articles are declined, never misattributed. Ticker-titled
+    articles are the one exception (batch 85): when Wikipedia titles the
+    company article by its common short name ("TJX" for TJX Companies,
+    Inc.), the article titled exactly the ticker is accepted — relevance
+    rule 1 (acronym pages) is the guard, disambiguation pages are rejected
+    at extract time.
 
     Alias retry (batch 58): when the fallback also yields nothing and the
     ticker has a curated entry in _DBA_ALIASES, search the alias and accept
@@ -225,6 +230,19 @@ def _best_title(company_name: str, ticker: str | None = None) -> str | None:
     if stripped and stripped != company_name:
         for cand in _search_titles(stripped, limit=5):
             if _strict_title_match(cand, stripped):
+                return cand
+            # Ticker-titled articles (batch 85): Wikipedia titles some
+            # company articles by the common short name, which is the
+            # ticker — "TJX" is the article for TJX Companies, Inc., so
+            # the strict name match above can never accept it. Accept the
+            # article titled exactly the ticker: relevance rule 1
+            # (acronym pages) is the anti-misattribution guard, and
+            # disambiguation pages are rejected at extract time.
+            if (
+                ticker
+                and _bare_title(cand).strip().lower() == ticker.strip().lower()
+                and _title_relevant(cand, company_name, ticker)
+            ):
                 return cand
     # Alias retry (batch 58): last resort, exact title match only. The map
     # is keyed by ticker so no recursion guard is needed — this is a flat
