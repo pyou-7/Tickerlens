@@ -1692,3 +1692,25 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging not resumed (still unfixable from the feed); pending-filing cohort at 16 (14 carried + EIX/VMC seed-time notes; EDGAR ~2.5-month companyfacts lag, by design).
 
 **Tests:** 5 new; suite 740 green, `git diff --check` clean. **Blast radius:** `data/xbrl.py` + tests. No template change; screenshot gate N/A.
+
+## Batch 88 (2026-10-18) — AI briefing integration audit: REIT register, unknown-sector register, SIC 6400-6499 gap
+
+**Audit:** Network-free sweep of `generate_ai_analysis` over all 239 DB companies (stored overviews + stored risk factors/guidance + stored valuations). Zero contradiction flags: the Strong-Sell reconciliation thesis renders on all 122 Watch-vs-Strong-Sell pairs and the `theses[:6]` cap never truncates it; no Strong-Buy/Avoid pairs exist.
+
+**Finding 1 — REITs in industrial register:** all 10 SIC-6798 REITs narrated "healthy demand across commercial segments" (NLY +78.7% — an mREIT's revenue is net interest spread) and "operational leverage and pricing discipline" next to 186.4%/231.7% GAAP net margins (distorted by depreciation and unrealized gains). The batch-41/46 sector tails covered bank/securit/insurance/financ but forgot REITs.
+
+**Fix:** `_revenue_thesis_tail`, `_revenue_decline_tail`, `_margin_thesis_tail` in `services/ai_analysis.py` take `is_reit` (default False). REIT copy: "reflecting portfolio income and balance-sheet dynamics" / "a softer quarter for portfolio income and balance-sheet dynamics" / "with REIT profitability better read through funds from operations than GAAP net margin" (FFO copy matches the valuation model's REIT path, batches 70/72). `generate_ai_analysis` gains an optional `sic` param reusing `_is_mreit_sic` from `data/xbrl.py` (with the "Real Estate" sector label as fallback for callers without the Company row); `get_ai_analysis` wires it through a local, never-raising Company lookup.
+
+**Finding 2 — unknown sector in industrial register:** ARCC's `Company.sic` is NULL — verified honest (SEC's own submissions file for CIK 0001287750 reports no SIC), so the briefing's industrial closers were ungrounded claims. Sector-None now renders neutral register ("the quarter's operating performance" / "reflecting the quarter's profitability") instead of fabricating a register.
+
+**Finding 3 — SIC 6400-6499 unmapped:** AON (sic 6411) got sector None while the valuation model already priced it on the insurer path (`_BANK_INSURER_SIC_RANGES` covers 6300-6499, batch 70). Added `(6400, 6499, "Insurance")` to `data/sic.py` (SIC 64xx = Insurance Agents, Brokers, and Service). Genuine side effect: AON's solvency now scores on the financial ladder (A/L 1.223x: 65 → 85; composite 55 → 59, signal still Watch) — the batch-46 principle (thin balance sheets are the business model for financials) applied consistently.
+
+**Alternatives considered:** keying REIT copy on the "Real Estate" sector string alone (rejected — imprecise for future non-REIT real-estate filers; SIC is the source of truth and was already in the DB); backfilling ARCC's SIC (rejected — the SEC source itself is blank, so the fix must be code-level); rewriting the tails to drop closers for REITs (rejected — the REIT copy is informative and matches valuation's FFO framing).
+
+**Tests:** 8 new — 6 in `tests/services/test_ai_analysis.py` (REIT revenue growth/decline/margin tails via sic=6798, REIT detection from the sector label alone, unknown-sector neutral register, non-REIT sic keeps industrial register — REIT tests verified to catch the old copy) and 2 in `tests/data/test_sic.py` (new file; 6400-6499 → Insurance plus boundary regression). Suite 748 green, `git diff --check` clean.
+
+**Blast radius:** DB-wide stash A/B over 239 briefings: exactly 12 tickers change (10 REITs + ARCC + AON), 227 byte-identical, 0 signal flips, 1 composite delta (AON 55→59, justified above). No valuation, peers, calendar, tearsheet, template, or schema changes.
+
+**Live:** service-level briefings for NLY/ARCC/AON verified with the new copy. HTTP overview pages hang on first view behind the lazy SEC disclosure backfill (pre-existing — NLY exceeded a 240s curl; the backfill short-circuits on repeat views). No template change (backend-only); screenshot gate N/A.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging not resumed (still unfixable from the feed); pending-filing cohort at 16 (EDGAR ~2.5-month companyfacts lag, by design). New: overview first-view SEC-backfill latency (NLY >240s) — candidate for backgrounding the backfill off the render path.
