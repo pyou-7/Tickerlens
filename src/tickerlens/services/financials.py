@@ -93,6 +93,15 @@ _QUARTERLY_FILING_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A"})
 _filings_check_state: dict[str, tuple[float, str | None]] = {}
 _filings_check_lock = threading.Lock()
 
+# Batch 89: the per-quarter 8-K exhibit crawl inside
+# _enrich_press_release_highlights is the unbounded latency source on page
+# render paths — measured 26s for HSY and >240s for NLY on first view, from
+# up to 8 sequential large SEC HTML downloads (1 10-K + 8 ex-99 exhibits).
+# The budget bounds the added latency per visit; unfilled rows keep their NULLs
+# and the existing any-None lazy triggers (detail backfill, enrich, refresh)
+# complete them on later visits — progressive, self-healing, never raising.
+DISCLOSURE_BACKFILL_BUDGET_SECONDS = 30.0
+
 
 def _latest_quarterly_filing_date(submissions: dict) -> str | None:
     """Latest 10-Q/10-K(/A) filingDate in an EDGAR submissions feed, if any."""
@@ -950,8 +959,13 @@ class FinancialsService:
                 db2 = self._session or get_session()
                 try:
                     # Fill highlights for the new quarter; only touches rows
-                    # missing them, never wipes on transient failure.
-                    self._enrich_press_release_highlights(db2, ticker, cik)
+                    # missing them, never wipes on transient failure. Batch 89:
+                    # time-budgeted — the quarterly refresh path must not hang
+                    # on a slow filer's exhibit crawl.
+                    self._enrich_press_release_highlights(
+                        db2, ticker, cik,
+                        deadline=time.monotonic() + DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+                    )
                     # Acknowledge ingested-but-unextractable middle gaps (batch
                     # 48): a refire that still yields no quarter for an
                     # in-window filing whose facts ARE in companyfacts is
@@ -1091,8 +1105,18 @@ class FinancialsService:
                 "quarter acknowledgment failed for %s", cik, exc_info=True
             )
 
-    def enrich_company(self, ticker: str, session: Session | None = None) -> None:
-        """Update description, price, and market cap for an existing company."""
+    def enrich_company(
+        self,
+        ticker: str,
+        session: Session | None = None,
+        disclosure_budget_seconds: float | None = DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+    ) -> None:
+        """Update description, price, and market cap for an existing company.
+
+        ``disclosure_budget_seconds`` (batch 89) bounds the per-quarter 8-K
+        exhibit crawl so first-view renders never hang on a slow filer; the
+        remaining quarters self-heal on later visits. ``None`` = unbounded.
+        """
         cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
@@ -1122,8 +1146,15 @@ class FinancialsService:
 
             # Press-release highlights are per-period and equally expensive; fill
             # only rows that don't have them yet, and never wipe a
-            # previously-good value on transient failure.
-            self._enrich_press_release_highlights(db, ticker, cik)
+            # previously-good value on transient failure. Batch 89: the
+            # exhibit crawl is time-budgeted — a slow filer must not hold a
+            # page render hostage; unfilled quarters self-heal on later visits.
+            deadline = (
+                None
+                if disclosure_budget_seconds is None
+                else time.monotonic() + disclosure_budget_seconds
+            )
+            self._enrich_press_release_highlights(db, ticker, cik, deadline=deadline)
 
             # One valuation snapshot per day — powers the "signal changed"
             # indicator on the Overview card (PRD §4.11).
@@ -1162,7 +1193,7 @@ class FinancialsService:
             return None, None
 
     def _enrich_press_release_highlights(
-        self, db: Session, ticker: str, cik: str
+        self, db: Session, ticker: str, cik: str, deadline: float | None = None
     ) -> None:
         """Fill missing per-period press-release highlights from 8-K ex-99 exhibits.
 
@@ -1170,6 +1201,13 @@ class FinancialsService:
         date (the stable period key — not FY/FP labels). Best-effort: rows
         without a matched exhibit keep None and render "Not available for this
         period"; a transient failure never wipes a previously-good value.
+
+        ``deadline`` is an absolute ``time.monotonic()`` timestamp (batch 89):
+        the per-quarter exhibit crawl stops when it passes, so page render
+        paths never block on a slow filer. Quarters are processed latest-first
+        so the budget fills the most valuable rows first (latest quarter =
+        AI-briefing context + detail default view); the remaining NULLs are
+        picked up by the next lazy trigger. ``None`` means unbounded.
         """
         rows: list[QuarterlyFinancial] = (
             db.execute(
@@ -1178,13 +1216,18 @@ class FinancialsService:
             .scalars()
             .all()
         )
-        missing = [
-            r
-            for r in rows
-            if r.press_release_highlights is None
-            or r.management_guidance is None
-            or r.transcript_excerpts is None
-        ]
+        # Latest-first: under a deadline the most-viewed rows fill first.
+        missing = sorted(
+            (
+                r
+                for r in rows
+                if r.press_release_highlights is None
+                or r.management_guidance is None
+                or r.transcript_excerpts is None
+            ),
+            key=lambda r: r.period_end,
+            reverse=True,
+        )
         if not missing:
             return
 
@@ -1197,7 +1240,14 @@ class FinancialsService:
             return
         by_period_end = {p.period_end: p for p in periods}
 
-        for row in missing:
+        for i, row in enumerate(missing):
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.info(
+                    "Disclosure backfill budget expired for %s; %d quarter(s) deferred",
+                    ticker,
+                    len(missing) - i,
+                )
+                break
             period = by_period_end.get(row.period_end)
             if period is None:
                 continue
@@ -2222,7 +2272,10 @@ class FinancialsService:
             # would render "Not available for this period" forever. Fill them
             # lazily on first detail view — best-effort and never raising; the
             # enrichment short-circuits once rows are filled and SEC responses
-            # are disk-cached, so repeat visits stay cheap.
+            # are disk-cached, so repeat visits stay cheap. Batch 89: the crawl
+            # is time-budgeted and latest-first — a slow filer adds at most
+            # DISCLOSURE_BACKFILL_BUDGET_SECONDS to the render, and the
+            # remaining NULLs self-heal on the next visit.
             # NOTE: the trigger must cover all three disclosure fields, not
             # just highlights — rows can have highlights filled while guidance
             # is still missing (e.g. AVGO/INTU before the batch-50 guidance
@@ -2235,7 +2288,10 @@ class FinancialsService:
                 for r in all_rows
             ):
                 try:
-                    self._enrich_press_release_highlights(db, ticker, cik)
+                    self._enrich_press_release_highlights(
+                        db, ticker, cik,
+                        deadline=time.monotonic() + DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+                    )
                     if owns_session:
                         db.commit()
                 except Exception:
