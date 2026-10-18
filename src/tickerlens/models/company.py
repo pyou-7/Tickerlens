@@ -20,6 +20,24 @@ class Company(Base):
     # repeat visits don't trigger redundant full XBRL re-pulls. NULL for rows
     # that predate the marker (one heuristic pass, then it is set).
     xbrl_filings_processed: Mapped[str | None] = mapped_column(String(10))
+    # reportDates (YYYY-MM-DD, JSON array) of in-window quarterly filings
+    # whose XBRL facts are ingested but whose quarter the extractor
+    # deliberately yields nothing for (e.g. SKYD's merger-era Q3'25: a 53-day
+    # stub period the 70–100-day comparability window rejects; its Q4'25,
+    # underivable as FY−9M through the merger). Acknowledged gaps stop the
+    # middle-gap retry in refresh_financials_if_stale from re-pulling every
+    # 6h forever. A future newer filing still re-extracts the full window,
+    # so an acknowledged quarter appears then if it ever becomes
+    # extractable. NULL/empty = none. Added by ensure_schema on old DBs.
+    xbrl_skipped_quarters: Mapped[str | None] = mapped_column(Text)
+    # Plain-language note shown on the company page when a 10-Q/10-K has been
+    # filed but EDGAR's companyfacts feed hasn't ingested its figures yet
+    # (batch-37/APLD ingestion lag — e.g. CB's Q2'26 10-Q filed 2026-07-28
+    # with no revenue facts by Oct 2026), so the page still shows the prior
+    # quarter with no explanation. Computed by refresh_financials_if_stale
+    # (TTL-gated) and cleared automatically once the quarter lands. NULL =
+    # nothing pending. Added by ensure_schema on old DBs.
+    pending_filing_note: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(String(2000))
     last_price: Mapped[float | None] = mapped_column()
     market_cap: Mapped[float | None] = mapped_column()

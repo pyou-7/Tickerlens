@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -21,7 +22,17 @@ from tickerlens.data.filings import (
 )
 from tickerlens.data.sic import sector_for_sic
 from tickerlens.data.wikipedia import get_description
-from tickerlens.data.xbrl import QuarterlyFinancials, extract_recent_quarterly_financials
+from tickerlens.data.xbrl import (
+    CONCEPTS,
+    Metric,
+    QuarterlyFinancials,
+    _is_bank_insurer_sic,
+    _is_mreit_sic,
+    _quarter_steps,
+    _walk_label,
+    extract_recent_quarterly_financials,
+    infer_fiscal_year,
+)
 from tickerlens.data.yahoo import (
     QuoteSnapshot,
     cached_quote,
@@ -33,7 +44,10 @@ from tickerlens.data.yahoo import (
 )
 from tickerlens.models.company import Company
 from tickerlens.models.database import get_session
-from tickerlens.models.quarterly_financial import QuarterlyFinancial
+from tickerlens.models.quarterly_financial import (
+    QuarterlyFinancial,
+    mezzanine_is_third_leg,
+)
 from tickerlens.models.valuation_history import ValuationHistory
 from tickerlens.models.watchlist import WatchlistEntry
 from tickerlens.services.dcf import DCFModelResult, compute_dcf
@@ -123,29 +137,124 @@ def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
     return marker
 
 
-def _has_unprocessed_quarter_in_window(
-    submissions: dict, stored_ends: list[str], marker: str
+def _read_skipped_quarters(value: str | None) -> set[str]:
+    """Parse ``Company.xbrl_skipped_quarters`` tolerantly; never raises."""
+    if not value:
+        return set()
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return set()
+    if not isinstance(parsed, list):
+        return set()
+    return {str(item) for item in parsed if isinstance(item, str)}
+
+
+def _revenue_duration_facts(companyfacts: dict) -> dict[str, list[tuple[int, str]]]:
+    """Map end-date -> [(duration_days, tag)] for USD duration facts on the
+    generic revenue concept chain.
+
+    Used to tell "the filing's facts aren't ingested yet — keep retrying"
+    apart from "the facts are ingested but stub-shaped, so the extractor
+    deliberately yields no quarter — acknowledge and stop". Scoped to the
+    revenue chain (the extractor's anchor): a filing can be partially
+    ingested (APLD's FY2026 10-K: 153 duration facts present, but the annual
+    revenue fact still missing), so any-tag duration facts are not evidence
+    the extractor had its chance. Never raises.
+    """
+    out: dict[str, list[tuple[int, str]]] = {}
+    tags = set(CONCEPTS[Metric.REVENUE].tags)
+    facts = companyfacts.get("facts") or {}
+    for tag, tag_data in ((facts.get("us-gaap") or {}).items()):
+        if tag not in tags:
+            continue
+        for unit_facts in ((tag_data or {}).get("units") or {}).values():
+            for fact in unit_facts or []:
+                start, end = fact.get("start"), fact.get("end")
+                if not start or not end:
+                    continue
+                try:
+                    days = (
+                        dt.date.fromisoformat(end) - dt.date.fromisoformat(start)
+                    ).days
+                except ValueError:
+                    continue
+                out.setdefault(end, []).append((days, tag))
+    return out
+
+
+def _prior_quarter_report_date(submissions: dict, report_date: str) -> str | None:
+    """Greatest quarterly-filing reportDate strictly before ``report_date``."""
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    reports = recent.get("reportDate") or []
+    candidates = [
+        r for f, r in zip(forms, reports)
+        if f in _QUARTERLY_FILING_FORMS and r and r < report_date
+    ]
+    return max(candidates) if candidates else None
+
+
+def _is_structural_gap(
+    revenue_facts: dict[str, list[tuple[int, str]]],
+    submissions: dict,
+    report_date: str,
 ) -> bool:
-    """True when a quarterly filing at-or-before the marker has no stored quarter.
+    """True when the missing quarter is structurally unextractable.
+
+    Two shapes, both observed live (SKYD, batch 48):
+    - 10-Q stub: a sub-quarter (< 70d) revenue fact exists at the reportDate
+      and no 70–100d fact does — the extractor's comparability window
+      deliberately rejects it (SKYD's 53-day merger Q3'25).
+    - 10-K with stub 9M: the annual (340–380d) revenue fact is ingested but
+      the 9M window holds only sub-240d revenue facts, so FY−9M can never
+      derive Q4 (SKYD's FY2025: the merger split 9M into stubs).
+    Anything else — no revenue facts at the reportDate (the batch-37/APLD
+    ingestion lag), or a proper-length fact the extractor should have taken —
+    returns False so the retry loop stays alive.
+    """
+    facts_here = revenue_facts.get(report_date, [])
+    if facts_here and not any(70 <= days <= 100 for days, _ in facts_here):
+        if any(days < 70 for days, _ in facts_here):
+            return True
+    if any(340 <= days <= 380 for days, _ in facts_here):
+        q3 = _prior_quarter_report_date(submissions, report_date)
+        if q3:
+            q3_facts = revenue_facts.get(q3, [])
+            if q3_facts and not any(240 <= d <= 290 for d, _ in q3_facts):
+                return True
+    return False
+
+
+def _missing_in_window_quarters(
+    submissions: dict,
+    stored_ends: list[str],
+    marker: str,
+    skipped: set[str] | tuple = (),
+) -> list[str]:
+    """reportDates of quarterly filings at-or-before ``marker`` with no stored quarter.
 
     Batch 44: ``xbrl_filings_processed`` tracks only the latest *processed*
-    filing, so a 10-Q/10-K older than the marker whose XBRL facts SEC never
-    ingested (SKYD's merger-era Q3'25 10-Q, filed 2025-11-10, report
-    2025-09-30) would otherwise never refire the refresh — newer processed
-    filings keep the marker ahead of it forever. This scans the
+    filing, so a 10-Q/10-K older than the marker whose quarter never made it
+    into the extracted rows would otherwise never refire the refresh — newer
+    processed filings keep the marker ahead of it forever. This scans the
     already-fetched submissions feed for a quarterly filing no newer than the
     marker whose reportDate falls inside the stored window yet has no stored
     quarter. Window-bounded so filings older than the extraction window
-    (legitimately unstored) don't false-positive.
+    (legitimately unstored) don't false-positive. ``skipped`` holds
+    reportDates already acknowledged as ingested-but-unextractable (batch 48:
+    SKYD's 53-day merger-stub Q3'25), which must not refire the refresh.
     """
     if not stored_ends:
-        return False
+        return []
+    skip = set(skipped)
     lo, hi = min(stored_ends), max(stored_ends)
     have = set(stored_ends)
     recent = (submissions.get("filings") or {}).get("recent") or {}
     forms = recent.get("form") or []
     dates = recent.get("filingDate") or []
     reports = recent.get("reportDate") or []
+    missing: list[str] = []
     for form, filing_date, report_date in zip(forms, dates, reports):
         if form not in _QUARTERLY_FILING_FORMS:
             continue
@@ -155,9 +264,174 @@ def _has_unprocessed_quarter_in_window(
             continue  # newer than the marker: the latest>marker path owns it
         if not (lo <= report_date <= hi):
             continue  # outside the extracted window — legitimately unstored
-        if report_date not in have:
-            return True
-    return False
+        if report_date in have or report_date in skip:
+            continue
+        if report_date not in missing:
+            missing.append(report_date)
+    return missing
+
+
+def _has_unprocessed_quarter_in_window(
+    submissions: dict, stored_ends: list[str], marker: str, skipped: set[str] | tuple = ()
+) -> bool:
+    """True when a quarterly filing at-or-before the marker has no stored quarter.
+
+    Thin wrapper over :func:`_missing_in_window_quarters`; see it for the
+    batch-44 rationale. ``skipped`` reportDates (batch 48: acknowledged
+    ingested-but-unextractable stub quarters) never count as unprocessed.
+    """
+    return bool(_missing_in_window_quarters(submissions, stored_ends, marker, skipped))
+
+
+# ── pending-filing note (batch 53) ──────────────────────────────────────────
+# Twelve DB tickers (CB, V, F, PLD, C, …) sat through Oct 2026 showing Q1'26
+# quarters with no explanation while their Q2'26 10-Qs had been filed since
+# July — EDGAR's companyfacts feed simply hadn't ingested the figures
+# (the batch-37/APLD ingestion lag). The retry loop was correctly armed the
+# whole time; the user-facing gap was silence. These helpers detect the
+# "filed but not yet in EDGAR's data" state and render it as a one-line
+# honesty note on the company page, cleared automatically once the quarter
+# lands. Never raises.
+
+_MONTH_ABBR = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
+def _mdy(iso_date: str) -> str:
+    """'2026-07-28' -> 'Jul 28, 2026'. Falls back to the raw string."""
+    try:
+        d = dt.date.fromisoformat(iso_date)
+    except ValueError:
+        return iso_date
+    return f"{_MONTH_ABBR[d.month - 1]} {d.day}, {d.year}"
+
+
+def _join_and(items: list[str]) -> str:
+    """'a', 'a and b', 'a, b and c'."""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _quarter_label_for_report_date(
+    report_date: dt.date,
+    fiscal_year_end: str | None,
+    newest_end: dt.date | None,
+    newest_label: tuple[int, str] | None,
+) -> str | None:
+    """Best-effort 'Q2 FY2026' label for a filing's reportDate.
+
+    Walks from the newest stored row's (fy, fp) label by calendar
+    quarter-steps so the note matches the labels already on the page
+    (batch-52 repairs can move labels off the naive calendar math).
+    Falls back to infer_fiscal_year + month arithmetic when there is no
+    stored row; None when labeling is unsafe.
+    """
+    if newest_end is not None and newest_label is not None:
+        walked = _walk_label(newest_label, _quarter_steps(newest_end, report_date))
+        if walked is not None:
+            return f"{walked[1]} FY{walked[0]}"
+    if fiscal_year_end and len(fiscal_year_end) == 4 and fiscal_year_end.isdigit():
+        try:
+            fy = infer_fiscal_year(report_date, fiscal_year_end)
+        except Exception:
+            return None
+        months_after = (report_date.month - int(fiscal_year_end[:2])) % 12
+        quarter = months_after // 3 or 4
+        return f"Q{quarter} FY{fy}"
+    return None
+
+
+def _pending_filing_candidates(
+    submissions: dict,
+    stored_ends: list[str],
+    marker: str | None,
+    skipped: set[str] | tuple = (),
+) -> list[tuple[str, str, str]]:
+    """(form, filing_date, report_date) for quarterly filings with no stored quarter.
+
+    Covers filings newer than the processed marker (the latest>marker path
+    owns these) plus in-window filings at-or-before the marker with no
+    stored quarter (batch-44 middle-gap). Acknowledged stub quarters (batch
+    48) never count. Dedupes by reportDate, keeping the newest filing
+    (EDGAR's recent feed is reverse-chronological).
+    """
+    if marker is None or not stored_ends:
+        return []
+    skip = set(skipped)
+    have = set(stored_ends)
+    in_window = set(_missing_in_window_quarters(submissions, stored_ends, marker, skip))
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    reports = recent.get("reportDate") or []
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for form, filing_date, report_date in zip(forms, dates, reports):
+        if form not in _QUARTERLY_FILING_FORMS or not filing_date or not report_date:
+            continue
+        if report_date in have or report_date in skip or report_date in seen:
+            continue
+        if filing_date > marker or report_date in in_window:
+            seen.add(report_date)
+            out.append((form, filing_date, report_date))
+    return out
+
+
+def _pending_filing_note(
+    submissions: dict,
+    companyfacts: dict,
+    stored_ends: list[str],
+    marker: str | None,
+    skipped: set[str] | tuple,
+    *,
+    fiscal_year_end: str | None,
+    newest_end: dt.date | None,
+    newest_label: tuple[int, str] | None,
+) -> str | None:
+    """Plain-language note for the 'filed but EDGAR hasn't ingested' state.
+
+    Returns None when nothing is pending (so the caller clears any stale
+    note), when the missing quarter's revenue facts ARE ingested (not lag —
+    an extraction question for the defect hunts, never mislabeled as lag),
+    or when the gap is structural (batch-48 acknowledged stubs own those).
+    """
+    candidates = _pending_filing_candidates(submissions, stored_ends, marker, skipped)
+    if not candidates:
+        return None
+    revenue_facts = _revenue_duration_facts(companyfacts)
+    lagged: list[tuple[str, str, str]] = []
+    for form, filing_date, report_date in sorted(candidates, key=lambda c: c[2]):
+        if report_date in revenue_facts:
+            # Facts ingested but no quarter extracted: the extractor had its
+            # chance. Not EDGAR lag — leave it to the defect hunts.
+            continue
+        lagged.append((form, filing_date, report_date))
+    if not lagged:
+        return None
+    shown = (
+        f"{newest_label[1]} FY{newest_label[0]}"
+        if newest_label is not None
+        else "the latest reported quarter"
+    )
+    bits: list[str] = []
+    for form, filing_date, report_date in lagged:
+        rd = dt.date.fromisoformat(report_date)
+        label = _quarter_label_for_report_date(
+            rd, fiscal_year_end, newest_end, newest_label
+        )
+        bits.append((label or f"quarter ended {_mdy(report_date)}", form, filing_date))
+    quarters = _join_and([b[0] for b in bits])
+    filings = _join_and([f"{b[1]} filed {_mdy(b[2])}" for b in bits])
+    return (
+        f"{quarters} results ({filings}) aren't in EDGAR's data feed yet — "
+        f"showing {shown}. This page updates automatically once EDGAR "
+        f"publishes the figures."
+    )
 
 
 # ── public output models ───────────────────────────────────────────────────────
@@ -168,6 +442,8 @@ class KPISnapshot(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    # Funds from operations (batch 72) — REIT valuation path only.
+    ffo: float | None = None
 
 
 class KPIChange(BaseModel):
@@ -177,6 +453,7 @@ class KPIChange(BaseModel):
     eps_basic: float | None = None
     eps_diluted: float | None = None
     free_cash_flow: float | None = None
+    ffo: float | None = None
 
 
 class BalanceSheet(BaseModel):
@@ -185,6 +462,11 @@ class BalanceSheet(BaseModel):
     total_liabilities: float | None = None
     total_equity: float | None = None
     cash_and_equivalents: float | None = None
+    # Mezzanine equity (redeemable NCI) — between liabilities and equity.
+    redeemable_nci: float | None = None
+    # Mezzanine equity (parent-attributable temporary equity, e.g.
+    # convertible preferred stock) — same treatment.
+    temporary_equity: float | None = None
 
 
 class BalanceSheetChange(BaseModel):
@@ -193,6 +475,8 @@ class BalanceSheetChange(BaseModel):
     total_liabilities: float | None = None
     total_equity: float | None = None
     cash_and_equivalents: float | None = None
+    redeemable_nci: float | None = None
+    temporary_equity: float | None = None
 
 
 class SignalChange(BaseModel):
@@ -271,6 +555,11 @@ class VsCompany(BaseModel):
     market_cap: float | None
     signal: str  # valuation signal: Strong Buy … Strong Sell | Watch
     upside_pct: float | None  # implied upside to target, in percent
+    # Batch 57: same amber honesty note as overview/detail (Company.pending_filing_note)
+    # — this side's 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't
+    # ingested its figures yet, so the side shows the prior quarter. None when
+    # nothing is pending. Wired from DetailContext in _vs_company.
+    pending_filing_note: str | None = None
 
 
 class CompanyVs(BaseModel):
@@ -296,6 +585,10 @@ class CompanyOverview(BaseModel):
     # TTM
     ttm_kpi: KPISnapshot
     ttm_quarters: int  # number of quarters summed (< 4 means partial)
+    # Batch 53: set when a 10-Q/10-K has been filed but EDGAR's companyfacts
+    # feed hasn't ingested its figures yet, so the page still shows the prior
+    # quarter. None when nothing is pending.
+    pending_filing_note: str | None = None
 
 
 class PeriodData(BaseModel):
@@ -394,6 +687,11 @@ class DetailContext(BaseModel):
     # Transcript excerpts / prepared remarks for the *selected* period (None = not available)
     transcript_excerpts: str | None = None
     transcript_source: str | None = None
+    # Batch 55: same honesty note as the overview's (Company.pending_filing_note)
+    # — a 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its
+    # figures yet, so the page still shows the prior quarter. None when nothing
+    # is pending.
+    pending_filing_note: str | None = None
 
 
 class MetricDelta(BaseModel):
@@ -413,6 +711,8 @@ class CompareDeltas(BaseModel):
     total_liabilities: MetricDelta = MetricDelta()
     total_equity: MetricDelta = MetricDelta()
     cash_and_equivalents: MetricDelta = MetricDelta()
+    redeemable_nci: MetricDelta = MetricDelta()
+    temporary_equity: MetricDelta = MetricDelta()
 
 
 class CompareContext(BaseModel):
@@ -424,6 +724,7 @@ class CompareContext(BaseModel):
     cik: str
     name: str
     ticker: str | None
+    pending_filing_note: str | None = None  # batch 56: amber honesty note, same as overview/detail
     sector: str | None
     last_price: float | None
     market_cap: float | None
@@ -441,6 +742,36 @@ class CompareContext(BaseModel):
 
 
 # ── service ───────────────────────────────────────────────────────────────────
+
+def _seed_time_enrichment(db: Session, cik: str, ticker: str) -> None:
+    """Backfill description + price at seed time so newly seeded companies
+    don't wait for a page view to become presentable (batch 64: 18 seeded
+    companies had no description and 6 had no price, because seeding never
+    ran enrichment — it only happened inside ``enrich_company`` on views).
+
+    Blank-only (never overwrites a populated field, unlike
+    ``enrich_company``'s clear-on-None policy) and never raises: a transient
+    Wikipedia or Yahoo failure just leaves the field blank for
+    ``enrich_company`` to fill on the next page view.
+    """
+    company = db.get(Company, cik)
+    if company is None:
+        return
+    if not (company.description or "").strip():
+        try:
+            company.description = get_description(company.name, ticker=ticker)
+        except Exception:
+            logger.warning("seed-time description fetch failed for %s", ticker, exc_info=True)
+    if company.last_price is None:
+        try:
+            quote = get_quote(ticker)
+            if quote.last_price is not None:
+                company.last_price = quote.last_price
+            if quote.market_cap is not None:
+                company.market_cap = quote.market_cap
+        except Exception:
+            logger.warning("seed-time quote fetch failed for %s", ticker, exc_info=True)
+
 
 class FinancialsService:
     """Financial statement extraction, persistence, and enrichment service."""
@@ -473,6 +804,7 @@ class FinancialsService:
         ticker: str,
         periods: int = 8,
         session: Session | None = None,
+        enrich: bool = True,
     ) -> list[QuarterlyFinancials]:
         """Fetch XBRL financials from EDGAR and upsert into SQLite.
 
@@ -481,6 +813,11 @@ class FinancialsService:
         PYPL — batch 44) with half a window and NULL freshness markers,
         degrading YoY comparisons and the valuation card until a page view
         happened to trigger the refresh.
+
+        ``enrich`` (batch 64): also backfill the company description and
+        price/market-cap at seed time, blank-only and never-raising, so a
+        newly seeded company is presentable without waiting for a page
+        view. Pass ``enrich=False`` for fully hermetic unit tests.
         """
         cik = _resolve_cik(self.edgar_client, ticker)
         # Deliberate pull: always read live EDGAR, never a cached snapshot.
@@ -510,6 +847,8 @@ class FinancialsService:
             )
             for row in rows:
                 _upsert_financial(db, cik, row)
+            if enrich:
+                _seed_time_enrichment(db, cik, ticker)
             db.commit()
             if processed_filing is not None:
                 # The pull just incorporated this filing: record it so a
@@ -522,6 +861,14 @@ class FinancialsService:
         finally:
             if session is None and self._session is None:
                 db.close()
+
+        # Batch 82: the pull just settled — (re)compute the "filed but EDGAR
+        # hasn't ingested" note at seed time too, so a newly seeded company
+        # whose latest filing lags in companyfacts (e.g. ABT's Q2-2026 10-Q,
+        # filed 2026-07-28, still absent from the feed) shows the honesty note
+        # without waiting for a page-view-triggered freshness check. Mirrors
+        # the refresh path; never raises.
+        self._update_pending_filing_note(ticker, cik, submissions)
 
         return rows
 
@@ -567,6 +914,13 @@ class FinancialsService:
                         Company.cik == cik
                     )
                 )
+                skipped_db = _read_skipped_quarters(
+                    db.scalar(
+                        select(Company.xbrl_skipped_quarters).where(
+                            Company.cik == cik
+                        )
+                    )
+                )
             finally:
                 if self._session is None:
                     db.close()
@@ -583,10 +937,12 @@ class FinancialsService:
                 needs_refresh = latest > known
                 if not needs_refresh:
                     # Middle-gap check (batch 44): a quarterly filing older
-                    # than the marker whose facts SEC never ingested would
-                    # otherwise never refire — see _has_unprocessed_quarter_in_window.
+                    # than the marker whose quarter never made it into the
+                    # extracted rows would otherwise never refire — see
+                    # _has_unprocessed_quarter_in_window. Acknowledged
+                    # stub quarters (batch 48) don't count.
                     needs_refresh = _has_unprocessed_quarter_in_window(
-                        submissions, stored_ends, known
+                        submissions, stored_ends, known, skipped_db
                     )
             else:
                 needs_refresh = latest > max_period_end_iso
@@ -597,6 +953,13 @@ class FinancialsService:
                     # Fill highlights for the new quarter; only touches rows
                     # missing them, never wipes on transient failure.
                     self._enrich_press_release_highlights(db2, ticker, cik)
+                    # Acknowledge ingested-but-unextractable middle gaps (batch
+                    # 48): a refire that still yields no quarter for an
+                    # in-window filing whose facts ARE in companyfacts is
+                    # futile (stub periods) — record it so the middle-gap
+                    # check stops re-pulling every 6h. Filings whose facts are
+                    # still absent keep retrying (the batch-37 ingestion lag).
+                    self._acknowledge_unextractable_quarters(db2, cik, submissions)
                     db2.commit()
                 except Exception:
                     db2.rollback()
@@ -605,11 +968,129 @@ class FinancialsService:
                         db2.close()
                 with _filings_check_lock:
                     _filings_check_state[cik] = (now, latest)
+                # Batch 53: the pull just settled — (re)compute the
+                # "filed but EDGAR hasn't ingested" note so the page explains
+                # any still-missing quarter instead of silently showing stale
+                # data. Clears automatically once the quarter lands.
+                self._update_pending_filing_note(ticker, cik, submissions)
                 return True
+            # No refresh needed, but the pending-filing note is TTL-gated
+            # with this check: a lagging filing may have newly appeared in
+            # submissions, or a previously pending quarter may have landed.
+            self._update_pending_filing_note(ticker, cik, submissions)
             return False
         except Exception:
             logger.warning("filings freshness check failed for %s", ticker, exc_info=True)
             return False
+
+    def _update_pending_filing_note(
+        self, ticker: str, cik: str, submissions: dict
+    ) -> None:
+        """Persist or clear the 'filed but EDGAR hasn't ingested' note.
+
+        Takes the submissions feed already fetched by the caller (never
+        re-fetches it), reads the TTL-cached companyfacts, detects quarterly
+        filings whose quarters are still absent because EDGAR hasn't
+        ingested their figures, and stores a plain-language note on the
+        company row for the overview page. Writes only when the note
+        changed. Never raises.
+        """
+        try:
+            companyfacts = self.edgar_client.companyfacts(cik)
+            db = self._session or get_session()
+            try:
+                company = db.get(Company, cik)
+                if company is None:
+                    return
+                rows = (
+                    db.execute(
+                        select(QuarterlyFinancial)
+                        .where(QuarterlyFinancial.cik == cik)
+                        .order_by(QuarterlyFinancial.period_end.desc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                if not rows:
+                    return
+                stored_ends = sorted(r.period_end.isoformat() for r in rows)
+                newest = rows[0]
+                note = _pending_filing_note(
+                    submissions,
+                    companyfacts,
+                    stored_ends,
+                    company.xbrl_filings_processed,
+                    _read_skipped_quarters(company.xbrl_skipped_quarters),
+                    fiscal_year_end=company.fiscal_year_end,
+                    newest_end=newest.period_end,
+                    newest_label=(newest.fiscal_year, newest.fiscal_period),
+                )
+                if (company.pending_filing_note or None) != (note or None):
+                    company.pending_filing_note = note
+                    db.commit()
+            finally:
+                if self._session is None:
+                    db.close()
+        except Exception:
+            logger.warning(
+                "pending filing note update failed for %s", ticker, exc_info=True
+            )
+
+    def _acknowledge_unextractable_quarters(
+        self, db: Session, cik: str, submissions: dict
+    ) -> None:
+        """Record in-window filings whose quarters are structurally unextractable.
+
+        Called after a refire pulled fresh companyfacts. For each in-window
+        quarterly filing still missing its quarter: when the filing's revenue
+        facts are ingested but stub-shaped (a 10-Q stub period, or a 10-K
+        whose 9M is stubbed so FY−9M can never derive Q4), retrying is
+        futile — acknowledge the reportDate in
+        ``Company.xbrl_skipped_quarters`` so the middle-gap check stops
+        re-pulling every 6h. When the revenue facts simply aren't ingested
+        yet (the batch-37/APLD lag — a filing can be partially ingested, so
+        the check is scoped to the revenue chain, not any-tag facts), the
+        retry loop is left alone. Reads the just-warmed disk cache, so no
+        extra EDGAR request. Never raises; runs inside the caller's
+        transaction.
+        """
+        try:
+            company = db.get(Company, cik)
+            if company is None:
+                return
+            skipped = _read_skipped_quarters(company.xbrl_skipped_quarters)
+            stored_ends = sorted(
+                r.isoformat()
+                for r in db.scalars(
+                    select(QuarterlyFinancial.period_end).where(
+                        QuarterlyFinancial.cik == cik
+                    )
+                ).all()
+            )
+            marker = company.xbrl_filings_processed
+            if not stored_ends or marker is None:
+                return
+            missing = _missing_in_window_quarters(
+                submissions, stored_ends, marker, skipped
+            )
+            if not missing:
+                return
+            companyfacts = self.edgar_client.companyfacts(cik)
+            revenue_facts = _revenue_duration_facts(companyfacts)
+            new = sorted(
+                {m for m in missing if _is_structural_gap(revenue_facts, submissions, m)}
+                - skipped
+            )
+            if new:
+                company.xbrl_skipped_quarters = json.dumps(sorted(skipped | set(new)))
+                logger.info(
+                    "acknowledged unextractable quarters for %s: %s",
+                    cik, ", ".join(new),
+                )
+        except Exception:
+            logger.warning(
+                "quarter acknowledgment failed for %s", cik, exc_info=True
+            )
 
     def enrich_company(self, ticker: str, session: Session | None = None) -> None:
         """Update description, price, and market cap for an existing company."""
@@ -621,7 +1102,7 @@ class FinancialsService:
                 raise ValueError(f"Company with CIK {cik} not in DB — run fetch_and_persist first")
 
             quote = get_quote(ticker)
-            description = get_description(company.name)
+            description = get_description(company.name, ticker=ticker)
 
             # Price and market cap are point-in-time snapshots; never wipe a
             # previously-good value when a transient quote failure returns None
@@ -828,6 +1309,7 @@ class FinancialsService:
                 yoy=yoy,
                 ttm_kpi=ttm_kpi,
                 ttm_quarters=len(ttm_rows),
+                pending_filing_note=company.pending_filing_note,
             )
         finally:
             if session is None and self._session is None:
@@ -858,8 +1340,14 @@ class FinancialsService:
             if not rows:
                 raise CompanyNotFoundError(f"No quarterly data for {ticker}")
 
-            ttm = _compute_ttm(list(rows[:4]))
-            prior_ttm = _compute_ttm(list(rows[4:8])) if len(rows) >= 8 else None
+            # Batch 63: strict per-metric TTM windows — a 4-quarter window with a
+            # per-metric gap (e.g. NTRS Q2 2026 filed net income but no XBRL
+            # EPS facts) must not silently sum fewer than 4 quarters; the
+            # missing metric is None so EPS-dependent paths are skipped and
+            # the model falls back to the sales path instead of fabricating
+            # a signal on understated TTM earnings.
+            ttm = _compute_ttm_strict(list(rows[:4]))
+            prior_ttm = _compute_ttm_strict(list(rows[4:8])) if len(rows) >= 8 else None
 
             # Growth input, best available first.
             growth_pct: float | None = None
@@ -878,6 +1366,30 @@ class FinancialsService:
             if prior_ttm is not None:
                 revenue_growth_pct = _pct_change(ttm.revenue, prior_ttm.revenue)
 
+            # Batch 72: FFO growth for the REIT P/FFO path — TTM-over-TTM
+            # first, same-fiscal-quarter YoY as fallback (mirrors the EPS
+            # growth logic above).
+            ffo_growth_pct: float | None = None
+            ffo_growth_is_fallback = False
+            if prior_ttm is not None:
+                ffo_growth_pct = _pct_change(ttm.ffo, prior_ttm.ffo)
+            if ffo_growth_pct is None:
+                yoy_ffo = _compute_yoy(rows[0], list(rows)).ffo
+                ffo_growth_pct = yoy_ffo
+                ffo_growth_is_fallback = yoy_ffo is not None
+            # Batch 72: the quarterly FFO window for the dominant-quarter
+            # guard — a TTM base owned by one quarter is a one-off, not a
+            # run-rate. Only passed when all four quarters have FFO (the
+            # strict TTM already guarantees ttm.ffo is None otherwise).
+            ffo_quarters: list[tuple[str, float]] | None = None
+            if ttm.ffo is not None and len(rows) >= 4:
+                window = [
+                    (f"{r.fiscal_year}{r.fiscal_period}", r.ffo)
+                    for r in rows[:4]
+                ]
+                if all(v is not None for _, v in window):
+                    ffo_quarters = [(label, v) for label, v in window]
+
             live_quote = peeked_quote(company.ticker or ticker)
             effective_price = (
                 live_quote.last_price
@@ -894,6 +1406,25 @@ class FinancialsService:
             if effective_market_cap and effective_price:
                 shares_outstanding = effective_market_cap / effective_price
 
+            # Batch 71: P/B inputs for the bank/insurer book path — latest
+            # book equity per share plus TTM return on average book equity.
+            ttm_equities = [r.total_equity for r in rows[:4] if r.total_equity]
+            avg_equity = (
+                sum(ttm_equities) / len(ttm_equities) if ttm_equities else None
+            )
+            latest_equity = rows[0].total_equity
+            book_value_per_share: float | None = None
+            if (
+                latest_equity
+                and latest_equity > 0
+                and shares_outstanding
+                and shares_outstanding > 0
+            ):
+                book_value_per_share = latest_equity / shares_outstanding
+            roe_pct: float | None = None
+            if ttm.net_income is not None and avg_equity and avg_equity > 0:
+                roe_pct = ttm.net_income / avg_equity * 100
+
             return compute_valuation(
                 ticker=ticker.upper(),
                 current_price=effective_price,
@@ -907,6 +1438,14 @@ class FinancialsService:
                 ttm_net_income=ttm.net_income,
                 ttm_free_cash_flow=ttm.free_cash_flow,
                 market_cap=effective_market_cap,
+                is_reit=_is_mreit_sic(company.sic),
+                is_bank_insurer=_is_bank_insurer_sic(company.sic),
+                book_value_per_share=book_value_per_share,
+                roe_pct=roe_pct,
+                ttm_ffo=ttm.ffo,
+                ffo_growth_pct=ffo_growth_pct,
+                ffo_growth_is_fallback=ffo_growth_is_fallback,
+                ffo_quarters=ffo_quarters,
             )
         finally:
             if session is None and self._session is None:
@@ -1324,6 +1863,7 @@ class FinancialsService:
             market_cap=detail.market_cap,
             signal=val.signal,
             upside_pct=val.upside_pct,
+            pending_filing_note=detail.pending_filing_note,  # batch 57
         )
 
     def get_company_vs(
@@ -1736,7 +2276,17 @@ class FinancialsService:
             # lazily on first detail view — best-effort and never raising; the
             # enrichment short-circuits once rows are filled and SEC responses
             # are disk-cached, so repeat visits stay cheap.
-            if any(r.press_release_highlights is None for r in all_rows):
+            # NOTE: the trigger must cover all three disclosure fields, not
+            # just highlights — rows can have highlights filled while guidance
+            # is still missing (e.g. AVGO/INTU before the batch-50 guidance
+            # extractor fix); a highlights-only trigger would never backfill
+            # them.
+            if any(
+                r.press_release_highlights is None
+                or r.management_guidance is None
+                or r.transcript_excerpts is None
+                for r in all_rows
+            ):
                 try:
                     self._enrich_press_release_highlights(db, ticker, cik)
                     if owns_session:
@@ -1863,6 +2413,7 @@ class FinancialsService:
                 management_guidance_source=pr_row.management_guidance_source if pr_row else None,
                 transcript_excerpts=pr_row.transcript_excerpts if pr_row else None,
                 transcript_source=pr_row.transcript_source if pr_row else None,
+                pending_filing_note=company.pending_filing_note,
             )
         finally:
             if session is None and self._session is None:
@@ -1935,6 +2486,7 @@ class FinancialsService:
                 cik=cik,
                 name=company.name,
                 ticker=company.ticker,
+                pending_filing_note=company.pending_filing_note,
                 sector=sector_for_sic(company.sic),
                 last_price=effective_price,
                 market_cap=effective_market_cap,
@@ -2272,6 +2824,23 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
     def _row(
         label: str, section: str, kind: str, attr: str
     ) -> RangeTableRow:
+        if label in ("Redeemable NCI (mezzanine)", "Temporary equity (mezzanine)"):
+            # Same third-leg gate as the detail/compare tables: a stored
+            # mezzanine value only renders where it explains an identity gap.
+            values = [
+                getattr(r, attr)
+                if mezzanine_is_third_leg(
+                    r.total_assets,
+                    r.total_liabilities,
+                    r.total_equity,
+                    getattr(r, attr),
+                )
+                else None
+                for r in window_rows
+            ]
+            return RangeTableRow(
+                label=label, section=section, kind=kind, values=values
+            )
         return RangeTableRow(
             label=label,
             section=section,
@@ -2279,19 +2848,31 @@ def _build_range_table(window_rows: list[QuarterlyFinancial]) -> RangeTableData:
             values=[getattr(r, attr) for r in window_rows],
         )
 
+    rows = [
+        _row("Revenue", "income", "money", "revenue"),
+        _row("Net Income", "income", "money", "net_income"),
+        _row("EPS Basic", "income", "eps", "eps_basic"),
+        _row("EPS Diluted", "income", "eps", "eps_diluted"),
+        _row("Free Cash Flow", "cashflow", "money", "free_cash_flow"),
+        _row("Total Assets", "balance", "money", "total_assets"),
+        _row("Total Liabilities", "balance", "money", "total_liabilities"),
+        _row("Redeemable NCI (mezzanine)", "balance", "money", "redeemable_nci"),
+        _row("Temporary equity (mezzanine)", "balance", "money", "temporary_equity"),
+        _row("Total Equity", "balance", "money", "total_equity"),
+        _row("Cash & Equivalents", "balance", "money", "cash_and_equivalents"),
+    ]
+    # The mezzanine rows are noise for the ~90% of filers that carry no
+    # mezzanine — drop each unless at least one quarter has a value.
+    rows = [
+        r
+        for r in rows
+        if r.label not in ("Redeemable NCI (mezzanine)", "Temporary equity (mezzanine)")
+        or any(v is not None for v in r.values)
+    ]
+
     return RangeTableData(
         labels=labels,
-        rows=[
-            _row("Revenue", "income", "money", "revenue"),
-            _row("Net Income", "income", "money", "net_income"),
-            _row("EPS Basic", "income", "eps", "eps_basic"),
-            _row("EPS Diluted", "income", "eps", "eps_diluted"),
-            _row("Free Cash Flow", "cashflow", "money", "free_cash_flow"),
-            _row("Total Assets", "balance", "money", "total_assets"),
-            _row("Total Liabilities", "balance", "money", "total_liabilities"),
-            _row("Total Equity", "balance", "money", "total_equity"),
-            _row("Cash & Equivalents", "balance", "money", "cash_and_equivalents"),
-        ],
+        rows=rows,
     )
 
 
@@ -2343,11 +2924,35 @@ def _to_kpi(row: QuarterlyFinancial) -> KPISnapshot:
 
 
 def _to_bs(row: QuarterlyFinancial) -> BalanceSheet:
+    # The mezzanine row is only a real third leg when it explains an
+    # identity gap (batch 60): filers like AT&T carry a redeemable-NCI tag
+    # while their extracted total equity already includes it, so rendering
+    # it as an additional leg would double-count it.
     return BalanceSheet(
         total_assets=row.total_assets,
         total_liabilities=row.total_liabilities,
         total_equity=row.total_equity,
         cash_and_equivalents=row.cash_and_equivalents,
+        redeemable_nci=(
+            row.redeemable_nci
+            if mezzanine_is_third_leg(
+                row.total_assets,
+                row.total_liabilities,
+                row.total_equity,
+                row.redeemable_nci,
+            )
+            else None
+        ),
+        temporary_equity=(
+            row.temporary_equity
+            if mezzanine_is_third_leg(
+                row.total_assets,
+                row.total_liabilities,
+                row.total_equity,
+                row.temporary_equity,
+            )
+            else None
+        ),
     )
 
 
@@ -2357,6 +2962,8 @@ def _bs_change(current: BalanceSheet, prior: BalanceSheet) -> BalanceSheetChange
         total_liabilities=_pct_change(current.total_liabilities, prior.total_liabilities),
         total_equity=_pct_change(current.total_equity, prior.total_equity),
         cash_and_equivalents=_pct_change(current.cash_and_equivalents, prior.cash_and_equivalents),
+        redeemable_nci=_pct_change(current.redeemable_nci, prior.redeemable_nci),
+        temporary_equity=_pct_change(current.temporary_equity, prior.temporary_equity),
     )
 
 
@@ -2382,6 +2989,12 @@ def _compare_periods(a: PeriodData, b: PeriodData) -> CompareDeltas:
         cash_and_equivalents=_metric_delta(
             a.balance_sheet.cash_and_equivalents, b.balance_sheet.cash_and_equivalents
         ),
+        redeemable_nci=_metric_delta(
+            a.balance_sheet.redeemable_nci, b.balance_sheet.redeemable_nci
+        ),
+        temporary_equity=_metric_delta(
+            a.balance_sheet.temporary_equity, b.balance_sheet.temporary_equity
+        ),
     )
 
 
@@ -2397,7 +3010,41 @@ def _compute_ttm(rows: list[QuarterlyFinancial]) -> KPISnapshot:
         eps_basic=_sum_nullable(*[r.eps_basic for r in rows]),
         eps_diluted=_sum_nullable(*[r.eps_diluted for r in rows]),
         free_cash_flow=_sum_nullable(*[r.free_cash_flow for r in rows]),
+        ffo=_sum_nullable(*[r.ffo for r in rows]),
     )
+
+
+def _compute_ttm_strict(rows: list[QuarterlyFinancial]) -> KPISnapshot:
+    """TTM where each metric sums only when *every* quarter in the window
+    carries it; otherwise the metric is None.
+
+    The plain ``_compute_ttm`` skip-None convention silently sums fewer than
+    4 quarters when a full 4-quarter window has a per-metric gap — e.g.
+    Northern Trust's Q2 2026 10-Q filed net income but no XBRL EPS facts, so
+    TTM diluted EPS was a 3-quarter sum (~25% low) and the PEG path rendered
+    a fabricated Strong Sell (-64.5%). With strict windows, EPS-dependent
+    paths are skipped and the model falls back to the batch-33 sales path
+    ("no per-share earnings to anchor a P/E multiple"), which is the honest
+    answer for gappy filings.
+
+    Windows shorter than 4 quarters keep the skip-None behavior — those are
+    already flagged as partial via ``ttm_quarters < 4`` (confidence capped at
+    Medium), so no silent fabrication occurs there.
+    """
+    if len(rows) == 4:
+
+        def strict(values: list[float | None]) -> float | None:
+            return sum(values) if all(v is not None for v in values) else None
+
+        return KPISnapshot(
+            revenue=strict([r.revenue for r in rows]),
+            net_income=strict([r.net_income for r in rows]),
+            eps_basic=strict([r.eps_basic for r in rows]),
+            eps_diluted=strict([r.eps_diluted for r in rows]),
+            free_cash_flow=strict([r.free_cash_flow for r in rows]),
+            ffo=strict([r.ffo for r in rows]),
+        )
+    return _compute_ttm(rows)
 
 
 def _pct_change(current: float | None, prior: float | None) -> float | None:
@@ -2423,6 +3070,7 @@ def _compute_yoy(latest: QuarterlyFinancial, rows: list[QuarterlyFinancial]) -> 
         eps_basic=_pct_change(latest.eps_basic, prior.eps_basic),
         eps_diluted=_pct_change(latest.eps_diluted, prior.eps_diluted),
         free_cash_flow=_pct_change(latest.free_cash_flow, prior.free_cash_flow),
+        ffo=_pct_change(latest.ffo, prior.ffo),
     )
 
 
@@ -2644,10 +3292,13 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
             eps_basic=row.eps_basic,
             eps_diluted=row.eps_diluted,
             free_cash_flow=row.free_cash_flow,
+            ffo=row.ffo,
             total_assets=row.total_assets,
             total_liabilities=row.total_liabilities,
             total_equity=row.total_equity,
             cash_and_equivalents=row.cash_and_equivalents,
+            redeemable_nci=row.redeemable_nci,
+            temporary_equity=row.temporary_equity,
             updated_at=dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
         )
         .on_conflict_do_update(
@@ -2660,10 +3311,13 @@ def _upsert_financial(session: Session, cik: str, row: QuarterlyFinancials) -> N
                 "eps_basic": row.eps_basic,
                 "eps_diluted": row.eps_diluted,
                 "free_cash_flow": row.free_cash_flow,
+                "ffo": row.ffo,
                 "total_assets": row.total_assets,
                 "total_liabilities": row.total_liabilities,
                 "total_equity": row.total_equity,
                 "cash_and_equivalents": row.cash_and_equivalents,
+                "redeemable_nci": row.redeemable_nci,
+                "temporary_equity": row.temporary_equity,
                 "updated_at": dt.datetime.now(dt.timezone.utc).replace(tzinfo=None),
             },
         )
@@ -2682,6 +3336,8 @@ _CSV_METRICS: list[tuple[str, str, str, str]] = [
     ("Free Cash Flow", "free_cash_flow", "free_cash_flow", ""),
     ("Total Assets", "", "", "total_assets"),
     ("Total Liabilities", "", "", "total_liabilities"),
+    ("Redeemable NCI (mezzanine)", "", "", "redeemable_nci"),
+    ("Temporary equity (mezzanine)", "", "", "temporary_equity"),
     ("Total Equity", "", "", "total_equity"),
     ("Cash & Equivalents", "", "", "cash_and_equivalents"),
 ]

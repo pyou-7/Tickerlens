@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,6 +19,7 @@ from tickerlens.services.financials import (
     _compute_qoq,
     _compute_kpi_yoy,
     _compute_ttm,
+    _compute_ttm_strict,
     _compute_yoy,
     _pct_change,
     KPISnapshot,
@@ -49,6 +51,7 @@ def _row(
     total_liabilities: float | None = None,
     total_equity: float | None = None,
     cash_and_equivalents: float | None = None,
+    redeemable_nci: float | None = None,
 ) -> QuarterlyFinancial:
     r = QuarterlyFinancial()
     r.cik = cik
@@ -64,6 +67,7 @@ def _row(
     r.total_liabilities = total_liabilities
     r.total_equity = total_equity
     r.cash_and_equivalents = cash_and_equivalents
+    r.redeemable_nci = redeemable_nci
     r.updated_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     return r
 
@@ -126,6 +130,59 @@ def test_compute_ttm_all_null_returns_none() -> None:
     rows = [_row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4")]
     ttm = _compute_ttm(rows)
     assert ttm.revenue is None
+
+
+# ── _compute_ttm_strict ───────────────────────────────────────────────────────
+
+def test_compute_ttm_strict_sums_complete_window() -> None:
+    rows = [
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=100, eps_diluted=1.0),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=90,  eps_diluted=0.9),
+        _row(period_end=dt.date(2025, 6, 30),  fiscal_year=2025, fiscal_period="Q2",
+             revenue=80,  eps_diluted=0.8),
+        _row(period_end=dt.date(2025, 3, 31),  fiscal_year=2025, fiscal_period="Q1",
+             revenue=70,  eps_diluted=0.7),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.revenue == pytest.approx(340.0)
+    assert ttm.eps_diluted == pytest.approx(3.4)
+
+
+def test_compute_ttm_strict_gappy_full_window_returns_none_for_that_metric() -> None:
+    # NTRS Q2 2026 class: newest quarter filed net income but no XBRL EPS
+    # facts. The metric must be None — never a silent 3-quarter sum.
+    rows = [
+        _row(period_end=dt.date(2026, 6, 30), fiscal_year=2026, fiscal_period="Q2",
+             revenue=110, net_income=80, eps_diluted=None),
+        _row(period_end=dt.date(2026, 3, 31), fiscal_year=2026, fiscal_period="Q1",
+             revenue=100, net_income=70, eps_diluted=0.7),
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=90,  net_income=60, eps_diluted=0.6),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=80,  net_income=50, eps_diluted=0.5),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.eps_diluted is None
+    assert ttm.eps_basic is None
+    # Complete metrics still sum.
+    assert ttm.revenue == pytest.approx(380.0)
+    assert ttm.net_income == pytest.approx(260.0)
+
+
+def test_compute_ttm_strict_short_window_keeps_skip_none() -> None:
+    # Short windows are already flagged partial via ttm_quarters < 4, so the
+    # legacy skip-None convention stands there.
+    rows = [
+        _row(period_end=dt.date(2025, 12, 31), fiscal_year=2025, fiscal_period="Q4",
+             revenue=100, free_cash_flow=None),
+        _row(period_end=dt.date(2025, 9, 30),  fiscal_year=2025, fiscal_period="Q3",
+             revenue=90,  free_cash_flow=20),
+    ]
+    ttm = _compute_ttm_strict(rows)
+    assert ttm.revenue == pytest.approx(190.0)
+    assert ttm.free_cash_flow == pytest.approx(20.0)
 
 
 # ── _compute_yoy ─────────────────────────────────────────────────────────────
@@ -200,6 +257,81 @@ def test_get_overview_returns_correct_kpis(session: Session) -> None:
     assert overview.yoy.revenue == pytest.approx(expected_yoy)
 
 
+# ── get_valuation: strict TTM windows (batch 63) ──────────────────────────────
+
+def _valuation_company(cik: str, ticker: str) -> Company:
+    c = _company(cik=cik, ticker=ticker)
+    c.last_price = 100.0
+    c.market_cap = 10_000_000_000.0
+    c.sic = "3571"  # electronic computers — a plain operating company, so
+    # neither the REIT guard (batch 62) nor the bank/insurer guard
+    # (batch 70) fires and the PEG/sales paths stay reachable.
+    return c
+
+
+def _valuation_rows(cik: str, newest_eps_diluted: float | None) -> list[QuarterlyFinancial]:
+    # 8 quarters; newest quarter carries revenue + net income but the
+    # requested EPS value (NTRS Q2 2026 class: no XBRL EPS facts).
+    quarters = [
+        (2026, "Q2", dt.date(2026, 6, 30)),
+        (2026, "Q1", dt.date(2026, 3, 31)),
+        (2025, "Q4", dt.date(2025, 12, 31)),
+        (2025, "Q3", dt.date(2025, 9, 30)),
+        (2025, "Q2", dt.date(2025, 6, 30)),
+        (2025, "Q1", dt.date(2025, 3, 31)),
+        (2024, "Q4", dt.date(2024, 12, 31)),
+        (2024, "Q3", dt.date(2024, 9, 30)),
+    ]
+    rows = []
+    for i, (fy, fp, end) in enumerate(quarters):
+        rows.append(_row(
+            cik=cik, period_end=end, fiscal_year=fy, fiscal_period=fp,
+            revenue=2_000.0, net_income=500.0,
+            eps_basic=2.0 if i else (2.0 if newest_eps_diluted is not None else None),
+            eps_diluted=2.0 if i else newest_eps_diluted,
+        ))
+    return rows
+
+
+def test_get_valuation_skips_peg_when_newest_quarter_lacks_eps(session: Session) -> None:
+    # Regression: NTRS's TTM EPS was a silent 3-quarter sum (~25% low),
+    # fabricating a Strong Sell on the PEG path. With a gappy newest
+    # quarter the EPS-dependent path must be skipped and the model must
+    # fall back to the sales path with honest copy.
+    cik = "0000073124"
+    session.add(_valuation_company(cik, "NTRS"))
+    for r in _valuation_rows(cik, newest_eps_diluted=None):
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    signal = svc.get_valuation("NTRS")
+
+    assert signal.method == "sales"
+    assert signal.target_price is not None
+    assert "No per-share earnings" in signal.reasoning[0]
+
+
+def test_get_valuation_uses_peg_when_eps_window_complete(session: Session) -> None:
+    # Control: same fixture with EPS present in every quarter → PEG path.
+    cik = "0000073124"
+    session.add(_valuation_company(cik, "NTRS"))
+    for r in _valuation_rows(cik, newest_eps_diluted=2.0):
+        session.add(r)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    signal = svc.get_valuation("NTRS")
+
+    assert signal.method == "peg"
+    # TTM EPS = 4 x $2.00 = $8.00, not a partial sum.
+    assert "TTM diluted EPS $8.00" in signal.reasoning[0]
+
+
 # ── fetch_and_persist ─────────────────────────────────────────────────────────
 
 _Q1_FACT = {
@@ -250,7 +382,10 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
     mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
 
     svc = FinancialsService(edgar_client=mock_edgar, session=session)
-    rows = svc.fetch_and_persist("AAPL", periods=4, session=session)
+    # Seed-time enrichment (batch 64) would hit Wikipedia/Yahoo; patch it out.
+    with patch("tickerlens.services.financials.get_quote"), \
+         patch("tickerlens.services.financials.get_description", return_value=None):
+        rows = svc.fetch_and_persist("AAPL", periods=4, session=session)
 
     assert len(rows) >= 1
 
@@ -262,6 +397,58 @@ def test_fetch_and_persist_upserts_company_and_financials(session: Session) -> N
 
     financials = session.query(QuarterlyFinancial).all()
     assert any(f.revenue == pytest.approx(95_000) for f in financials)
+
+
+def _seed_service(session: Session) -> FinancialsService:
+    """A FinancialsService whose EDGAR client is mocked (batch 64)."""
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0000320193"
+    mock_edgar.submissions.return_value = _SUBMISSIONS
+    mock_edgar.companyfacts.return_value = _MINIMAL_COMPANYFACTS
+    return FinancialsService(edgar_client=mock_edgar, session=session)
+
+
+def test_fetch_and_persist_seed_time_enrichment_fills_blanks(session: Session) -> None:
+    """Batch 64: a fresh seed backfills description + price/market-cap so the
+    company is presentable without waiting for a page view."""
+    svc = _seed_service(session)
+    quote = MagicMock(last_price=250.0, market_cap=3_800_000_000_000)
+    with patch("tickerlens.services.financials.get_quote", return_value=quote), \
+         patch("tickerlens.services.financials.get_description", return_value="An iPhone maker"):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    company = session.get(Company, "0000320193")
+    assert company is not None
+    assert company.description == "An iPhone maker"
+    assert company.last_price == 250.0
+    assert company.market_cap == 3_800_000_000_000
+
+
+def test_fetch_and_persist_seed_time_enrichment_never_overwrites(session: Session) -> None:
+    """Batch 64: seed-time enrichment is blank-only — a re-seed must not
+    wipe a populated description or price on a transient fetch failure."""
+    svc = _seed_service(session)
+    quote = MagicMock(last_price=250.0, market_cap=3_800_000_000_000)
+    with patch("tickerlens.services.financials.get_quote", return_value=quote), \
+         patch("tickerlens.services.financials.get_description", return_value="An iPhone maker"):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    with patch("tickerlens.services.financials.get_quote", side_effect=Exception("down")), \
+         patch("tickerlens.services.financials.get_description", side_effect=Exception("down")):
+        svc.fetch_and_persist("AAPL", periods=4, session=session)
+    company = session.get(Company, "0000320193")
+    assert company is not None
+    assert company.description == "An iPhone maker"
+    assert company.last_price == 250.0
+
+
+def test_fetch_and_persist_enrich_false_stays_hermetic(session: Session) -> None:
+    """Batch 64: ``enrich=False`` skips the seed-time network calls entirely,
+    keeping the test suite hermetic."""
+    svc = _seed_service(session)
+    with patch("tickerlens.services.financials.get_quote") as q, \
+         patch("tickerlens.services.financials.get_description") as d:
+        svc.fetch_and_persist("AAPL", periods=4, session=session, enrich=False)
+    q.assert_not_called()
+    d.assert_not_called()
 
 
 def test_fetch_and_persist_defaults_to_eight_quarters() -> None:
@@ -2446,6 +2633,278 @@ def test_refresh_skips_when_middle_gap_closed(
     svc.fetch_and_persist.assert_not_called()
 
 
+# ── ingested-but-unextractable gap acknowledgment (batch 48) ─────────────────
+
+def test_missing_in_window_quarters_lists_gaps() -> None:
+    from tickerlens.services.financials import _missing_in_window_quarters
+
+    stored = [  # 2025-09-30 missing from inside the window
+        "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30",
+        "2025-12-31", "2026-03-31", "2026-06-30",
+    ]
+    assert _missing_in_window_quarters(
+        _middle_gap_submissions(), stored, "2026-08-04"
+    ) == ["2025-09-30"]
+
+
+def test_missing_in_window_quarters_dedupes_amendments() -> None:
+    """A 10-K and its 10-K/A share a reportDate — one gap, not two."""
+    from tickerlens.services.financials import _missing_in_window_quarters
+
+    submissions = {"filings": {"recent": {
+        "form": ["10-K/A", "10-K", "10-Q"],
+        "filingDate": ["2026-04-24", "2026-02-25", "2026-08-04"],
+        "reportDate": ["2025-12-31", "2025-12-31", "2026-06-30"],
+    }}}
+    stored = ["2025-06-30", "2025-09-30", "2026-03-31", "2026-06-30"]
+    assert _missing_in_window_quarters(
+        submissions, stored, "2026-08-04"
+    ) == ["2025-12-31"]
+
+
+def test_missing_in_window_quarters_honors_skip_list() -> None:
+    from tickerlens.services.financials import (
+        _has_unprocessed_quarter_in_window,
+        _missing_in_window_quarters,
+    )
+
+    stored = [
+        "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30",
+        "2025-12-31", "2026-03-31", "2026-06-30",
+    ]
+    subs = _middle_gap_submissions()
+    assert _missing_in_window_quarters(
+        subs, stored, "2026-08-04", {"2025-09-30"}
+    ) == []
+    assert _has_unprocessed_quarter_in_window(
+        subs, stored, "2026-08-04", {"2025-09-30"}
+    ) is False
+    # ...but an un-acknowledged gap still fires
+    assert _has_unprocessed_quarter_in_window(subs, stored, "2026-08-04") is True
+
+
+def test_read_skipped_quarters_tolerant() -> None:
+    from tickerlens.services.financials import _read_skipped_quarters
+
+    assert _read_skipped_quarters(None) == set()
+    assert _read_skipped_quarters("") == set()
+    assert _read_skipped_quarters("not-json{{{") == set()
+    assert _read_skipped_quarters("42") == set()
+    assert _read_skipped_quarters('["2025-09-30", 7, null]') == {"2025-09-30"}
+
+
+def test_revenue_duration_facts_scoped_to_revenue_chain() -> None:
+    """Only USD duration facts on the generic revenue chain count — a filing
+    can be partially ingested (APLD's FY2026 10-K: 153 duration facts, no
+    annual revenue fact), so any-tag facts must not read as "the extractor
+    had its chance"."""
+    from tickerlens.services.financials import _revenue_duration_facts
+
+    companyfacts = {"facts": {"us-gaap": {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+            {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000},
+            {"start": None, "end": "2025-09-30", "val": 999},  # instant: ignored
+        ]}},
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-06-01", "end": "2026-05-31", "val": 396858000},
+        ]}},
+    }, "dei": {}}}
+    assert _revenue_duration_facts(companyfacts) == {"2025-09-30": [(53, "RevenueFromContractWithCustomerExcludingAssessedTax")]}
+    assert _revenue_duration_facts({"facts": {}}) == {}
+    assert _revenue_duration_facts({}) == {}
+
+
+def _skyd_structural_companyfacts() -> dict:
+    """SKYD shape: 53-day stub Q3'25 + FY2025 annual with stubbed 9M."""
+    rev = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    return {"facts": {"us-gaap": {rev: {"units": {"USD": [
+        {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000},   # 53d stub
+        {"start": "2025-01-01", "end": "2025-12-31", "val": 12269000000},  # 364d annual
+        {"start": "2026-04-01", "end": "2026-06-30", "val": 6913000000},   # 90d quarter
+    ]}}}, "dei": {}}}
+
+
+def test_is_structural_gap_stub_quarter() -> None:
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rf = _revenue_duration_facts(_skyd_structural_companyfacts())
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-09-30") is True
+    # a proper quarter-length fact is extractable, not structural
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2026-06-30") is False
+
+
+def test_is_structural_gap_annual_with_stub_9m() -> None:
+    """SKYD's 10-K gap: annual fact ingested, 9M window holds only the 53-day
+    stub — FY−9M can never derive Q4."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rf = _revenue_duration_facts(_skyd_structural_companyfacts())
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-12-31") is True
+
+
+def test_is_structural_gap_false_when_revenue_missing() -> None:
+    """APLD shape: 153 non-revenue duration facts ingested, but the annual
+    revenue fact still missing — the retry loop must stay alive."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    companyfacts = {"facts": {"us-gaap": {
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-06-01", "end": "2026-05-31", "val": 396858000},
+        ]}},
+    }, "dei": {}}}
+    rf = _revenue_duration_facts(companyfacts)
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2026-05-31") is False
+
+
+def test_is_structural_gap_false_when_9m_proper() -> None:
+    """Annual ingested and a proper 240–290d 9M fact present — Q4 should
+    derive, so a missing quarter here is not structural (keep retrying)."""
+    from tickerlens.services.financials import _is_structural_gap, _revenue_duration_facts
+
+    rev = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    companyfacts = {"facts": {"us-gaap": {rev: {"units": {"USD": [
+        {"start": "2025-01-01", "end": "2025-12-31", "val": 12269000000},  # 364d
+        {"start": "2025-01-01", "end": "2025-09-30", "val": 8000000000},   # 272d 9M
+    ]}}}, "dei": {}}}
+    rf = _revenue_duration_facts(companyfacts)
+    assert _is_structural_gap(rf, _middle_gap_submissions(), "2025-12-31") is False
+
+
+def test_prior_quarter_report_date() -> None:
+    from tickerlens.services.financials import _prior_quarter_report_date
+
+    assert _prior_quarter_report_date(_middle_gap_submissions(), "2025-12-31") == "2025-09-30"
+    assert _prior_quarter_report_date(_middle_gap_submissions(), "2024-01-01") is None
+    assert _prior_quarter_report_date({}, "2025-12-31") is None
+
+
+def _stub_companyfacts() -> dict:
+    """SKYD shape: the merger-stub quarter's facts ARE ingested."""
+    return {"facts": {"us-gaap": {"RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "units": {"USD": [
+            {"start": "2025-08-08", "end": "2025-09-30", "val": 4121000000,
+             "filed": "2025-11-10", "form": "10-Q"},
+        ]}}}, "dei": {}}}
+
+
+def _unsubmitted_companyfacts() -> dict:
+    """Batch-37 shape: the missing quarter's facts are NOT ingested yet."""
+    return {"facts": {"us-gaap": {"RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "units": {"USD": [
+            {"start": "2026-04-01", "end": "2026-06-30", "val": 6913000000,
+             "filed": "2026-08-04", "form": "10-Q"},
+        ]}}}, "dei": {}}}
+
+
+def _gap_company(session: Session, cik: str = "0002041610") -> None:
+    company = _company(cik=cik, name="Skydance Corp", ticker="SKYD")
+    company.xbrl_filings_processed = "2026-08-04"
+    session.add(company)
+    for end, fy, fp in [
+        (dt.date(2024, 9, 30), 2025, "Q3"),
+        (dt.date(2024, 12, 31), 2025, "Q4"),
+        (dt.date(2025, 3, 31), 2025, "Q1"),
+        (dt.date(2025, 6, 30), 2025, "Q2"),
+        # 2025-09-30 (Q3) missing: filed 2025-11-10
+        (dt.date(2025, 12, 31), 2025, "Q4"),
+        (dt.date(2026, 3, 31), 2026, "Q1"),
+        (dt.date(2026, 6, 30), 2026, "Q2"),
+    ]:
+        session.add(_row(cik=cik, period_end=end, fiscal_year=fy,
+                         fiscal_period=fp, revenue=1.0))
+    session.commit()
+
+
+def test_refresh_acknowledges_ingested_stub_then_stays_quiet(
+    session: Session, _fresh_filings_state
+) -> None:
+    """The batch-48 futility fix: a middle-gap refire that still yields no
+    quarter — while the filing's facts ARE ingested (stub period) — records
+    the reportDate as acknowledged; the next check stays quiet instead of
+    re-pulling every 6h forever."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = _stub_companyfacts()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()  # refire yields no new quarter
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert set(json.loads(
+        session.get(Company, "0002041610").xbrl_skipped_quarters
+    )) == {"2025-09-30"}
+
+    # Simulate the next 6h check (fresh in-memory state, as after a restart).
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+    svc.fetch_and_persist.reset_mock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is False
+    svc.fetch_and_persist.assert_not_called()
+
+
+def test_refresh_keeps_retrying_when_facts_not_ingested(
+    session: Session, _fresh_filings_state
+) -> None:
+    """The batch-37 ingestion lag must NOT be acknowledged: with no facts at
+    the missing reportDate, the retry loop stays alive."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = _unsubmitted_companyfacts()
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert session.get(Company, "0002041610").xbrl_skipped_quarters is None
+
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert svc.fetch_and_persist.call_count == 2
+
+
+def test_refresh_keeps_retrying_on_partial_ingestion(
+    session: Session, _fresh_filings_state
+) -> None:
+    """APLD shape: the 10-K's facts are partially ingested (153 non-revenue
+    duration facts) but the annual revenue fact is still missing. The
+    revenue-chain-scoped check must NOT acknowledge — the retry loop stays
+    alive until SEC finishes ingesting."""
+    _gap_company(session)
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = "0002041610"
+    mock_edgar.submissions.return_value = _middle_gap_submissions()
+    mock_edgar.companyfacts.return_value = {"facts": {"us-gaap": {
+        "CostOfRevenue": {"units": {"USD": [
+            {"start": "2025-07-01", "end": "2025-09-30", "val": 1000},
+        ]}},
+    }, "dei": {}}}
+
+    svc = FinancialsService(edgar_client=mock_edgar, session=session)
+    svc.fetch_and_persist = MagicMock()
+    svc._enrich_press_release_highlights = MagicMock()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert session.get(Company, "0002041610").xbrl_skipped_quarters is None
+
+    from tickerlens.services import financials as fin_mod
+    with fin_mod._filings_check_lock:
+        fin_mod._filings_check_state.clear()
+
+    assert svc.refresh_financials_if_stale("SKYD") is True
+    assert svc.fetch_and_persist.call_count == 2
+
+
 def test_fetch_and_persist_pull_uses_live_edgar(
     session: Session, _fresh_filings_state
 ) -> None:
@@ -2461,7 +2920,10 @@ def test_fetch_and_persist_pull_uses_live_edgar(
     svc.fetch_and_persist("AAPL", periods=4, session=session)
 
     mock_edgar.submissions.assert_called_with("0000320193", fresh=True)
-    mock_edgar.companyfacts.assert_called_with("0000320193", fresh=True)
+    # Batch 82: the seed-time pending-filing note re-reads the (just-warmed)
+    # TTL cache after the pull, so the deliberate pull itself must still be
+    # the fresh one — assert it happened, not that it was the last call.
+    mock_edgar.companyfacts.assert_any_call("0000320193", fresh=True)
 
 
 # ── quarters_count / partial-year disclosure (batch 39) ───────────────────────
@@ -2522,3 +2984,126 @@ def test_render_period_csv_partial_year_note() -> None:
         period(label="Q2 FY2025", fiscal_period="Q2", quarters_count=1),
     )
     assert "# Period note" not in quarterly_csv
+
+
+def test_get_detail_backfill_triggers_when_only_guidance_missing(session: Session) -> None:
+    """Batch-50 regression: the lazy disclosure backfill trigger covered only
+    press_release_highlights, so rows with highlights filled but guidance NULL
+    (AVGO/INTU in the wild) never got their guidance backfilled."""
+    from unittest.mock import MagicMock, patch
+
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    q3 = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+              fiscal_period="Q3", revenue=40_100)
+    q3.press_release_highlights = "Highlights already filled."
+    q3.press_release_source = "Earnings release Q3 FY2025"
+    session.add(q3)
+    session.commit()
+
+    html_with_guidance = (
+        "<html><head><title>EX-99.1</title></head><body>"
+        "<h1>Acme Corp Reports Third Quarter 2025 Results</h1>"
+        "<h2>Full Year Fiscal 2026 Guidance</h2>"
+        "<p>Revenue is expected to be between $45.0 billion and $46.5 billion for fiscal 2026, "
+        "with operating margin expansion across every segment of the business portfolio.</p>"
+        "<p>GAAP gross margin is expected to be approximately 47.0 percent for the full year.</p>"
+        "<h2>Condensed Consolidated Statements of Operations</h2>"
+        "<p>Revenue: $40,100</p>"
+        "</body></html>"
+    )
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, discover_mock = _enrich_mocks(
+        mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))]
+    )
+    # _enrich_mocks sets a highlights-only fixture; override with a release
+    # that also carries a guidance section.
+    mock_edgar.fetch_text.return_value = html_with_guidance
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        ctx = svc.get_detail("AAPL", selected_quarter="Q3 FY2025")
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    assert discover_mock.called, "backfill must trigger when guidance is missing"
+    assert ctx.management_guidance is not None
+    assert "$45.0 billion" in ctx.management_guidance
+    # Previously-good highlights must not be wiped or overwritten.
+    assert ctx.press_release_highlights == "Highlights already filled."
+
+
+# ── redeemable NCI mezzanine row (batch 59) ───────────────────────────────────
+
+def test_range_table_includes_mezzanine_row_when_any_quarter_has_value(session: Session) -> None:
+    session.add(_company())
+    for end, fy, fp, rev, mezz in [
+        (dt.date(2024, 9, 30), 2024, "Q3", 91_000, None),
+        (dt.date(2024, 12, 31), 2024, "Q4", 119_575, None),
+        (dt.date(2025, 3, 31), 2025, "Q1", 95_359, 4_917.0),
+        (dt.date(2025, 6, 30), 2025, "Q2", 85_777, 4_920.0),
+    ]:
+        session.add(_row(period_end=end, fiscal_year=fy, fiscal_period=fp,
+                         revenue=rev, redeemable_nci=mezz))
+    session.commit()
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    rt = ctx.range_table
+    assert rt is not None
+    mezz_rows = [r for r in rt.rows if r.label == "Redeemable NCI (mezzanine)"]
+    assert len(mezz_rows) == 1
+    assert mezz_rows[0].values == [None, 4_917.0, 4_920.0]
+    # Mezzanine sits between liabilities and equity, like the balance sheet.
+    labels = [r.label for r in rt.rows if r.section == "balance"]
+    assert labels.index("Redeemable NCI (mezzanine)") == labels.index("Total Liabilities") + 1
+
+
+def test_range_table_drops_mezzanine_row_when_all_none(session: Session) -> None:
+    _seed_five_quarters(session)
+    ctx = _svc_with_mock(session).get_detail(
+        "AAPL", granularity="quarterly",
+        chart_from="Q4 FY2024", chart_to="Q2 FY2025",
+    )
+    rt = ctx.range_table
+    assert rt is not None
+    assert all(r.label != "Redeemable NCI (mezzanine)" for r in rt.rows)
+    assert len([r for r in rt.rows if r.section == "balance"]) == 4
+
+
+def test_to_bs_carries_redeemable_nci(session: Session) -> None:
+    from tickerlens.services.financials import _to_bs
+    # Realistic dollar magnitudes: the third-leg gate's $2M rounding floor
+    # is calibrated for real filings (values in dollars), not toy scales.
+    r = _row(period_end=dt.date(2025, 3, 31), fiscal_year=2025, fiscal_period="Q1",
+             total_assets=60_792_000_000.0, total_liabilities=24_587_000_000.0,
+             total_equity=31_288_000_000.0, redeemable_nci=4_917_000_000.0)
+    bs = _to_bs(r)
+    assert bs.redeemable_nci == 4_917_000_000.0
+    assert bs.total_liabilities + bs.redeemable_nci + bs.total_equity == bs.total_assets
+
+
+def test_compare_deltas_include_redeemable_nci() -> None:
+    from tickerlens.services.financials import (
+        BalanceSheet,
+        BalanceSheetChange,
+        KPISnapshot,
+        KPIChange,
+        PeriodData,
+        _compare_periods,
+    )
+
+    def _pd(mezz: float | None) -> PeriodData:
+        return PeriodData(
+            label="Q1 FY2026", period_end=dt.date(2026, 3, 31),
+            fiscal_year=2026, fiscal_period="Q1",
+            kpi=KPISnapshot(), yoy=KPIChange(), qoq=None,
+            balance_sheet=BalanceSheet(redeemable_nci=mezz),
+            balance_sheet_yoy=BalanceSheetChange(), balance_sheet_qoq=None,
+        )
+
+    deltas = _compare_periods(_pd(4_917.0), _pd(4_000.0))
+    assert deltas.redeemable_nci.absolute == 917.0
+    # None on either side -> empty delta, never a crash.
+    assert _compare_periods(_pd(None), _pd(4_000.0)).redeemable_nci.absolute is None

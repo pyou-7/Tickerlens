@@ -54,11 +54,21 @@ def test_peg_buy_threshold():
 
 
 def test_growth_clamped():
-    # 100% growth is clamped to 40% -> fair P/E clamped to 40x -> target 200.
-    # Pin a low 10y yield so the batch-12 rate guardrail stays dormant here.
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.fair_multiple == pytest.approx(40.0)
-    assert v.target_price == pytest.approx(200.0)
+    # Batch 62: 100% growth is OUTSIDE the 40% model maximum — the old
+    # behavior clamped the multiple and printed a target; batch 62 made it
+    # Watch/unavailable (the clamped multiple was fiction and the TTM base
+    # usually a one-off snapback, e.g. ALL +697%). Batch 74 reroutes it to
+    # the sales fallback instead: with a positive margin and revenue data
+    # the name gets a real signal on the durable top-line input.
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.target_price is not None
+    assert any("outside the PEG model's 40% design range" in p for p in v.reasoning)
+    # Without margin data the reroute cannot price — still honest Watch.
+    v2 = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v2.signal == "Watch"
+    assert v2.method == "unavailable"
 
 
 def test_rate_guardrail_binds_at_high_yield():
@@ -72,14 +82,16 @@ def test_rate_guardrail_binds_at_high_yield():
 
 def test_rate_guardrail_dormant_at_low_yield():
     # 10y at 2% -> cap at 83x; the 40x clamp binds first, no rate note.
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    # (Batch 62: growth must stay within the 40% model maximum — 100%
+    # growth now declines to Watch before the PEG path runs.)
+    v = _base(eps_growth_pct=30.0, ten_year_yield_pct=2.0)
     assert v.fair_multiple == pytest.approx(40.0)
     assert not any("10-year Treasury" in p for p in v.reasoning)
 
 
 def test_rate_guardrail_default_yield():
     # None -> 4.5% default benchmark -> cap at ~37.0x.
-    v = _base(eps_growth_pct=100.0)
+    v = _base(eps_growth_pct=30.0)
     assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
     assert any("10-year Treasury" in p for p in v.reasoning)
 
@@ -87,7 +99,7 @@ def test_rate_guardrail_default_yield():
 def test_rate_guardrail_ignores_nonsense_yield():
     # Zero/negative yields fall back to the default benchmark, never crash.
     for bad in (0.0, -2.0):
-        v = _base(eps_growth_pct=100.0, ten_year_yield_pct=bad)
+        v = _base(eps_growth_pct=30.0, ten_year_yield_pct=bad)
         assert v.fair_multiple == pytest.approx(100.0 / (4.5 * 0.6), abs=0.05)
 
 
@@ -254,9 +266,14 @@ def test_guardrail_caps_confidence_and_names_bound():
 
 
 def test_guardrail_cap_on_growth_cap_side():
+    # Batch 62: 95% growth exceeds the 40% model maximum — no "hit the 40%
+    # cap" note anymore; the input is outside the design envelope, so the
+    # card is Watch/unavailable with the design-range copy.
     v = _base(eps_growth_pct=95.0)
-    assert v.confidence == "Medium"
-    assert any("hit the 40% cap" in p for p in v.reasoning)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert not any(p.startswith("Note:") for p in v.reasoning)
 
 
 def test_no_guardrail_keeps_high_confidence():
@@ -327,6 +344,118 @@ def test_margin_at_boundary_still_valued():
               ten_year_yield_pct=2.0)
     assert v.method == "peg"
     assert v.target_price == pytest.approx(150.0)
+
+
+# ── Batch 62: design-envelope guards — REITs and hyper-growth ─────────────
+def test_reit_is_watch_on_peg_path():
+    # Mirror the WELL case: GAAP EPS $2.02 growing 16% printed Strong Sell
+    # −79% at a 114× P/E — depreciation-depressed EPS mispriced by a P/E
+    # multiple. REITs are valued on FFO, which we don't extract: Watch.
+    v = _base(ttm_eps_diluted=2.02, eps_growth_pct=16.0, current_price=230.29,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("funds from operations (FFO)" in r for r in v.reasoning)
+
+
+def test_reit_blocks_sales_path_too():
+    # No per-share data either: the margin-anchored sales fallback must not
+    # step in where the PEG path was refused — GAAP net margin is depressed
+    # by the same depreciation, so a P/S would fabricate just as badly.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=51.13,
+              ttm_revenue=1_000_000_000.0, ttm_net_income=120_000_000.0,
+              revenue_growth_pct=10.0, shares_outstanding=10_000_000.0,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+
+
+def test_reit_guard_sits_after_margin_guard():
+    # Mirror the NLY case: a REIT whose margin is ALSO absurd (186%) keeps
+    # the batch-36 margin copy — the margin guard owns margin absurdity.
+    v = _base(ttm_eps_diluted=4.11, eps_growth_pct=257.0, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0,
+              is_reit=True)
+    assert v.signal == "Watch"
+    assert any("non-operating" in r for r in v.reasoning)
+
+
+def test_hyper_growth_reroutes_to_sales():
+    # Batch 74: EPS growth beyond the 40% model maximum no longer returns
+    # Watch — the PEG path is skipped (its growth input is the unreliable
+    # one) but the margin-anchored sales fallback prices revenue growth
+    # instead. Mirror the ALL case: 135.4% EPS growth, 20% net margin, 10%
+    # revenue growth — the old code printed Watch; the reroute values it on
+    # sales: 1B revenue x (15x fair P/E x 20% margin) / 10M shares = $300.
+    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=200.0,
+              ten_year_yield_pct=2.0, ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.signal == "Strong Buy"
+    assert v.target_price == pytest.approx(300.0)
+    assert v.upside_pct == pytest.approx(50.0)
+    assert v.fair_multiple == pytest.approx(3.0)
+    assert v.growth_pct == pytest.approx(10.0)  # revenue growth: the input used
+    assert v.confidence == "Medium"  # sales path never claims High
+    assert any("outside the PEG model's 40% design range" in r for r in v.reasoning)
+    assert any("valuing on sales instead" in r for r in v.reasoning)
+    # Batch-33 honesty: per-share earnings exist here, so the "no
+    # per-share earnings" line must not appear on the reroute.
+    assert not any("No per-share earnings" in r for r in v.reasoning)
+
+
+def test_hyper_growth_boundary():
+    # The reroute is strictly > 40%: exactly 40% keeps the PEG path (capped
+    # multiple, Medium confidence via the cap guardrail); 40.1% reroutes to
+    # sales (with margin data to price it).
+    v = _base(eps_growth_pct=40.0, ten_year_yield_pct=2.0)
+    assert v.method == "peg"
+    assert v.fair_multiple == pytest.approx(40.0)
+    v2 = _base(eps_growth_pct=40.1, ten_year_yield_pct=2.0,
+               ttm_net_income=200_000_000.0)
+    assert v2.method == "sales"
+    assert v2.target_price is not None
+
+
+def test_hyper_growth_negative_margin_stays_watch():
+    # Batch 74: the reroute needs a positive margin to anchor the sales
+    # multiple — a hyper-growth name with negative TTM margin (e.g. INTC)
+    # keeps the honest Watch copy from the margin guard.
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=55.1, current_price=30.0,
+              ttm_net_income=-500_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("no positive TTM net margin" in r for r in v.reasoning)
+
+
+def test_hyper_growth_ps_cap_named():
+    # Batch 74: the 10x P/S cap still binds on the reroute (high-margin
+    # hyper-growth) — the guardrail note must name it and cap confidence
+    # at Medium (batch-45 honesty class).
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=124.7, current_price=190.0,
+              revenue_growth_pct=83.4, ten_year_yield_pct=5.3,
+              ttm_revenue=300_000_000_000.0, ttm_net_income=191_000_000_000.0,
+              shares_outstanding=24_500_000_000.0)
+    assert v.method == "sales"
+    assert v.fair_multiple == pytest.approx(10.0)
+    assert v.confidence == "Medium"
+    assert any("above the 10× cap" in r for r in v.reasoning)
+    assert any("outside the PEG model's 40% design range" in r for r in v.reasoning)
+
+
+def test_hyper_growth_revenue_growth_clamp_named():
+    # Batch 74: revenue growth above 40% is clamped by the same fair-P/E
+    # curve — the guardrail note names the binding 40% cap (batch-40/45
+    # honesty class), it doesn't silently drive the multiple.
+    v = _base(ttm_eps_diluted=4.0, eps_growth_pct=876.9, current_price=100.0,
+              revenue_growth_pct=256.3, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert any("growth 256.3% hit the 40% cap" in r for r in v.reasoning)
+    assert v.confidence == "Medium"
 
 
 # ── Batch 40: honest floor copy when the 8x P/E floor binds on positive growth
@@ -406,15 +535,19 @@ def test_high_growth_cap_plus_rate_copy_honest():
 
 
 def test_growth_clamped_names_model_maximum():
-    # Mirror the COF case: 100% growth is clamped to the 40% model maximum
-    # before the PEG math runs — the bullet must not claim 1.5 x 100%
-    # implies 60x without naming the clamp.
-    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
-    assert v.fair_multiple == pytest.approx(40.0)
-    assert v.target_price == pytest.approx(200.0)  # math unchanged
-    assert any("100.0% growth (above the 40% model maximum)" in p for p in v.reasoning)
-    assert any("implies a fair P/E of 60.0× — above the 40× cap" in p for p in v.reasoning)
-    assert any("hit the 40% cap" in p for p in v.reasoning)  # growth-clamp note intact
+    # Batch 62: 100% growth is outside the 40% model maximum — the card no
+    # longer clamps the PEG multiple and names the cap. Batch 74 reroutes
+    # it to the sales fallback instead of Watch (mirror the ALL case:
+    # +697% Strong Buy on 135% growth was clamped fiction on the PEG path).
+    v = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0,
+              ttm_net_income=200_000_000.0)
+    assert v.method == "sales"
+    assert v.target_price is not None
+    assert any("outside the PEG model's 40% design range" in p for p in v.reasoning)
+    # Without margin data the reroute cannot price — still honest Watch.
+    v2 = _base(eps_growth_pct=100.0, ten_year_yield_pct=2.0)
+    assert v2.signal == "Watch"
+    assert v2.method == "unavailable"
 
 
 def test_rate_only_band_copy_honest():
@@ -469,3 +602,357 @@ def test_sales_no_cap_keeps_ps_copy():
     assert v.method == "sales"
     assert v.fair_multiple == pytest.approx(3.0)  # 20% margin x 15x P/E
     assert any("implies a fair P/S of 3.0× (current P/S is" in p for p in v.reasoning)
+
+
+# ── Batch 70: design-envelope guard — banks/lenders and insurers ───────────
+def test_bank_insurer_is_watch_on_peg_path():
+    # Mirror the BAC case: EPS $3.42 growing 28% printed Strong Buy +196%
+    # at a 37.0x "fair" P/E — banks rarely sustain even 15x through a
+    # cycle, so the growth-implied multiple is market fiction. Lenders and
+    # insurers are balance-sheet businesses: Watch, not a target.
+    v = _base(ttm_eps_diluted=3.42, eps_growth_pct=28.0, current_price=51.13,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert v.confidence == "Low"
+    assert any("book value" in r for r in v.reasoning)
+
+
+def test_bank_insurer_blocks_sales_path_too():
+    # Mirror the BRK.B case: no per-share data, so the margin-anchored
+    # sales fallback would step in — but fair P/S = P/E x net margin
+    # inherits the same broken multiple, and the market values insurers
+    # on book value, never P/S. The guard sits before both paths.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=None, current_price=51.13,
+              ttm_revenue=100_000_000_000.0, ttm_net_income=20_000_000_000.0,
+              revenue_growth_pct=10.0, shares_outstanding=10_000_000.0,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+
+
+def test_bank_insurer_guard_sits_after_margin_guard():
+    # A bank whose margin is ALSO absurd (>100% via non-operating items)
+    # keeps the batch-36 margin copy — the margin guard owns margin
+    # absurdity.
+    v = _base(ttm_eps_diluted=4.11, eps_growth_pct=257.0, current_price=18.27,
+              ttm_revenue=1_584_000_000.0, ttm_net_income=2_951_000_000.0,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert any("non-operating" in r for r in v.reasoning)
+
+
+def test_bank_insurer_guard_sits_before_hyper_growth_guard():
+    # A bank with a cyclical EPS spike above the 40% model max gets the
+    # sector copy — the sector is the more fundamental reason the model
+    # declines, not the one-off spike.
+    v = _base(ttm_eps_diluted=50.08, eps_growth_pct=135.4, current_price=232.60,
+              is_bank_insurer=True)
+    assert v.signal == "Watch"
+    assert any("bank, lender, or insurer" in r for r in v.reasoning)
+    assert not any("design range" in r for r in v.reasoning)
+
+
+def test_non_bank_insurer_unaffected():
+    # Same strong PEG inputs without the flag still render a signal — the
+    # guard is strictly opt-in via the SIC classification.
+    v = _base(ttm_eps_diluted=3.42, eps_growth_pct=28.0, current_price=51.13,
+              is_bank_insurer=False)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"
+
+
+# ── Batch 71: bank/insurer price-to-book path ─────────────────────────────
+
+
+def test_bank_insurer_book_path_basic():
+    # Mirror the JPM case: ROE 17.8%, current P/B 2.38x.
+    # Fair P/B = (17.8 - 3) / (9.5 - 3) = 2.28x -> target below price -> Hold.
+    bvps = 335.28 / 2.38
+    v = _base(current_price=335.28, is_bank_insurer=True,
+              book_value_per_share=bvps, roe_pct=17.8)
+    assert v.method == "book"
+    assert v.signal == "Hold"
+    assert v.fair_multiple == pytest.approx(2.3)
+    assert v.current_multiple == pytest.approx(2.4)
+    assert v.growth_pct == pytest.approx(17.8)
+    assert v.target_price == pytest.approx(bvps * 2.2769, rel=1e-3)
+    assert v.upside_pct == pytest.approx(-4.3, abs=0.1)
+    assert v.confidence == "High"
+    assert any("return on equity" in r for r in v.reasoning)
+    assert any("fair P/B of 2.3" in r for r in v.reasoning)
+    assert v.fcf_note is None  # FCF cross-check is noise for banks
+
+
+def test_bank_insurer_book_path_cap_binds():
+    # Mirror the ALL case: peak ROE 43.2% implies 6.2x fair P/B — above the
+    # 2.5x cap for cyclical book earnings, so valued at 2.5x with the
+    # guardrail named and confidence capped at Medium.
+    v = _base(current_price=1.75, is_bank_insurer=True,
+              book_value_per_share=1.0, roe_pct=43.2)
+    assert v.method == "book"
+    assert v.fair_multiple == pytest.approx(2.5)
+    assert v.signal == "Strong Buy"
+    assert v.confidence == "Medium"
+    assert any("above the 2.5" in r and "cap" in r for r in v.reasoning)
+    assert any("implies a fair P/B of 6.2" in r for r in v.reasoning)
+
+
+def test_bank_insurer_book_path_floor_binds():
+    # Mirror the SOFI case: ROE 6.2% implies 0.49x — below the 0.5x floor
+    # for distressed book earnings, so valued at 0.5x, confidence Medium.
+    v = _base(current_price=2.79, is_bank_insurer=True,
+              book_value_per_share=1.0, roe_pct=6.2)
+    assert v.method == "book"
+    assert v.fair_multiple == pytest.approx(0.5)
+    assert v.signal == "Strong Sell"
+    assert v.confidence == "Medium"
+    assert any("below the 0.5" in r and "floor" in r for r in v.reasoning)
+
+
+def test_bank_insurer_negative_roe_is_watch():
+    # Mirror the COIN case: a bank not earning on its book equity cannot be
+    # priced on book value — the Gordon model would give a negative
+    # justified P/B, which is nonsense, not a target.
+    v = _base(current_price=179.39, is_bank_insurer=True,
+              book_value_per_share=49.5, roe_pct=-6.9)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("book value" in r for r in v.reasoning)
+
+
+def test_bank_insurer_missing_book_inputs_is_watch():
+    # ROE present but no book value per share: no honest P/B target exists.
+    v = _base(current_price=54.32, is_bank_insurer=True,
+              book_value_per_share=None, roe_pct=11.1)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert any("incomplete" in r for r in v.reasoning)
+
+
+def test_bank_insurer_book_path_rate_sensitive():
+    # A higher 10-year raises the cost of equity, lowering the justified
+    # P/B — the book path respects the rate environment like the PEG path.
+    kw = dict(current_price=335.28, is_bank_insurer=True,
+              book_value_per_share=335.28 / 2.38, roe_pct=17.8)
+    low_rate = _base(**kw)
+    high_rate = _base(**kw, ten_year_yield_pct=7.0)
+    assert high_rate.fair_multiple < low_rate.fair_multiple
+    assert high_rate.fair_multiple == pytest.approx(1.6, abs=0.05)
+    assert any("10-year 7.0%" in r for r in high_rate.reasoning)
+
+
+def test_non_bank_insurer_ignores_book_inputs():
+    # Book inputs only matter with the flag — a normal company with stray
+    # book inputs still takes the PEG path.
+    v = _base(is_bank_insurer=False, book_value_per_share=50.0, roe_pct=25.0)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"
+
+
+def test_bank_insurer_zero_book_value_is_watch():
+    # Non-positive book equity (e.g. a levered lender with negative book)
+    # cannot anchor a P/B multiple — Watch, not a fabricated target.
+    v = _base(current_price=15.24, is_bank_insurer=True,
+              book_value_per_share=0.0, roe_pct=6.2)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+
+
+def _reit_base(**overrides):
+    kwargs = dict(
+        ticker="REIT",
+        current_price=80.0,
+        ttm_eps_diluted=1.0,
+        eps_growth_pct=5.0,
+        ttm_revenue=8_000_000_000.0,
+        revenue_growth_pct=3.0,
+        shares_outstanding=1_000_000_000.0,
+        ttm_quarters=4,
+        is_reit=True,
+        ttm_ffo=4_000_000_000.0,
+        ffo_growth_pct=4.0,
+    )
+    kwargs.update(overrides)
+    return compute_valuation(**kwargs)
+
+
+def test_reit_ffo_path_basic():
+    # FFO/share $4.00, 4% observed growth, 10y 4.5% -> CoE 9%.
+    # The perpetual g is capped at the 3% long-run rate (a 4% TTM print is
+    # cyclical, not perpetual): fair P/FFO = 103 / (9 - 3) = 17.2x ->
+    # target $68.67 vs $80 -> -14.2% Sell. The growth display still shows
+    # the observed 4.0%, and the cap is named in the reasoning.
+    v = _reit_base()
+    assert v.method == "ffo"
+    assert v.signal == "Sell"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.current_multiple == pytest.approx(20.0)
+    assert v.growth_pct == pytest.approx(4.0)
+    assert v.target_price == pytest.approx(68.67, abs=0.05)
+    assert v.upside_pct == pytest.approx(-14.2, abs=0.1)
+    assert v.confidence == "High"
+    assert any("fair P/FFO of 17.2" in r for r in v.reasoning)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+    assert any("funds from operations" in r for r in v.reasoning)
+    assert v.fcf_note is None  # FCF cross-check is noise for REITs
+
+
+def test_reit_ffo_growth_capped_at_long_run():
+    # 8% observed FFO growth is not capitalized — the multiple is valued at
+    # the 3% long-run rate (103/6 = 17.2x), the cap named, and no target is
+    # fabricated from the spike.
+    v = _reit_base(current_price=100.0, ffo_growth_pct=8.0)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.growth_pct == pytest.approx(8.0)  # display keeps the print
+    assert v.signal == "Strong Sell"  # 4.00 * 17.17 = 68.67 vs 100 -> -31.3%
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+    assert any("instead of capitalizing the spike" in r for r in v.reasoning)
+
+
+def test_reit_ffo_path_floor_binds():
+    # -5% FFO growth implies 6.8x — below the 8x floor for declining
+    # REIT cash flows, so valued at 8x, confidence Medium.
+    v = _reit_base(current_price=100.0, ffo_growth_pct=-5.0)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(8.0)
+    assert v.signal == "Strong Sell"  # 4.00 * 8 = 32 vs 100 -> -68%
+    assert v.confidence == "Medium"
+    assert any("below the 8" in r and "floor" in r for r in v.reasoning)
+
+
+def test_reit_ffo_growth_spike_gets_real_signal():
+    # 12% observed FFO growth (above the old Gordon singularity): no more
+    # Watch decline — the spike is capped at the long-run rate and the
+    # REIT gets a real P/FFO target with the cap named.
+    v = _reit_base(ffo_growth_pct=12.0)
+    assert v.method == "ffo"
+    assert v.target_price is not None
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.growth_pct == pytest.approx(12.0)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+
+
+def test_reit_ffo_hyper_growth_gets_real_signal():
+    # 45% FFO growth (a one-off snapback): still valued at the long-run
+    # rate, not declined — the cyclical print is never capitalized.
+    v = _reit_base(ffo_growth_pct=45.0)
+    assert v.method == "ffo"
+    assert v.target_price is not None
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert any("above the 3% long-run rate" in r for r in v.reasoning)
+
+
+def test_reit_ffo_dominant_quarter_is_watch():
+    # SPG-shaped window: one quarter (2025Q4, the $2.9B Taubman
+    # remeasurement gain, invisible to companyfacts) owns the TTM —
+    # the base is a one-off, not a run-rate, so Watch with the quarter
+    # named instead of a fabricated P/FFO target.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 952_000_000.0),
+            ("2026Q1", 938_000_000.0),
+            ("2025Q4", 3_469_000_000.0),
+            ("2025Q3", 945_000_000.0),
+        ]
+    )
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("2025Q4" in r for r in v.reasoning)
+    assert any("one-off" in r for r in v.reasoning)
+
+
+def test_reit_ffo_even_quarters_pass_guard():
+    # Normal REIT lumpiness (WELL runs ~1.7x max/median) takes the P/FFO
+    # path — the guard only fires on true outliers.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 170_000_000.0),
+            ("2026Q1", 120_000_000.0),
+            ("2025Q4", 110_000_000.0),
+            ("2025Q3", 100_000_000.0),
+        ]
+    )
+    assert v.method == "ffo"
+    assert v.target_price is not None
+
+
+def test_reit_ffo_dominance_guard_needs_full_window():
+    # Fewer than 4 quarterly values: the guard stays out of the way.
+    v = _reit_base(
+        ffo_quarters=[
+            ("2026Q2", 3_469_000_000.0),
+            ("2026Q1", 938_000_000.0),
+            ("2025Q4", 945_000_000.0),
+        ]
+    )
+    assert v.method == "ffo"
+
+
+def test_reit_ffo_missing_is_watch():
+    # No FFO inputs (e.g. mortgage REITs file no property depreciation):
+    # no honest P/FFO target exists.
+    v = _reit_base(ttm_ffo=None)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+    assert v.target_price is None
+    assert any("could not be computed" in r for r in v.reasoning)
+
+
+def test_reit_ffo_non_positive_is_watch():
+    # A non-positive TTM FFO gives a zero/negative justified P/FFO —
+    # nonsense, not a target (same honesty as the batch-26 margin guard).
+    v = _reit_base(ttm_ffo=-100_000_000.0)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+
+
+def test_reit_ffo_missing_shares_is_watch():
+    v = _reit_base(shares_outstanding=None)
+    assert v.signal == "Watch"
+    assert v.method == "unavailable"
+
+
+def test_reit_ffo_growth_default_caps_confidence():
+    # No growth history: assume 3% long-run FFO growth, named in the copy,
+    # confidence capped at Medium.
+    v = _reit_base(ffo_growth_pct=None)
+    assert v.method == "ffo"
+    assert v.growth_pct == pytest.approx(3.0)
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.confidence == "Medium"
+    assert any("assuming 3% long-run" in r for r in v.reasoning)
+
+
+def test_reit_ffo_fallback_growth_caps_confidence():
+    # YoY-fallback FFO growth (no 8-quarter history): the 4% print is capped
+    # at the long-run rate for the multiple, confidence Medium.
+    v = _reit_base(ffo_growth_is_fallback=True)
+    assert v.method == "ffo"
+    assert v.fair_multiple == pytest.approx(103.0 / 6.0, abs=0.05)
+    assert v.confidence == "Medium"
+    assert any("a year ago" in r for r in v.reasoning)
+
+
+def test_reit_ffo_path_rate_sensitive():
+    # A higher 10-year raises the cost of equity, lowering the justified
+    # P/FFO — the FFO path respects the rate environment like the book path.
+    kw = dict(is_reit=True, ttm_ffo=4_000_000_000.0, ffo_growth_pct=4.0)
+    low_rate = _reit_base(**kw)
+    high_rate = _reit_base(**kw, ten_year_yield_pct=7.0)
+    assert high_rate.fair_multiple < low_rate.fair_multiple
+    assert high_rate.fair_multiple == pytest.approx(103.0 / 8.5, abs=0.05)
+    assert any("10-year 7.0%" in r for r in high_rate.reasoning)
+
+
+def test_non_reit_ignores_ffo_inputs():
+    # FFO inputs only matter with the flag — a normal company with stray
+    # FFO inputs still takes the PEG path.
+    v = _base(is_reit=False, ttm_ffo=4_000_000_000.0, ffo_growth_pct=4.0)
+    assert v.method == "peg"
+    assert v.signal == "Strong Buy"

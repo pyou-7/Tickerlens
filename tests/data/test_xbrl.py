@@ -5,6 +5,8 @@ import pytest
 from tickerlens.data.xbrl import (
     Metric,
     UnsupportedFilerError,
+    XbrlFact,
+    _split_share_restatements,
     balance_sheet_metric,
     concept_facts,
     extract_recent_quarterly_financials,
@@ -59,6 +61,255 @@ def test_concept_mapping_falls_back_to_revenues() -> None:
 
     assert source_tag == "Revenues"
     assert facts[0].val == 100
+
+
+def test_ffo_composite_basic() -> None:
+    """FFO = net income + depreciation − disposition gains + impairments.
+
+    Mirrors the DLR Q2'25 shape: a $1,032M one-time disposition gain spikes
+    net income, but FFO strips it — FFO stays flat while NI jumps.
+    """
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1032, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 0, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1032, 2026, "Q2"),
+        ],
+        impairment_values=[
+            ("2026-01-01", "2026-03-31", 0, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [180 + 560 - 0 + 0, 1032 + 560 - 1032 + 0]
+
+
+def test_ffo_gain_quarter_missing_counts_as_zero() -> None:
+    """Filers only file the gain tag in quarters with an actual disposition —
+    a missing quarter end counts as zero gains, not a gap."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 200, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+        # Gain filed only in Q1 — Q2 has no disposition.
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 100, 2026, "Q1"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [180 + 560 - 100, 200 + 560 - 0]
+
+
+def test_ffo_no_gain_facts_at_all_assumes_zero() -> None:
+    """A filer with no disposition-gain facts in the window (e.g. PLD's
+    quarterly XBRL) gets FFO with gains assumed zero — the valuation copy
+    names the assumption rather than silently asserting it."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 200, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [740, 760]
+
+
+def test_ffo_missing_depreciation_is_none() -> None:
+    """No quarterly depreciation series (e.g. mortgage REITs) means no FFO —
+    never a partial net-income-only sum."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 800, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 820, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [None, None]
+
+
+def test_ffo_missing_net_income_is_none() -> None:
+    """Depreciation without net income is not FFO either."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2000, 2026, "Q2"),
+        ],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 560, 2026, "Q2"),
+        ],
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=2
+    )
+
+    assert [r.ffo for r in rows] == [None, None]
+
+
+def test_ffo_depreciation_fallback_tag() -> None:
+    """Filers using the plainer DepreciationAndAmortization tag (Digital
+    Realty) extract the same composite as DepreciationDepletionAndAmortization
+    filers (Realty Income)."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["DepreciationAndAmortization"] = us_gaap.pop(
+        "DepreciationDepletionAndAmortization"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 740
+
+
+def test_ffo_depreciation_accretion_net_tag() -> None:
+    """Tower REITs (AMT, CCI) tag quarterly depreciation expense as
+    DepreciationAmortizationAndAccretionNet — the tail chain tag must fill
+    the FFO leg when the first two tags have no facts (live-data defect
+    found on the batch-72 backfill)."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 180, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["DepreciationAmortizationAndAccretionNet"] = us_gaap.pop(
+        "DepreciationDepletionAndAmortization"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 740
+
+
+def test_ffo_gain_fallback_tag() -> None:
+    """Filers tagging dispositions GainLossOnDispositionOfAssets (Digital
+    Realty) get gains stripped just like GainLossOnSaleOfProperties filers."""
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 2000, 2026, "Q1"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 1032, 2026, "Q1"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[],
+        capex_values=[],
+        depreciation_values=[
+            ("2026-01-01", "2026-03-31", 560, 2026, "Q1"),
+        ],
+        disposition_gain_values=[
+            ("2026-01-01", "2026-03-31", 900, 2026, "Q1"),
+        ],
+    )
+    us_gaap = companyfacts["facts"]["us-gaap"]
+    us_gaap["GainLossOnDispositionOfAssets"] = us_gaap.pop(
+        "GainLossOnSaleOfProperties"
+    )
+
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=1
+    )
+
+    assert rows[0].ffo == 1032 + 560 - 900
 
 
 def test_cash_flow_uncumulates_ytd_periods() -> None:
@@ -265,6 +516,20 @@ def make_companyfacts(
     opcf_values: list[tuple[str, str, float, int, str]],
     capex_values: list[tuple[str, str, float, int, str]],
     assets_values: list[tuple[str, float, int, str]] | None = None,
+    cont_ops_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    cont_ops_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    undistributed_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    undistributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    distributed_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    distributed_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    per_unit_basic_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    per_unit_diluted_eps_values: list[tuple[str, str, float, int, str]] | None = None,
+    discontinued_ops_values: list[tuple[str, str, float, int, str]] | None = None,
+    depreciation_values: list[tuple[str, str, float, int, str]] | None = None,
+    disposition_gain_values: list[tuple[str, str, float, int, str]] | None = None,
+    impairment_values: list[tuple[str, str, float, int, str]] | None = None,
+    diluted_shares_values: list[tuple[str, str, float, int, str]] | None = None,
+    basic_shares_values: list[tuple[str, str, float, int, str]] | None = None,
 ) -> dict:
     us_gaap = {
         "RevenueFromContractWithCustomerExcludingAssessedTax": units("USD", revenue_values),
@@ -276,6 +541,60 @@ def make_companyfacts(
     }
     if assets_values is not None:
         us_gaap["Assets"] = instant_units(assets_values)
+    if cont_ops_basic_eps_values is not None:
+        us_gaap["IncomeLossFromContinuingOperationsPerBasicShare"] = units(
+            "USD/shares", cont_ops_basic_eps_values
+        )
+    if cont_ops_diluted_eps_values is not None:
+        us_gaap["IncomeLossFromContinuingOperationsPerDilutedShare"] = units(
+            "USD/shares", cont_ops_diluted_eps_values
+        )
+    if undistributed_basic_eps_values is not None:
+        us_gaap["EarningsPerShareBasicUndistributed"] = units(
+            "USD/shares", undistributed_basic_eps_values
+        )
+    if undistributed_diluted_eps_values is not None:
+        us_gaap["EarningsPerShareDilutedUndistributed"] = units(
+            "USD/shares", undistributed_diluted_eps_values
+        )
+    if distributed_basic_eps_values is not None:
+        us_gaap["EarningsPerShareBasicDistributed"] = units(
+            "USD/shares", distributed_basic_eps_values
+        )
+    if distributed_diluted_eps_values is not None:
+        us_gaap["EarningsPerShareDilutedDistributed"] = units(
+            "USD/shares", distributed_diluted_eps_values
+        )
+    if per_unit_basic_eps_values is not None:
+        us_gaap["NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"] = units(
+            "USD/shares", per_unit_basic_eps_values
+        )
+    if per_unit_diluted_eps_values is not None:
+        us_gaap["NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted"] = units(
+            "USD/shares", per_unit_diluted_eps_values
+        )
+    if discontinued_ops_values is not None:
+        us_gaap["IncomeLossFromDiscontinuedOperationsNetOfTax"] = units(
+            "USD", discontinued_ops_values
+        )
+    if depreciation_values is not None:
+        us_gaap["DepreciationDepletionAndAmortization"] = units(
+            "USD", depreciation_values
+        )
+    if disposition_gain_values is not None:
+        us_gaap["GainLossOnSaleOfProperties"] = units(
+            "USD", disposition_gain_values
+        )
+    if impairment_values is not None:
+        us_gaap["ImpairmentOfRealEstate"] = units("USD", impairment_values)
+    if diluted_shares_values is not None:
+        us_gaap["WeightedAverageNumberOfDilutedSharesOutstanding"] = units(
+            "shares", diluted_shares_values
+        )
+    if basic_shares_values is not None:
+        us_gaap["WeightedAverageNumberOfSharesOutstandingBasic"] = units(
+            "shares", basic_shares_values
+        )
     return {"facts": {"us-gaap": us_gaap}}
 
 
@@ -400,6 +719,87 @@ def test_capex_keeps_ppande_tag_when_fresh():
     ].append(fact("2026-01-01", "2026-03-31", 500_000_000.0, 2026, "Q1"))
     tag, _ = concept_facts(cf, Metric.CAPEX)
     assert tag == "PaymentsToAcquirePropertyPlantAndEquipment"
+
+
+def _dal_capex_split_facts() -> dict:
+    """Mirror the Delta (DAL) case: the total
+    ``PaymentsToAcquireProductiveAssets`` tag stops at Q1 2026 while the
+    filer keeps reporting the two components — ``PaymentsForFlightEquipment``
+    and ``PaymentsToAcquireOtherProductiveAssets`` — through Q3 2026.
+    Component sums equal the old total (Q1: 1000 + 200 = 1200)."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "PaymentsToAcquireProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 1_200_000_000.0, 2026, "Q1"),
+                        ]
+                    }
+                },
+                "PaymentsForFlightEquipment": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 1_000_000_000.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 2_244_000_000.0, 2026, "Q2"),
+                            fact("2026-01-01", "2026-09-30", 3_444_000_000.0, 2026, "Q3"),
+                        ]
+                    }
+                },
+                "PaymentsToAcquireOtherProductiveAssets": {
+                    "units": {
+                        "USD": [
+                            fact("2026-01-01", "2026-03-31", 200_000_000.0, 2026, "Q1"),
+                            fact("2026-01-01", "2026-06-30", 414_000_000.0, 2026, "Q2"),
+                            fact("2026-01-01", "2026-09-30", 627_000_000.0, 2026, "Q3"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+
+
+def test_capex_flight_equipment_composite_sums_components():
+    """The split-capex composite sums flight + other productive assets per
+    YTD period before un-cumulating: Q2 = (2244+414) − 1200 = 1458,
+    Q3 = (3444+627) − (2244+414) = 1413. Flight-only would understate capex
+    ~15% and overstate FCF; a blank would lose the quarters entirely."""
+    series = quarterly_cash_flow_metric(
+        _dal_capex_split_facts(), Metric.CAPEX, "1231"
+    )
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-03-31"].value == 1_200_000_000.0
+    assert by_end["2026-06-30"].value == 1_458_000_000.0
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
+    assert "PaymentsForFlightEquipment" in by_end["2026-09-30"].source_tag
+
+
+def test_capex_flight_composite_does_not_fire_when_total_current():
+    """Dispatch guard: when the total capex tag stays current, it remains
+    authoritative — the composite must not fire and double-count a filer
+    that reports both a total and the flight-equipment subset."""
+    cf = _dal_capex_split_facts()
+    total = cf["facts"]["us-gaap"]["PaymentsToAcquireProductiveAssets"]["units"]["USD"]
+    total.append(fact("2026-01-01", "2026-06-30", 2_658_000_000.0, 2026, "Q2"))
+    total.append(fact("2026-01-01", "2026-09-30", 4_071_000_000.0, 2026, "Q3"))
+    series = quarterly_cash_flow_metric(cf, Metric.CAPEX, "1231")
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-09-30"].source_tag == "PaymentsToAcquireProductiveAssets"
+    assert by_end["2026-06-30"].value == 1_458_000_000.0
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
+
+
+def test_capex_flight_composite_ignores_non_10q_forms():
+    """Only 10-Q/10-K facts feed the composite — an 8-K-tagged flight
+    payment must not leak into capex."""
+    cf = _dal_capex_split_facts()
+    bad = fact("2026-01-01", "2026-09-30", 99_000_000_000.0, 2026, "Q3")
+    bad["form"] = "8-K"
+    cf["facts"]["us-gaap"]["PaymentsForFlightEquipment"]["units"]["USD"].append(bad)
+    series = quarterly_cash_flow_metric(cf, Metric.CAPEX, "1231")
+    by_end = {item.end.isoformat(): item for item in series}
+    assert by_end["2026-09-30"].value == 1_413_000_000.0
 
 
 def test_net_income_falls_back_to_common_stockholders_tag_when_abandoned() -> None:
@@ -690,6 +1090,158 @@ def test_dedupe_period_labels_collision_without_sequence_context_walks_earlier_b
     by_end = {r.end: (r.fy, r.fp) for r in fixed}
     assert by_end[dt.date(2025, 6, 30)] == (2025, "Q2")
     assert by_end[dt.date(2026, 6, 30)] == (2026, "Q2")
+
+
+def test_repair_sequence_breaks_fixes_filer_shifted_year() -> None:
+    """CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q tag their periods by the
+    calendar year the fiscal year *began* (fy=2024/2025); later filings'
+    comparative columns use the standard ending-year convention. No labels
+    collide, but fy decreases across consecutive quarters — impossible for a
+    fiscal calendar. The backbone (5 consistent rows) repairs the 2-row
+    shifted block."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2024, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2027, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2024, 10, 31)] == (2025, "Q3")
+    assert by_end[dt.date(2025, 1, 31)] == (2025, "Q4")
+    assert by_end[dt.date(2025, 4, 30)] == (2026, "Q1")
+    assert by_end[dt.date(2025, 7, 31)] == (2026, "Q2")
+    assert by_end[dt.date(2026, 7, 31)] == (2027, "Q2")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_repair_sequence_breaks_leaves_clean_sequence_alone() -> None:
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_no_strict_majority() -> None:
+    """A 4-vs-4 convention split (e.g. a full missing year) is ambiguous:
+    without a strict-majority backbone nothing is relabeled, even though the
+    walk would otherwise "fix" the earlier block."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q1", dt.date(2024, 3, 31)),
+        _xbrl_row(2024, "Q2", dt.date(2024, 6, 30)),
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2026, "Q4", dt.date(2025, 12, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_short_backbone() -> None:
+    """No run reaches 3 rows: the sparse history is left exactly as filed."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_missing_quarter_walks_to_own_claim() -> None:
+    """A genuine mid-window gap (Q2 missing) walks by calendar steps back to
+    the row's own label — the fp guard alone would not save this, the walk
+    does."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_fp_mismatch_not_repaired() -> None:
+    """Only pure year shifts are repaired: a row whose fp disagrees with the
+    walked expectation keeps its claim."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q2", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [(r.fy, r.fp) for r in rows]
+
+
+def test_repair_sequence_breaks_held_target_keeps_claim() -> None:
+    """Two near-duplicate ends walk to the same expectation: the first takes
+    it, the second keeps its claim rather than colliding."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2024, "Q1", dt.date(2025, 4, 28)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 4, 28)] == (2026, "Q1")
+    assert by_end[dt.date(2025, 4, 30)] == (2025, "Q1")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
+def test_repair_sequence_breaks_newest_row_blip() -> None:
+    """The newest filing can mislabel without colliding (the ORCL/Salesforce
+    class in non-colliding form): the backbone repairs the latest row."""
+    from tickerlens.data.xbrl import _repair_sequence_breaks
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2026, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_sequence_breaks(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2026, 7, 31)] == (2027, "Q2")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
 
 
 def _eur_20f_companyfacts() -> dict:
@@ -1553,6 +2105,245 @@ def test_q4_eps_falls_back_when_eps_zero() -> None:
     assert metrics[dt.date(2025, 12, 31)].value == -8.17
 
 
+def _hal_like_companyfacts(
+    *,
+    cont_ops_annual_eps: float,
+    primary_9m_eps: float = 0.81,
+    net_income_values: list | None = None,
+) -> dict:
+    """HAL FY2025-shaped facts: the 10-K tags no annual EPS under the generic
+    tag — only under the continuing-operations per-share tag — while the
+    10-Qs tag quarters + 9M under the generic tag."""
+    return make_companyfacts(
+        revenue_values=[],
+        net_income_values=(
+            net_income_values
+            if net_income_values is not None
+            else [
+                ("2025-01-01", "2025-09-30", 694_000_000, 2025, "Q3"),
+                ("2025-01-01", "2025-12-31", 1_283_000_000, 2025, "FY"),
+            ]
+        ),
+        basic_eps_values=[
+            ("2025-01-01", "2025-03-31", 0.24, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 0.55, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 0.02, 2025, "Q3"),
+            ("2025-01-01", "2025-09-30", primary_9m_eps, 2025, "Q3"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-03-31", 0.24, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 0.55, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 0.02, 2025, "Q3"),
+            ("2025-01-01", "2025-09-30", primary_9m_eps, 2025, "Q3"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+        cont_ops_basic_eps_values=[
+            ("2025-01-01", "2025-12-31", cont_ops_annual_eps, 2025, "FY"),
+        ],
+        cont_ops_diluted_eps_values=[
+            ("2025-01-01", "2025-12-31", cont_ops_annual_eps, 2025, "FY"),
+        ],
+    )
+
+
+def test_q4_eps_derived_from_continuing_ops_annual_when_primary_annual_missing() -> None:
+    # Regression (batch 65, HAL class): the 10-K tags no annual EPS under
+    # EarningsPerShareDiluted — only under
+    # IncomeLossFromContinuingOperationsPerDilutedShare — so Q4 was
+    # underivable and HAL rendered two EPS-less Q4 rows. The continuing-ops
+    # annual now supplies the derivation input: Q4 NI $589M over the
+    # implied Q4 share count ≈ 0.6922, and the row carries the fallback
+    # tag as its source.
+    companyfacts = _hal_like_companyfacts(cont_ops_annual_eps=1.50)
+    for metric, tag in (
+        (Metric.EPS_BASIC, "IncomeLossFromContinuingOperationsPerBasicShare"),
+        (Metric.EPS_DILUTED, "IncomeLossFromContinuingOperationsPerDilutedShare"),
+    ):
+        series = {
+            m.end: m for m in quarterly_income_metric(companyfacts, metric, "1231")
+        }
+        q4 = series[dt.date(2025, 12, 31)]
+        assert round(q4.value, 4) == 0.6922
+        assert q4.source_tag == tag
+        assert q4.fy == 2025 and q4.fp == "Q4"
+
+
+def test_q4_eps_fallback_rejected_when_discontinued_ops_material() -> None:
+    # The fallback annual is continuing-operations EPS while the 9M and NI
+    # pairs are totals. A continuing-ops annual of $0.75 against $1,283M
+    # of total net income implies ~1.71B shares vs the 9M pair's ~857M —
+    # a ~100% divergence, i.e. material discontinued operations. The
+    # substitute is rejected (fail closed) rather than fabricating a Q4.
+    companyfacts = _hal_like_companyfacts(cont_ops_annual_eps=0.75)
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_primary_guard_rejects_scale_garbage_9m() -> None:
+    # Halliburton's 2022–2024 10-Qs tagged net-income dollar amounts, in
+    # thousands, under the EPS tag (a 1e6× mis-scale). A mis-scaled 9M EPS
+    # implies an absurd share count vs the annual pair; the derivation is
+    # skipped instead of printing a Q4 EPS wrong by ~4×.
+    companyfacts = _hal_like_companyfacts(
+        cont_ops_annual_eps=1.50, primary_9m_eps=810_000.0
+    )
+    # Primary annual present so the primary path (not the fallback) is
+    # exercised: add it via the generic tag.
+    companyfacts["facts"]["us-gaap"]["EarningsPerShareDiluted"]["units"][
+        "USD/shares"
+    ].append(fact("2025-01-01", "2025-12-31", 1.50, 2025, "FY"))
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_fallback_rejected_without_ni_pair() -> None:
+    # Without net-income facts there is no way to verify that the
+    # continuing-ops annual coincides with total EPS, and the plain
+    # subtraction fallback would mix the two bases — so the substitute is
+    # rejected outright (unlike the primary path, which keeps subtraction).
+    companyfacts = _hal_like_companyfacts(
+        cont_ops_annual_eps=1.50, net_income_values=[]
+    )
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert dt.date(2025, 12, 31) not in series
+
+
+def test_q4_eps_primary_guard_tolerates_merger_divergence() -> None:
+    # Regression guard for the guard (batch 65, Capital One FY2025):
+    # the Discover merger + acquisition accounting left the 9M implied
+    # share count 56% above the FY implied count — incoherent-looking but
+    # legitimate. The 75% primary tolerance must let it through: the
+    # implied-shares path returns None (negative Q4 shares) and the
+    # subtraction fallback (the filer's own FY − 9M arithmetic) yields
+    # $3.80, exactly the pre-guard value.
+    companyfacts = make_companyfacts(
+        revenue_values=[],
+        net_income_values=[
+            ("2025-01-01", "2025-09-30", 319_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 2_453_000_000, 2025, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.23, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.03, 2025, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.23, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.03, 2025, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    series = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert series[dt.date(2025, 12, 31)].value == 3.80
+
+
+def _ntrs_like_companyfacts(*, with_distributed: bool = False) -> dict:
+    """NTRS Q1–Q2 2026-shaped facts: the 10-Q tags plain EPS for Q1 but
+    only the Undistributed variant for Q2 (Basic $4.25 / Diluted $4.23 —
+    the face-of-statement values, verified against the 10-Q). The
+    Undistributed Q1 values are deliberately 0.02 below the plain Q1
+    values so the test proves the plain tag wins every end it covers."""
+    kwargs: dict = {
+        "revenue_values": [
+            ("2026-01-01", "2026-03-31", 2_205_600_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_698_000_000, 2026, "Q2"),
+        ],
+        "net_income_values": [
+            ("2026-01-01", "2026-03-31", 525_500_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 792_200_000, 2026, "Q2"),
+        ],
+        "basic_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.72, 2026, "Q1"),
+        ],
+        "diluted_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.71, 2026, "Q1"),
+        ],
+        "opcf_values": [],
+        "capex_values": [],
+        "undistributed_basic_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.70, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 4.25, 2026, "Q2"),
+        ],
+        "undistributed_diluted_eps_values": [
+            ("2026-01-01", "2026-03-31", 2.69, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 4.23, 2026, "Q2"),
+        ],
+    }
+    if with_distributed:
+        # A filer splitting two-class EPS into components: distributed
+        # 0.80 + undistributed 4.25. The guard must drop the
+        # Undistributed tag, so neither component is stored as total EPS.
+        kwargs["distributed_basic_eps_values"] = [
+            ("2026-04-01", "2026-06-30", 0.80, 2026, "Q2"),
+        ]
+        kwargs["distributed_diluted_eps_values"] = [
+            ("2026-04-01", "2026-06-30", 0.80, 2026, "Q2"),
+        ]
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_undistributed_fills_quarters_plain_tag_lacks() -> None:
+    # Regression (batch 66, NTRS class): the Q2 2026 10-Q tags no plain
+    # EPS fact, so Q2 rendered EPS-less and TTM EPS was a 3-quarter sum.
+    # The Undistributed tag gap-fills Q2; the plain tag still wins Q1
+    # (2.72, not the Undistributed 2.70) on ends it covers.
+    companyfacts = _ntrs_like_companyfacts()
+    basic = {m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")}
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q1].value == 2.72
+    assert basic[q1].source_tag == "EarningsPerShareBasic"
+    assert basic[q2].value == 4.25
+    assert basic[q2].source_tag == "EarningsPerShareBasicUndistributed"
+    assert diluted[q1].value == 2.71
+    assert diluted[q2].value == 4.23
+    assert diluted[q2].source_tag == "EarningsPerShareDilutedUndistributed"
+
+
+def test_eps_undistributed_ignored_when_distributed_tagged() -> None:
+    # Guard (batch 66): a filer tagging BOTH two-class components must
+    # not have the undistributed piece stored as total EPS — that would
+    # understate it (0.80 + 4.25 = 5.05 total, not 4.25). The quarter
+    # stays honestly blank instead.
+    companyfacts = _ntrs_like_companyfacts(with_distributed=True)
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q2 = next(r for r in rows if r.end == dt.date(2026, 6, 30))
+    assert q2.eps_basic is None
+    assert q2.eps_diluted is None
+    # Q1 still resolves from the plain tag.
+    q1 = next(r for r in rows if r.end == dt.date(2026, 3, 31))
+    assert q1.eps_basic == 2.72
+    assert q1.eps_diluted == 2.71
+
+
+def test_ntrs_q2_2026_eps_extracted_end_to_end() -> None:
+    # Full-pipeline form of the NTRS regression: revenue + NI + plain Q1
+    # EPS + Undistributed Q2 EPS in, a complete Q2 row out.
+    companyfacts = _ntrs_like_companyfacts()
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    assert len(rows) == 2
+    q2 = rows[-1]
+    assert q2.end == dt.date(2026, 6, 30)
+    assert q2.eps_basic == 4.25
+    assert q2.eps_diluted == 4.23
+    assert q2.net_income == 792_200_000
+
+
 def test_fcf_suppressed_for_finance_sic() -> None:
     # SoFi (SIC 6199) files both OpCF and CapEx tags, but FCF is not a
     # meaningful metric for lenders — banks/insurers/REITs already render
@@ -1986,6 +2777,150 @@ def test_same_split_seen_by_two_filings_rescales_only_once() -> None:
     assert by_end[dt.date(2026, 3, 31)] == 1.23
 
 
+def test_stock_split_25_to_1_forward_detected_and_rescaled() -> None:
+    # Mirror the BKNG case (batch 51): a 25-for-1 split in 2026-04. The 25x
+    # ratio was missing from _SPLIT_RATIOS, so no event ever fired and the
+    # framed-fact selection mixed pre-split quarters (74.34) with restated
+    # post-split ones (0.40) in a single stored series.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2024-07-01", "2024-09-30", 74.34, 2024, "Q3", filed="2024-10-29"),
+                            fact("2025-01-01", "2025-03-31", 10.07, 2025, "Q1", filed="2025-04-29"),
+                            fact("2025-04-01", "2025-06-30", 27.43, 2025, "Q2", filed="2025-07-29"),
+                            fact("2025-01-01", "2025-06-30", 37.38, 2025, "Q2", filed="2025-07-29"),
+                            fact("2025-01-01", "2025-03-31", 0.40, 2026, "Q1", filed="2026-04-28"),
+                            fact("2025-04-01", "2025-06-30", 1.10, 2026, "Q2", filed="2026-08-04"),
+                            fact("2025-01-01", "2025-06-30", 1.50, 2026, "Q2", filed="2026-08-04"),
+                            fact("2025-07-01", "2025-09-30", 84.41, 2025, "Q3", filed="2025-10-28"),
+                            fact("2026-01-01", "2026-03-31", 1.36, 2026, "Q1", filed="2026-04-28"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Pre-split quarters rescaled to the post-split basis (observed ratio,
+    # so within a couple of cents of the ideal /25).
+    assert abs(by_end[dt.date(2024, 9, 30)] - 74.34 / 25) < 0.05
+    assert abs(by_end[dt.date(2025, 9, 30)] - 84.41 / 25) < 0.05
+    # Restated and native post-split facts are untouched (no double rescale).
+    assert by_end[dt.date(2025, 3, 31)] == 0.40
+    assert by_end[dt.date(2025, 6, 30)] == 1.10
+    assert by_end[dt.date(2026, 3, 31)] == 1.36
+
+
+def test_reverse_split_8_to_1_detected_and_rescaled() -> None:
+    # Mirror GE's 1-for-8 reverse split (2021-07-30): the 8x ratio was missing
+    # from _SPLIT_RATIOS alongside BKNG's 25x (batch 51). The never-restated
+    # Q4-2020 quarter is what distinguishes detection from latest-filed-wins.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2020-10-01", "2020-12-31", 0.50, 2020, "Q4", filed="2021-01-26"),
+                            fact("2021-01-01", "2021-03-31", 0.70, 2021, "Q1", filed="2021-04-27"),
+                            fact("2021-04-01", "2021-06-30", 0.80, 2021, "Q2", filed="2021-07-27"),
+                            fact("2021-01-01", "2021-06-30", 1.50, 2021, "Q2", filed="2021-07-27"),
+                            fact("2021-01-01", "2021-03-31", 5.60, 2021, "Q1", filed="2021-10-26"),
+                            fact("2021-04-01", "2021-06-30", 6.40, 2021, "Q2", filed="2021-10-26"),
+                            fact("2021-01-01", "2021-06-30", 12.00, 2021, "Q2", filed="2021-10-26"),
+                            fact("2021-07-01", "2021-09-30", 7.20, 2021, "Q3", filed="2021-10-26"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # The never-restated pre-split quarter rescales 8x to the latest basis.
+    assert by_end[dt.date(2020, 12, 31)] == 4.00
+    # Restated and native post-split facts sit on the latest basis already.
+    assert by_end[dt.date(2021, 3, 31)] == 5.60
+    assert by_end[dt.date(2021, 6, 30)] == 6.40
+    assert by_end[dt.date(2021, 9, 30)] == 7.20
+
+
+def test_reverse_split_rescales_quarters_despite_ytd_same_end_fact() -> None:
+    # Mirror the HON case (batch 51): a 1-for-2 reverse split restated in the
+    # 2026-07-23 10-Q, which filed BOTH a quarterly (4.90) and a 6M YTD (9.34)
+    # fact for end 2025-06-30. The old by-end collapse let the 9.34 win the
+    # tie, so the neighbor check compared quarterly facts against a YTD
+    # reference and silently skipped genuinely pre-split quarters (Q1 stayed
+    # 2.22 instead of 4.44, Q3 stayed 2.86 instead of 5.72).
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-01-01", "2025-03-31", 2.22, 2025, "Q1", filed="2025-04-29"),
+                            fact("2025-04-01", "2025-06-30", 2.45, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-01-01", "2025-06-30", 4.67, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-04-01", "2025-06-30", 4.90, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-01-01", "2025-06-30", 9.34, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-07-01", "2025-09-30", 2.86, 2025, "Q3", filed="2025-10-23"),
+                            fact("2026-04-01", "2026-06-30", 17.83, 2026, "Q2", filed="2026-07-23"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Every pre-split quarter doubles to the post-split basis — including Q1
+    # and Q3, whose rescales the YTD-poisoned neighbor check used to skip.
+    assert by_end[dt.date(2025, 3, 31)] == 4.44
+    assert by_end[dt.date(2025, 9, 30)] == 5.72
+    # The restating filing's own facts already sit on the latest basis.
+    assert by_end[dt.date(2025, 6, 30)] == 4.90
+    assert by_end[dt.date(2026, 6, 30)] == 17.83
+
+
+def test_reverse_split_rescales_loss_quarter_and_outlier_neighborhood() -> None:
+    # Follow-on to the HON case (batch 51): the absolute-distance neighbor
+    # check could not rescale (a) a loss quarter, where any interpolated
+    # neighborhood (+11.42 here) has the opposite sign of the fact (−0.18),
+    # so rescaling always moved it "farther away"; or (b) a quarter beside
+    # a gain-inflated reference (Q1 1.29 next to the 17.83 quarter), where
+    # the interpolated neighborhood was garbage. Ratio-distance handles
+    # both: magnitude closeness to the post-split references.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2025-04-01", "2025-06-30", 2.45, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-01-01", "2025-06-30", 4.67, 2025, "Q2", filed="2025-07-24"),
+                            fact("2025-04-01", "2025-06-30", 4.90, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-01-01", "2025-06-30", 9.34, 2026, "Q2", filed="2026-07-23"),
+                            fact("2025-10-01", "2025-12-31", -0.18, 2025, "Q4", filed="2026-02-17"),
+                            fact("2026-01-01", "2026-03-31", 1.29, 2026, "Q1", filed="2026-04-23"),
+                            fact("2026-04-01", "2026-06-30", 17.83, 2026, "Q2", filed="2026-07-23"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 12, 31)] == -0.36
+    assert by_end[dt.date(2026, 3, 31)] == 2.58
+    assert by_end[dt.date(2025, 6, 30)] == 4.90
+    assert by_end[dt.date(2026, 6, 30)] == 17.83
+
+
 def test_ifrs_only_filer_raises_unsupported() -> None:
     # Foreign private issuers (e.g. TSM) report under ifrs-full with no
     # us-gaap taxonomy — previously a bare KeyError: 'us-gaap'.
@@ -2070,3 +3005,791 @@ def test_mislabeled_q4_stub_not_doubled_on_bank_composite() -> None:
     assert q4.value == 3_653_000_000 + 1_194_000_000  # summed once, not doubled
     q3 = metrics[dt.date(2024, 9, 30)]
     assert (q3.fp, q3.value) == ("Q3", 3_600_000_000 + 1_048_000_000)
+
+
+# Batch 61: 16-week (112-day) quarters were silently dropped by the 70–100
+# day standalone-quarter window — Kroger files 16-week Q1s (4-4-5 retail
+# calendar), so 3 of its 8 stored quarters were missing entirely.
+
+
+def _kroger_shaped_companyfacts() -> dict:
+    """Kroger-shaped revenue facts: 16-week Q1s, 10-Qs on begin-year fy."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {
+                        "USD": [
+                            # Q1: 111 days (16 weeks) — dropped before batch 61.
+                            fact("2024-02-04", "2024-05-25", 45_269_000_000, 2024, "Q1", filed="2024-06-28"),
+                            fact("2024-05-26", "2024-08-17", 33_912_000_000, 2024, "Q2", filed="2024-09-06"),
+                            fact("2024-08-18", "2024-11-09", 33_634_000_000, 2024, "Q3", filed="2024-12-05"),
+                            # 10-K comparative column uses end-year fy for the same quarter.
+                            fact("2024-11-10", "2025-02-01", 34_308_000_000, 2025, "Q4", filed="2025-03-27"),
+                            fact("2025-02-02", "2025-05-24", 45_118_000_000, 2025, "Q1", filed="2025-06-27"),
+                            fact("2025-05-25", "2025-08-16", 33_940_000_000, 2025, "Q2", filed="2025-09-05"),
+                            fact("2025-08-17", "2025-11-08", 33_859_000_000, 2025, "Q3", filed="2025-12-04"),
+                            fact("2025-11-09", "2026-01-31", 34_725_000_000, 2025, "Q4", filed="2026-03-26"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+def test_sixteen_week_quarters_are_kept_in_income_series() -> None:
+    cf = _kroger_shaped_companyfacts()
+    series = quarterly_income_metric(cf, Metric.REVENUE, "0130", sic="5411")
+    by_end = {m.end: m for m in series}
+    assert dt.date(2024, 5, 25) in by_end
+    assert dt.date(2025, 5, 24) in by_end
+    assert by_end[dt.date(2024, 5, 25)].value == 45_269_000_000
+    assert by_end[dt.date(2024, 5, 25)].fp == "Q1"
+
+
+def test_sixteen_week_quarters_survive_full_extraction_with_monotonic_labels() -> None:
+    cf = _kroger_shaped_companyfacts()
+    rows = extract_recent_quarterly_financials(
+        cf, fiscal_year_end="0130", periods=8, sic="5411"
+    )
+    assert len(rows) == 8
+    labels = [(r.fy, r.fp) for r in sorted(rows, key=lambda r: r.end)]
+    # Every quarter present, labels monotonic, no absurd multi-year walk-back
+    # (the pre-fix pipeline dropped the Q1s and rendered 2025-02-01 "FY2023Q4").
+    assert labels == [
+        (2024, "Q1"), (2024, "Q2"), (2024, "Q3"), (2024, "Q4"),
+        (2025, "Q1"), (2025, "Q2"), (2025, "Q3"), (2025, "Q4"),
+    ]
+    q1 = [r for r in rows if r.fp == "Q1"]
+    assert [r.revenue for r in sorted(q1, key=lambda r: r.end)] == [
+        45_269_000_000, 45_118_000_000,
+    ]
+
+
+def test_sixteen_week_cash_flow_q1_is_kept() -> None:
+    cf = make_companyfacts(
+        revenue_values=[],
+        net_income_values=[],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        opcf_values=[
+            ("2024-02-04", "2024-05-25", 1_900_000_000, 2024, "Q1"),
+            ("2024-02-04", "2024-08-17", 3_100_000_000, 2024, "Q2"),
+        ],
+        capex_values=[],
+    )
+    rows = quarterly_cash_flow_metric(cf, Metric.OPERATING_CASH_FLOW, "0130")
+    by_end = {r.end: r for r in rows}
+    # The 111-day Q1 YTD fact (75–115d q1s window) un-cumulates instead of
+    # being dropped; Q2 = H1 − Q1.
+    assert by_end[dt.date(2024, 5, 25)].value == 1_900_000_000
+    assert by_end[dt.date(2024, 8, 17)].value == 1_200_000_000
+
+
+def test_tag_kept_alive_only_by_sixteen_week_facts_counts_as_fresh() -> None:
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2024-02-04", "2024-05-25", 45_269_000_000, 2024, "Q1"),
+                        ]
+                    }
+                },
+                "SalesRevenueNet": {
+                    "units": {
+                        "USD": [
+                            fact("2024-05-26", "2024-08-17", 33_912_000_000, 2024, "Q2"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    # The first-chain tag's only quarterly fact is 111 days — before batch 61
+    # the 70–100d staleness window judged it abandoned and the second tag won.
+    source_tag, _ = concept_facts(cf, Metric.REVENUE)
+    assert source_tag == "Revenues"
+
+
+def _abnb_like_companyfacts(*, with_discontinued_ops: bool = False) -> dict:
+    """ABNB-shaped facts: quarterly EPS tagged ONLY under the
+    continuing-operations per-share tag — the generic tag carries no
+    facts. FY2025 annual + 9M facts exercise the Q4 derivation through
+    the continuing-ops winner: annual 4.00 - 9M 3.00 with NI 2.4B/1.8B
+    implies Q4 basic EPS of exactly 1.00."""
+    kwargs: dict = {
+        "revenue_values": [
+            ("2025-01-01", "2025-09-30", 8_000_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 11_000_000_000, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 2_500_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_800_000_000, 2026, "Q2"),
+        ],
+        "net_income_values": [
+            ("2025-01-01", "2025-09-30", 1_800_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 2_400_000_000, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 160_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 816_000_000, 2026, "Q2"),
+        ],
+        "basic_eps_values": [],
+        "diluted_eps_values": [],
+        "cont_ops_basic_eps_values": [
+            ("2025-01-01", "2025-09-30", 3.00, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 4.00, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 0.27, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1.38, 2026, "Q2"),
+        ],
+        "cont_ops_diluted_eps_values": [
+            ("2025-01-01", "2025-09-30", 2.97, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 3.95, 2025, "FY"),
+            ("2026-01-01", "2026-03-31", 0.26, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 1.37, 2026, "Q2"),
+        ],
+        "opcf_values": [],
+        "capex_values": [],
+    }
+    if with_discontinued_ops:
+        # A filer whose continuing-ops EPS differs from total EPS: the
+        # continuing-ops tag must be dropped, not stored as total EPS.
+        kwargs["discontinued_ops_values"] = [
+            ("2026-04-01", "2026-06-30", 50_000_000, 2026, "Q2"),
+        ]
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_continuing_ops_fills_quarters_when_no_discontinued_ops() -> None:
+    # Regression (batch 68, ABNB class): the generic EPS tag carries no
+    # facts, so EPS quarters were honestly blank and TTM EPS fell back to
+    # the sales path. The continuing-operations per-share tag fills the
+    # quarters, and the Q4 derivation works through it (annual 4.00 with
+    # implied 600M shares -> Q4 basic EPS exactly 1.00).
+    companyfacts = _abnb_like_companyfacts()
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2, q4 = dt.date(2026, 3, 31), dt.date(2026, 6, 30), dt.date(2025, 12, 31)
+    assert basic[q1].value == 0.27
+    assert basic[q1].source_tag == "IncomeLossFromContinuingOperationsPerBasicShare"
+    assert basic[q2].value == 1.38
+    assert basic[q4].value == 1.00
+    diluted = {
+        m.end: m
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert diluted[q1].value == 0.26
+    assert diluted[q2].value == 1.37
+    assert diluted[q2].source_tag == "IncomeLossFromContinuingOperationsPerDilutedShare"
+    assert diluted[q4].value == pytest.approx(0.9801)
+
+
+def test_eps_continuing_ops_dropped_when_discontinued_ops_exist() -> None:
+    # Guard (batch 68): continuing-ops EPS != total EPS when the filer
+    # reports discontinued-operations income. The tag is dropped from the
+    # chain so a continuing-ops number is never stored as total EPS — the
+    # quarters stay honestly blank instead.
+    companyfacts = _abnb_like_companyfacts(with_discontinued_ops=True)
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q2 = next(r for r in rows if r.end == dt.date(2026, 6, 30))
+    assert q2.eps_basic is None
+    assert q2.eps_diluted is None
+
+
+def _et_like_companyfacts() -> dict:
+    """ET/MPLX-shaped facts: EPS tagged ONLY under the MLP per-unit
+    tags — partnerships report income per outstanding unit, not per
+    share, and tag no generic EPS facts at all."""
+    return make_companyfacts(
+        revenue_values=[
+            ("2026-01-01", "2026-03-31", 19_000_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 21_000_000_000, 2026, "Q2"),
+        ],
+        net_income_values=[
+            ("2026-01-01", "2026-03-31", 1_254_000_000, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 2_088_000_000, 2026, "Q2"),
+        ],
+        basic_eps_values=[],
+        diluted_eps_values=[],
+        per_unit_basic_eps_values=[
+            ("2026-01-01", "2026-03-31", 0.35, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0.59, 2026, "Q2"),
+        ],
+        per_unit_diluted_eps_values=[
+            ("2026-01-01", "2026-03-31", 0.35, 2026, "Q1"),
+            ("2026-04-01", "2026-06-30", 0.59, 2026, "Q2"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+
+
+def test_eps_per_unit_tags_fill_mlp_eps() -> None:
+    # Regression (batch 68, ET/MPLX class): partnership filers tag income
+    # per outstanding unit, not per share. The per-unit tags fill the EPS
+    # quarters with the right source attribution.
+    companyfacts = _et_like_companyfacts()
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    diluted = {
+        m.end: m
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q1].value == 0.35
+    assert basic[q2].value == 0.59
+    assert (
+        basic[q2].source_tag
+        == "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"
+    )
+    assert diluted[q1].value == 0.35
+    assert diluted[q2].value == 0.59
+    assert (
+        diluted[q2].source_tag
+        == "NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted"
+    )
+
+
+def test_eps_plain_tag_still_wins_over_per_unit_and_cont_ops() -> None:
+    # Chain order (batch 68): when a filer tags the generic EPS tag, it
+    # wins every end it covers — the per-unit and continuing-ops tags are
+    # inert fallbacks, never overrides.
+    cf = _et_like_companyfacts()
+    us_gaap = cf["facts"]["us-gaap"]
+    us_gaap["EarningsPerShareBasic"] = units(
+        "USD/shares", [("2026-04-01", "2026-06-30", 0.61, 2026, "Q2")]
+    )
+    basic = {
+        m.end: m for m in quarterly_income_metric(cf, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2 = dt.date(2026, 3, 31), dt.date(2026, 6, 30)
+    assert basic[q2].value == 0.61
+    assert basic[q2].source_tag == "EarningsPerShareBasic"
+    assert basic[q1].value == 0.35
+    assert (
+        basic[q1].source_tag
+        == "NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax"
+    )
+
+
+def test_is_bank_insurer_sic_boundaries() -> None:
+    from tickerlens.data.xbrl import _is_bank_insurer_sic
+
+    # Banks / lenders: 6000-6199
+    assert _is_bank_insurer_sic(6021)      # national commercial banks (JPM)
+    assert _is_bank_insurer_sic("6199")    # finance services (AXP)
+    assert _is_bank_insurer_sic(6000)
+    assert _is_bank_insurer_sic(6199)
+    assert not _is_bank_insurer_sic(5999)
+    # Brokers/dealers/exchanges/advisors are fee businesses — not guarded
+    assert not _is_bank_insurer_sic(6200)
+    assert not _is_bank_insurer_sic(6211)  # (GS, MS, BLK)
+    assert not _is_bank_insurer_sic(6299)
+    # Insurers: 6300-6499
+    assert _is_bank_insurer_sic(6331)      # P&C (PGR, CB)
+    assert _is_bank_insurer_sic(6324)      # health (UNH)
+    assert _is_bank_insurer_sic(6300)
+    assert _is_bank_insurer_sic(6499)
+    assert not _is_bank_insurer_sic(6500)
+    # Holding companies / REITs live elsewhere
+    assert not _is_bank_insurer_sic(6798)
+    assert not _is_bank_insurer_sic(None)
+    assert not _is_bank_insurer_sic("n/a")
+
+
+def _gd_like_companyfacts(**overrides) -> dict:
+    """General-Dynamics-shaped facts: EPS tagged only in the 10-K (annual),
+    while 10-Qs tag quarterly net income and weighted-average shares."""
+    ni = [
+        ("2025-01-01", "2025-03-31", 990_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 1_010_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 1_060_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 3_060_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 4_200_000_000, 2025, "FY"),
+    ]
+    diluted_shares = [
+        ("2025-01-01", "2025-03-31", 270_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 270_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 273_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 271_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 272_000_000, 2025, "FY"),
+    ]
+    basic_shares = [
+        ("2025-01-01", "2025-03-31", 268_000_000, 2025, "Q1"),
+        ("2025-04-01", "2025-06-30", 268_000_000, 2025, "Q2"),
+        ("2025-07-01", "2025-09-30", 271_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-09-30", 269_000_000, 2025, "Q3"),
+        ("2025-01-01", "2025-12-31", 270_000_000, 2025, "FY"),
+    ]
+    kwargs = dict(
+        revenue_values=[
+            ("2025-01-01", "2025-03-31", 13_480_000_000, 2025, "Q1"),
+            ("2025-04-01", "2025-06-30", 13_040_000_000, 2025, "Q2"),
+            ("2025-07-01", "2025-09-30", 12_910_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 53_810_000_000, 2025, "FY"),
+        ],
+        net_income_values=ni,
+        basic_eps_values=[("2025-01-01", "2025-12-31", 15.90, 2025, "FY")],
+        diluted_eps_values=[("2025-01-01", "2025-12-31", 15.45, 2025, "FY")],
+        opcf_values=[],
+        capex_values=[],
+        diluted_shares_values=diluted_shares,
+        basic_shares_values=basic_shares,
+    )
+    kwargs.update(overrides)
+    return make_companyfacts(**kwargs)
+
+
+def test_eps_derived_from_ni_over_shares_when_no_quarterly_eps_facts() -> None:
+    # Regression (batch 78): General Dynamics tags EarningsPerShareDiluted
+    # only in the 10-K (no quarterly fact since 2019), so every quarter was
+    # EPS-less. Quarterly NI / quarterly weighted-average shares derives
+    # the missing quarters; Q4 uses the share-month residual since the 10-K
+    # tags only the annual share average.
+    companyfacts = _gd_like_companyfacts()
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    basic = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }
+    q1, q2, q3, q4 = (dt.date(2025, m, d) for m, d in [(3, 31), (6, 30), (9, 30), (12, 31)])
+    assert diluted[q1].value == round(990_000_000 / 270_000_000, 4) == 3.6667
+    assert diluted[q2].value == round(1_010_000_000 / 270_000_000, 4) == 3.7407
+    assert diluted[q3].value == round(1_060_000_000 / 273_000_000, 4) == 3.8828
+    # Q4 NI 1.14B over residual shares (12*272M − 9*271M)/3 = 275M
+    assert diluted[q4].value == round(1_140_000_000 / 275_000_000, 4) == 4.1455
+    assert diluted[q4].source_tag == (
+        "Derived:WeightedAverageNumberOfDilutedSharesOutstanding/NetIncomeLoss"
+    )
+    assert basic[q1].value == round(990_000_000 / 268_000_000, 4) == 3.694
+    assert basic[q4].value == round(1_140_000_000 / 273_000_000, 4) == 4.1758
+    # Derived FY2025 quarters reconcile to the filed annual EPS (4dp rounding)
+    assert abs(sum(diluted[e].value for e in (q1, q2, q3, q4)) - 15.45) < 0.02
+
+
+def test_eps_ni_shares_derivation_never_overrides_filed_eps() -> None:
+    # A filed quarterly EPS fact always wins; the derivation only fills ends
+    # the chain lacks.
+    companyfacts = _gd_like_companyfacts(
+        diluted_eps_values=[("2025-01-01", "2025-03-31", 3.70, 2025, "Q1")],
+    )
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    q1 = dt.date(2025, 3, 31)
+    q2 = dt.date(2025, 6, 30)
+    assert diluted[q1].value == 3.70
+    assert diluted[q1].source_tag == "EarningsPerShareDiluted"
+    assert diluted[q2].value == 3.7407
+    assert diluted[q2].source_tag.startswith("Derived:")
+
+
+def test_eps_ni_shares_derivation_skipped_for_two_class_filers() -> None:
+    # A filer tagging distributed-EPS components splits total EPS into
+    # pieces; NI/shares does not equal reported EPS, so the derivation
+    # stays off and the quarter stays honestly blank.
+    companyfacts = _gd_like_companyfacts(
+        diluted_eps_values=[("2025-01-01", "2025-03-31", 4.23, 2025, "Q1")],
+        distributed_diluted_eps_values=[
+            ("2025-01-01", "2025-03-31", 1.10, 2025, "Q1"),
+        ],
+    )
+    diluted = {
+        m.end: m for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }
+    assert diluted[dt.date(2025, 3, 31)].value == 4.23  # filed fact kept
+    assert all(not m.source_tag.startswith("Derived:") for m in diluted.values())
+    assert dt.date(2025, 6, 30) not in diluted
+
+
+def test_eps_ni_shares_derivation_absent_without_share_facts() -> None:
+    # No weighted-average share facts (Visa/Berkshire shape): nothing to
+    # derive from, quarters stay honestly blank instead of fabricated.
+    companyfacts = _gd_like_companyfacts(
+        diluted_shares_values=None, basic_shares_values=None
+    )
+    assert quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231") == []
+    assert quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231") == []
+
+
+def _dupont_reverse_split_companyfacts() -> dict:
+    """Mirror the live DD case (batch 80): a 1-for-3 reverse split restated in
+    the 2026-08-04 10-Q (diluted shares 419.7M -> 139.9M for 2025Q2). The
+    pre-split quarters' EPS values overlap the post-split range (2026Q1's
+    0.39 sits nearer post-split 0.42 than rescaled 1.17 sits to 1.05), so the
+    EPS-neighborhood heuristic cannot classify them — the filings' own share
+    counts must decide, or the stored series mixes bases.
+    """
+    eps = [
+        fact("2025-10-01", "2025-12-31", -0.30, 2025, "Q4", filed="2026-02-17"),
+        fact("2026-01-01", "2026-03-31", 0.39, 2026, "Q1", filed="2026-05-05"),
+        fact("2025-04-01", "2025-06-30", 0.14, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 0.42, 2025, "Q2", filed="2026-08-04"),
+        fact("2025-01-01", "2025-06-30", -1.27, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-01-01", "2025-06-30", -3.79, 2025, "Q2", filed="2026-08-04"),
+        fact("2026-04-01", "2026-06-30", 1.05, 2026, "Q2", filed="2026-08-04"),
+    ]
+    shares = [
+        fact("2025-10-01", "2025-12-31", 419_200_000, 2025, "Q4", filed="2026-02-17"),
+        fact("2026-01-01", "2026-03-31", 412_800_000, 2026, "Q1", filed="2026-05-05"),
+        fact("2025-04-01", "2025-06-30", 419_700_000, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 139_900_000, 2025, "Q2", filed="2026-08-04"),
+        fact("2026-04-01", "2026-06-30", 137_200_000, 2026, "Q2", filed="2026-08-04"),
+    ]
+    return {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+
+
+def test_reverse_split_share_basis_rescales_overlapping_quarters() -> None:
+    """Batch 80: pre-split filings are identified by their old-basis share
+    counts and rescaled even when their EPS values overlap the post-split
+    range — the whole series lands on the latest basis."""
+    series = quarterly_income_metric(
+        _dupont_reverse_split_companyfacts(), Metric.EPS_DILUTED, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert abs(by_end[dt.date(2025, 12, 31)] - (-0.30 * 3)) < 1e-9
+    assert abs(by_end[dt.date(2026, 3, 31)] - (0.39 * 3)) < 1e-9
+    # Restated/new-basis facts are untouched.
+    assert by_end[dt.date(2025, 6, 30)] == 0.42
+    assert by_end[dt.date(2026, 6, 30)] == 1.05
+
+
+def test_reverse_split_post_split_filing_before_restatement_untouched() -> None:
+    """Batch 80: a filing after the split effective date but before any
+    restating filing reports new-basis share counts, so its facts are
+    positively identified as post-split and left alone (the NFLX Q1-2026
+    shape, decided by share counts rather than the neighborhood heuristic).
+    """
+    eps = [
+        fact("2025-04-01", "2025-06-30", 7.19, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-04-01", "2025-06-30", 0.72, 2025, "Q2", filed="2026-07-17"),
+        fact("2025-01-01", "2025-06-30", 13.8, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-01-01", "2025-06-30", 1.38, 2025, "Q2", filed="2026-07-17"),
+        fact("2026-01-01", "2026-03-31", 1.23, 2026, "Q1", filed="2026-04-17"),
+    ]
+    shares = [
+        fact("2025-04-01", "2025-06-30", 450_000_000, 2025, "Q2", filed="2025-07-18"),
+        fact("2025-04-01", "2025-06-30", 45_000_000, 2025, "Q2", filed="2026-07-17"),
+        fact("2026-01-01", "2026-03-31", 44_000_000, 2026, "Q1", filed="2026-04-17"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 6, 30)] == 0.72
+    assert by_end[dt.date(2026, 3, 31)] == 1.23
+
+
+def test_split_fallback_reuses_primary_chain_events() -> None:
+    """Batch 80: the continuing-ops annual-fallback list must reuse the
+    primary chain's split events, never detect its own. DD's 2026 10-K halved
+    continuing-ops EPS when Qnity moved to discontinued operations — the
+    independent detection read that 0.50x reclassification as a 2:1 split and
+    would have rescaled the fallback's annual facts."""
+    from unittest.mock import patch
+
+    import tickerlens.data.xbrl as xbrl_mod
+
+    eps = [
+        fact("2025-04-01", "2025-06-30", 0.14, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-04-01", "2025-06-30", 0.42, 2025, "Q2", filed="2026-08-04"),
+        fact("2025-01-01", "2025-06-30", -1.27, 2025, "Q2", filed="2025-08-05"),
+        fact("2025-01-01", "2025-06-30", -3.79, 2025, "Q2", filed="2026-08-04"),
+    ]
+    cont_ops = [
+        # Discontinued-ops reclassification (not a split): 2026 10-K halves
+        # the continuing-ops annuals. Two corroborating groups, so the old
+        # independent detection fabricated a 0.50x "split event" here.
+        fact("2024-01-01", "2024-12-31", 2.00, 2024, "FY", filed="2025-02-14"),
+        fact("2024-01-01", "2024-12-31", 1.00, 2024, "FY", filed="2026-02-17"),
+        fact("2023-01-01", "2023-12-31", 1.80, 2023, "FY", filed="2024-02-15"),
+        fact("2023-01-01", "2023-12-31", 0.90, 2023, "FY", filed="2026-02-17"),
+        fact("2025-01-01", "2025-12-31", 2.50, 2025, "FY", filed="2026-02-17"),
+    ]
+    discontinued = [
+        fact("2025-01-01", "2025-12-31", 100_000_000, 2025, "FY", filed="2026-02-17"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "IncomeLossFromContinuingOperationsPerDilutedShare": {
+                    "units": {"USD/shares": cont_ops}
+                },
+                "IncomeLossFromDiscontinuedOperations": {"units": {"USD": discontinued}},
+            }
+        }
+    }
+    real_adjust = xbrl_mod._split_adjust_facts
+    calls: list[dict] = []
+
+    def spy(facts, *, events=None, share_facts=None):
+        calls.append({"n": len(facts), "scales": sorted(e.scale for e in events)})
+        return real_adjust(facts, events=events, share_facts=share_facts)
+
+    with patch.object(xbrl_mod, "_split_adjust_facts", side_effect=spy):
+        quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    assert len(calls) == 2
+    primary_scales, fallback_scales = calls[0]["scales"], calls[1]["scales"]
+    assert len(primary_scales) == 1 and abs(primary_scales[0] - 3.0) < 1e-9
+    # The fallback reuses the primary chain's 3.0x event; the fabricated
+    # 0.50x discontinued-ops "event" is gone.
+    assert len(fallback_scales) == 1 and abs(fallback_scales[0] - 3.0) < 1e-9
+
+
+def test_forward_split_share_restatement_in_later_filing() -> None:
+    """Batch 80 (live NOW case): a 5-for-1 split whose EPS comparatives were
+    restated in the 2026-01-29 10-K but whose share-count comparatives were
+    only restated in the 2026-07-23 10-Q. The basis classification matches
+    the share restatement by inverse-ratio scale within the date window, not
+    by same-filing date, so pre-split filings are still positively
+    identified as old-basis and rescaled."""
+    eps = [
+        fact("2024-07-01", "2024-09-30", 2.07, 2024, "Q3", filed="2024-10-24"),
+        fact("2024-07-01", "2024-09-30", 2.07, 2024, "Q3", filed="2025-10-30"),
+        fact("2023-01-01", "2023-12-31", 8.42, 2023, "FY", filed="2025-01-30"),
+        fact("2023-01-01", "2023-12-31", 1.68, 2023, "FY", filed="2026-01-29"),
+        fact("2024-01-01", "2024-12-31", 6.84, 2024, "FY", filed="2025-01-30"),
+        fact("2024-01-01", "2024-12-31", 1.37, 2024, "FY", filed="2026-01-29"),
+        fact("2026-01-01", "2026-03-31", 0.45, 2026, "Q1", filed="2026-04-23"),
+    ]
+    shares = [
+        fact("2024-07-01", "2024-09-30", 209_000_000, 2024, "Q3", filed="2024-10-24"),
+        fact("2025-07-01", "2025-09-30", 209_505_000, 2025, "Q3", filed="2025-10-30"),
+        # Share restatement lands one filing later than the EPS restatement.
+        fact("2025-01-01", "2025-06-30", 209_343_000, 2025, "Q2", filed="2025-07-24"),
+        fact("2025-01-01", "2025-06-30", 1_046_712_000, 2025, "Q2", filed="2026-07-23"),
+        fact("2026-01-01", "2026-03-31", 1_039_884_000, 2026, "Q1", filed="2026-04-23"),
+    ]
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    by_end = {item.end: item.value for item in series}
+    # Pre-split quarters rescaled to the post-split basis via the share-basis
+    # classification, not left on the old basis (within 1% of the exact /5 —
+    # the rescale uses the observed median restatement ratio).
+    assert abs(by_end[dt.date(2024, 9, 30)] - 2.07 / 5) / (2.07 / 5) < 0.01
+    assert by_end[dt.date(2024, 9, 30)] < 1.0  # not the old-basis 2.07
+    # Post-split facts untouched.
+    assert by_end[dt.date(2026, 3, 31)] == 0.45
+
+
+def _share_fact(start: str, end: str, val: float, filed: str) -> XbrlFact:
+    return XbrlFact(
+        start=dt.date.fromisoformat(start),
+        end=dt.date.fromisoformat(end),
+        val=val,
+        filed=dt.date.fromisoformat(filed),
+        form="10-K" if end.endswith("06-30") else "10-Q",
+    )
+
+
+def test_forward_split_share_restatement_detected() -> None:
+    """Batch 84 (live KLAC case): a 10-for-1 split restates comparative share
+    counts UP by the split ratio (133.75M -> 1,337.5M). The old check only
+    accepted the reverse-split direction (1/r), so forward-split share
+    restatements were silently missed and the filing share-basis map stayed
+    empty."""
+    restatements = _split_share_restatements(
+        [
+            _share_fact("2024-07-01", "2025-06-30", 133_750_000, "2025-08-08"),
+            _share_fact("2024-07-01", "2025-06-30", 1_337_502_000, "2026-08-06"),
+        ]
+    )
+    assert len(restatements) == 1
+    filed, scale, old, new = restatements[0]
+    assert filed == dt.date(2026, 8, 6)
+    assert abs(scale - 10.0) / 10.0 < 0.03
+    assert old < new  # forward split: shares multiply
+
+
+def _klac_forward_split_companyfacts() -> dict:
+    """Mirror the live KLAC 10:1 split (2026-08-06): the 10-K restates only
+    ANNUAL comparatives in XBRL, so there is no quarterly post-split
+    reference for the neighborhood heuristic — the quarterly facts can only
+    be classified through the filing share basis."""
+    eps = [
+        # Annual comparatives restated 10x in the 10-K -> the split event
+        # (two corroborating groups, as the detector requires).
+        fact("2023-07-01", "2024-06-30", 28.00, 2024, "FY", filed="2024-08-08"),
+        fact("2023-07-01", "2024-06-30", 2.80, 2024, "FY", filed="2026-08-06"),
+        fact("2024-07-01", "2025-06-30", 33.50, 2025, "FY", filed="2025-08-08"),
+        fact("2024-07-01", "2025-06-30", 3.35, 2025, "FY", filed="2026-08-06"),
+        fact("2025-07-01", "2026-06-30", 3.66, 2026, "FY", filed="2026-08-06"),
+        # Quarterly facts from pre-split 10-Qs (old basis); the 10-K tags no
+        # quarterly EPS comparatives.
+        fact("2025-07-01", "2025-09-30", 8.47, 2026, "Q1", filed="2025-10-31"),
+        fact("2025-10-01", "2025-12-31", 8.68, 2026, "Q2", filed="2026-01-30"),
+        fact("2026-01-01", "2026-03-31", 9.12, 2026, "Q3", filed="2026-04-30"),
+    ]
+    shares = [
+        fact("2025-07-01", "2025-09-30", 132_381_000, 2026, "Q1", filed="2025-10-31"),
+        fact("2025-10-01", "2025-12-31", 132_009_000, 2026, "Q2", filed="2026-01-30"),
+        fact("2026-01-01", "2026-03-31", 131_750_000, 2026, "Q3", filed="2026-04-30"),
+        fact("2024-07-01", "2025-06-30", 133_750_000, 2025, "FY", filed="2025-08-08"),
+        fact("2024-07-01", "2025-06-30", 1_337_502_000, 2025, "FY", filed="2026-08-06"),
+        fact("2025-07-01", "2026-06-30", 1_319_633_000, 2026, "FY", filed="2026-08-06"),
+    ]
+    return {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {"units": {"USD/shares": eps}},
+                "WeightedAverageNumberOfDilutedSharesOutstanding": {
+                    "units": {"shares": shares}
+                },
+            }
+        }
+    }
+
+
+def test_forward_split_quarterly_rescaled_via_share_basis() -> None:
+    """Batch 84: with no quarterly post-split XBRL reference, the
+    neighborhood heuristic stays conservative — but the filing share basis
+    (now fed by forward-split share restatements) positively identifies the
+    pre-split 10-Q filings, so the whole quarterly series lands on the
+    post-split basis instead of mixing 10x-off quarters."""
+    series = quarterly_income_metric(
+        _klac_forward_split_companyfacts(), Metric.EPS_DILUTED, "0630"
+    )
+    by_end = {item.end: item.value for item in series}
+    for end, old_val in [
+        (dt.date(2025, 9, 30), 8.47),
+        (dt.date(2025, 12, 31), 8.68),
+        (dt.date(2026, 3, 31), 9.12),
+    ]:
+        assert abs(by_end[end] - old_val / 10) / (old_val / 10) < 0.05
+        assert by_end[end] < 1.5  # not the old-basis ~9
+    # No quarter left on the old (~10x) basis.
+    assert all(v < 1.5 for v in by_end.values())
+
+
+def _oxy_discontinued_facts(interim_val: float) -> dict:
+    """Mirror the OXY/OxyChem case: the 10-Q tags 9M discontinued-ops
+    income 0, the 10-K tags FY nonzero — the reclassification happened
+    between the filings."""
+    return {
+        "IncomeLossFromDiscontinuedOperationsNetOfTax": {
+            "units": {
+                "USD": [
+                    fact(
+                        "2025-01-01", "2025-09-30", interim_val, 2025, "Q3",
+                        filed="2025-11-10",
+                    ),
+                    fact(
+                        "2025-01-01", "2025-12-31", 262_000_000, 2025, "FY",
+                        filed="2026-02-18",
+                    ),
+                ]
+            }
+        }
+    }
+
+
+def _oxy_revenue_facts() -> dict:
+    return {
+        "Revenues": {
+            "units": {
+                "USD": [
+                    fact("2025-01-01", "2025-03-31", 6_600_000_000, 2025, "Q1"),
+                    fact("2025-04-01", "2025-06-30", 6_617_000_000, 2025, "Q2"),
+                    fact("2025-07-01", "2025-09-30", 6_624_000_000, 2025, "Q3"),
+                    fact(
+                        "2025-01-01", "2025-09-30", 19_841_000_000, 2025, "Q3",
+                        filed="2025-11-10",
+                    ),
+                    fact(
+                        "2025-01-01", "2025-12-31", 21_593_000_000, 2025, "FY",
+                        filed="2026-02-18",
+                    ),
+                ]
+            }
+        }
+    }
+
+
+def test_discontinued_basis_break_detected() -> None:
+    """Batch 85 (live OXY case): 9M discontinued-ops income tagged 0 in the
+    10-Q but nonzero in the 10-K for the same fiscal year — the FY start is
+    a basis break."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(0)}}
+    assert _discontinued_basis_break_starts(companyfacts) == {dt.date(2025, 1, 1)}
+
+
+def test_discontinued_basis_break_ignores_ongoing_discontinued_ops() -> None:
+    """Filers with ongoing discontinued ops tag nonzero interims — no
+    reclassification happened between the filings, so no break."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(50_000_000)}}
+    assert _discontinued_basis_break_starts(companyfacts) == set()
+
+
+def test_discontinued_basis_break_skips_fabricated_q4() -> None:
+    """End-to-end batch-85 regression: with the OxyChem reclassification,
+    Q4 revenue derivation (FY − 9M = $1.75B vs ~$5.4B real) is skipped — a
+    missing Q4 is honest. Without the reclassification the derivation
+    still fires (control)."""
+    broken = {"facts": {"us-gaap": {**_oxy_revenue_facts(), **_oxy_discontinued_facts(0)}}}
+    series = quarterly_income_metric(broken, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert dt.date(2025, 12, 31) not in by_end
+    # The standalone quarters are untouched.
+    assert by_end[dt.date(2025, 9, 30)] == 6_624_000_000
+
+    clean = {"facts": {"us-gaap": _oxy_revenue_facts()}}
+    series = quarterly_income_metric(clean, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2025, 12, 31)] == pytest.approx(1_752_000_000)
+
+
+def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
+    """The cash-flow un-cumulation (year − 9M) has the same exposure and
+    the same guard."""
+    us_gaap = {
+        "NetCashProvidedByUsedInOperatingActivities": {
+            "units": {
+                "USD": [
+                    fact("2025-01-01", "2025-09-30", 9_000_000_000, 2025, "Q3",
+                         filed="2025-11-10"),
+                    fact("2025-01-01", "2025-12-31", 10_000_000_000, 2025, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        },
+        **_oxy_discontinued_facts(0),
+    }
+    series = quarterly_cash_flow_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
+    )
+    assert all(item.fp != "Q4" for item in series)

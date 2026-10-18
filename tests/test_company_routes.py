@@ -550,10 +550,13 @@ def test_compare_yearly_passes_mode_and_years(client: TestClient, monkeypatch) -
         bs.total_liabilities = 250_000.0
         bs.total_equity = 100_000.0
         bs.cash_and_equivalents = 50_000.0
+        bs.redeemable_nci = None  # no mezzanine: the row stays hidden
+        bs.temporary_equity = None  # no temp equity: the row stays hidden
         getattr(mock_ctx, side).quarters_count = 4  # full fiscal years (batch 39)
     for field in ("revenue", "net_income", "eps_basic", "eps_diluted",
                   "free_cash_flow", "total_assets", "total_liabilities",
-                  "total_equity", "cash_and_equivalents"):
+                  "total_equity", "cash_and_equivalents", "redeemable_nci",
+                  "temporary_equity"):
         getattr(mock_ctx.deltas, field).absolute = 1_000.0
         getattr(mock_ctx.deltas, field).pct = 5.0
     mock_svc.get_compare.return_value = mock_ctx
@@ -735,6 +738,37 @@ def test_company_vs_refreshes_filings_for_both_tickers(
         c.args[0] for c in mock_svc.refresh_financials_if_stale.call_args_list
     ]
     assert refreshed == ["AAPL", "MSFT"]
+
+
+def test_company_vs_renders_pending_filing_note(client: TestClient, monkeypatch) -> None:
+    """The vs page renders the amber honesty note per side (batch 57)."""
+    from tickerlens import routes
+
+    ctx = _vs_ctx()
+    ctx.a.pending_filing_note = "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet"
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = ctx
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in resp.text or "aren't in EDGAR's data feed yet" in resp.text
+    assert ">AAPL:</span>" in resp.text
+    assert "amber-950/40" in resp.text
+
+
+def test_company_vs_omits_note_when_none(client: TestClient, monkeypatch) -> None:
+    """No note block when neither side has anything pending (batch 57)."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_company_vs.return_value = _vs_ctx()  # pending_filing_note=None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/vs/MSFT")
+    assert resp.status_code == 200
+    assert "data feed yet" not in resp.text
+    assert "amber-950/40" not in resp.text
 
 
 def test_earnings_calendar_route(client: TestClient, monkeypatch) -> None:
@@ -1344,3 +1378,35 @@ def test_overview_renders_dcf_fallback_for_finance_companies(client: TestClient,
     assert "Valuation Sensitivity & Intrinsic DCF Suite" in resp.text
     assert "DCF Intrinsic Model Context" in resp.text
     assert "financial institutions" in resp.text
+
+
+# ── pending-filing note on the detail page (batch 55) ─────────────────────────
+
+def test_detail_data_renders_pending_filing_note(client: TestClient, monkeypatch) -> None:
+    """The detail partial renders the same amber honesty note as the overview."""
+    from tickerlens import routes
+
+    ctx = _detail_ctx()
+    ctx.pending_filing_note = "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet"
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = ctx
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data")
+    assert resp.status_code == 200
+    assert "aren&#39;t in EDGAR&#39;s data feed yet" in resp.text or "aren't in EDGAR's data feed yet" in resp.text
+    assert "amber-950/40" in resp.text
+
+
+def test_detail_data_omits_note_when_none(client: TestClient, monkeypatch) -> None:
+    """No note block when the company has nothing pending."""
+    from tickerlens import routes
+
+    mock_svc = MagicMock()
+    mock_svc.get_detail.return_value = _detail_ctx()  # pending_filing_note=None
+    monkeypatch.setattr(routes.company, "_svc", mock_svc)
+
+    resp = client.get("/company/AAPL/detail/data")
+    assert resp.status_code == 200
+    assert "data feed yet" not in resp.text
+    assert "amber-950/40" not in resp.text

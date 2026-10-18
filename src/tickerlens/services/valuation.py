@@ -17,6 +17,17 @@ sales on 3.8% revenue growth while loss-making). When the TTM net margin is
 not positive there is nothing to anchor the multiple to, so the model
 returns Watch/unavailable instead of a fabricated target.
 
+Bank/insurer path ("book", batch 71): banks, lenders, and insurers are
+balance-sheet businesses the industry values on price-to-book, not EPS
+growth. The fair P/B is the Gordon justified multiple for a bank —
+fair P/B = (ROE - g) / (CoE - g) — where the cost of equity is the 10-year
+Treasury plus a bank equity-risk premium, floored at 8%. The fair P/B is
+clamped to 0.5-2.5x (the observed through-cycle trading range for US
+banks/insurers); a binding clamp names itself and caps confidence at
+Medium. A bank not earning on its equity (ROE <= 0) cannot be priced on
+book value, so it returns Watch/unavailable — the same honesty as the
+sales path's non-positive-margin guard.
+
 Signal thresholds are on implied upside = (target - price) / price.
 """
 
@@ -38,6 +49,41 @@ _MAX_PE = 40.0
 # lower bound: the identity P/S = P/E x margin can legitimately be small for
 # thin-margin businesses, and a floor would inflate the target.
 _MAX_PS = 10.0
+
+# Book-value path for banks/insurers (batch 71): justified P/B from the
+# Gordon formula fair P/B = (ROE - g) / (CoE - g). The cost of equity is the
+# 10-year Treasury plus a levered-bank equity-risk premium, floored at 8%
+# (a bank's cost of equity never prices below this in practice); g is the
+# long-run nominal growth a bank can sustain. The fair P/B is clamped to
+# the observed through-cycle trading range for US banks/insurers — roughly
+# 0.5x for distressed books, 2.5x for the best compounders.
+_PB_GROWTH_PCT = 3.0
+_BANK_ERP_PCT = 5.0
+_COE_FLOOR_PCT = 8.0
+_MIN_PB = 0.5
+_MAX_PB = 2.5
+
+# FFO path for equity REITs (batch 72): justified P/FFO from the Gordon
+# formula fair P/FFO = (1 + g) / (CoE - g) — the dividend-discount model on a
+# REIT's distributable cash flow. REITs pay out most of FFO as dividends, so
+# the no-retention Gordon is close; the card copy names the simplification.
+# Cost of equity is the 10-year Treasury plus a REIT equity-risk premium
+# (bond-like cash flows earn a smaller premium than levered banks), floored
+# at 8%. The perpetual g is capped at the 3% long-run rate — a TTM print is
+# cyclical, not perpetual, so observed spikes are not capitalized (batch 72
+# recalibration: O's 7.5% TTM print implied 71.7x). The 8x/28x clamp is a
+# defensive guardrail for rate extremes, not the valuation engine.
+_FFO_GROWTH_PCT = 3.0
+_REIT_ERP_PCT = 4.5
+_MIN_PFFO = 8.0
+_MAX_PFFO = 28.0
+# Dominant-quarter guard (batch 72): a TTM FFO base where one quarter
+# exceeds 2.5x the median quarter is not a recurring run-rate — usually a
+# one-off gain the XBRL can't isolate (SPG's $2.9B Taubman remeasurement
+# gain is filed dimensionally, invisible to the SEC companyfacts API, so
+# the composite can't strip it). Below 2.5x the window reads as normal
+# REIT lumpiness (WELL 1.7x, CCI 1.7x pass).
+_FFO_DOMINANCE_RATIO = 2.5
 
 # Rate-aware guardrail (batch 12): the PEG multiple is blind to the discount
 # rate. A 40x fair P/E implies a 2.5% earnings yield — indefensible when the
@@ -65,7 +111,7 @@ class ValuationSignal(BaseModel):
     upside_pct: float | None  # implied upside in percent, e.g. 23.5
     signal: str  # Strong Buy | Buy | Hold | Sell | Strong Sell | Watch
     confidence: str  # High | Medium | Low
-    method: str  # "peg" | "sales" | "unavailable"
+    method: str  # "peg" | "sales" | "book" | "ffo" | "unavailable"
     fair_multiple: float | None  # the P/E or P/S the model deemed fair
     current_multiple: float | None  # where the market prices it today
     growth_pct: float | None  # the growth input, in percent
@@ -75,6 +121,30 @@ class ValuationSignal(BaseModel):
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
+
+
+def _dominant_ffo_quarter(
+    quarters: list[tuple[str, float]] | None,
+) -> tuple[str, float, float] | None:
+    """Detect a one-off-dominated TTM FFO window (batch 72).
+
+    ``quarters`` is [(label, quarterly FFO)] most-recent-first. Returns
+    (label, value, median) when one quarter exceeds _FFO_DOMINANCE_RATIO
+    times the median quarter — the TTM base is then a one-off, not a
+    run-rate — else None. Needs the full 4-quarter window; a non-positive
+    median means the window is already pathological and the guard stays
+    out of the way.
+    """
+    if not quarters or len(quarters) < 4:
+        return None
+    vals = sorted(v for _, v in quarters[:4])
+    median = (vals[1] + vals[2]) / 2.0
+    if median <= 0:
+        return None
+    for label, value in quarters[:4]:
+        if value > _FFO_DOMINANCE_RATIO * median:
+            return label, value, median
+    return None
 
 
 def _signal_for_upside(upside_pct: float) -> str:
@@ -229,6 +299,14 @@ def compute_valuation(
     ttm_free_cash_flow: float | None = None,
     market_cap: float | None = None,
     ten_year_yield_pct: float | None = None,
+    is_reit: bool = False,
+    is_bank_insurer: bool = False,
+    book_value_per_share: float | None = None,
+    roe_pct: float | None = None,
+    ttm_ffo: float | None = None,
+    ffo_growth_pct: float | None = None,
+    ffo_growth_is_fallback: bool = False,
+    ffo_quarters: list[tuple[str, float]] | None = None,
 ) -> ValuationSignal:
     """Compute the valuation signal from TTM financials and a market price.
 
@@ -240,7 +318,18 @@ def compute_valuation(
     ``market_cap`` feed the FCF-yield cross-check footnote only; they never
     change the signal. ``ten_year_yield_pct`` is the 10-year Treasury yield
     in percent (batch 12 rate guardrail); ``None`` uses the module default
-    benchmark.
+    benchmark. ``is_reit`` / ``is_bank_insurer`` are design-envelope flags:
+    sectors the P/E-growth framework cannot price get the sector-native path
+    (P/FFO for equity REITs, batch 72; P/B for banks/insurers, batch 71) or
+    Watch/unavailable instead of a fabricated target (batches 62, 70).
+    ``book_value_per_share`` and ``roe_pct`` feed the bank/insurer P/B path;
+    when either is missing the bank/insurer guard falls back to the honest
+    Watch copy. ``ttm_ffo`` / ``ffo_growth_pct`` feed the REIT P/FFO path;
+    when FFO cannot be computed (e.g. mortgage REITs file no property
+    depreciation) the REIT branch falls back to the honest Watch copy.
+    ``ffo_quarters`` is the [(label, quarterly FFO)] TTM window,
+    most-recent-first, used by the dominant-quarter guard: a TTM base
+    dominated by one quarter is a one-off, not a run-rate.
     """
     if current_price is None or current_price <= 0:
         return ValuationSignal(
@@ -302,8 +391,380 @@ def compute_valuation(
             ],
         )
 
+    # ── Design-envelope handling (batches 62, 70, 71, 72) ───────────────────
+    # Three input classes the PEG curve was never built for. Hyper-growth
+    # inputs produced fabricated signals in fresh-ticker hunts, so they
+    # return Watch/unavailable with honest copy instead of a target — the
+    # same doctrine as the batch-36 margin guard above. REITs and
+    # banks/insurers are the exceptions: instead of Watch they get the
+    # sector-native valuation — price-to-FFO via the Gordon justified
+    # multiple for equity REITs (batch 72), price-to-book for banks/insurers
+    # (batch 71) — because the industry prices property cash flows and
+    # balance-sheet businesses on those bases, not EPS growth. Placed after
+    # the margin guard so its copy still owns the margin-absurdity cases
+    # (e.g. NLY).
+    #
+    # 1. REITs (batches 62, 72): GAAP EPS is structurally the wrong earnings
+    #    base — the industry values REITs on funds from operations (FFO),
+    #    which the pipeline extracts from XBRL (net income + depreciation −
+    #    disposition gains + impairments, batch 72). Depreciation on property
+    #    makes GAAP EPS understate a REIT's cash earning power, so a P/E on
+    #    it misprices every REIT (WELL rendered Strong Sell −79% at a 114×
+    #    P/E on depreciation-depressed EPS; SPG Strong Buy +163%; PLD Strong
+    #    Sell −75%). The sales fallback is no rescue — GAAP net margin is
+    #    depressed by the same depreciation — so this branch owns REITs,
+    #    valuing them on price-to-FFO via the Gordon justified multiple
+    #    (batch 72). When FFO cannot be computed (mortgage REITs file no
+    #    property depreciation) the branch returns Watch/unavailable with
+    #    honest copy.
+    # 2. Banks/lenders and insurers (batch 70): balance-sheet businesses
+    #    valued on book value and normalized earnings, not EPS growth —
+    #    see the guard body below. Placed before the hyper-growth guard so
+    #    a bank with a cyclical EPS spike gets the sector copy, which is
+    #    the more fundamental reason the model declines.
+    # 3. Hyper-growth: EPS growth above the 40% model maximum. Beyond it the
+    #    PEG curve is clamped fiction, and the TTM base usually reflects a
+    #    one-off snapback rather than sustainable earning power — a trough
+    #    recovery (MU Strong Buy +167% on 877% growth), investment gains
+    #    (ALL Strong Buy +697% on 135%), or a cyclical rebound (HON Strong
+    #    Buy +359% on 47%). Batch 74 reroutes these names to the
+    #    margin-anchored sales fallback instead of Watch: the PEG path is
+    #    skipped (its growth input is the unreliable one) but the fallback
+    #    prices revenue growth — the more durable input — with the growth
+    #    clamp, P/S cap, and rate guardrail all naming themselves.
+    if is_reit:
+        reit_watch = ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(ffo_growth_pct, 1) if ffo_growth_pct is not None else None,
+            reasoning=[
+                "This is a real estate investment trust (REIT) — the industry "
+                "values REITs on funds from operations (FFO), not GAAP net "
+                "income. Depreciation on property makes GAAP EPS structurally "
+                "understate a REIT's cash earning power, so neither a P/E "
+                "multiple nor a margin-anchored sales multiple applies.",
+                "FFO could not be computed from this filer's XBRL — no "
+                "quarterly property-depreciation series was filed (mortgage "
+                "REITs hold securities, not depreciating property, so FFO is "
+                "not their metric either) — so no P/FFO target exists. Watch "
+                "the FFO trend instead.",
+            ],
+        )
+        if ttm_ffo is None or ttm_ffo <= 0:
+            # No FFO inputs, or a non-positive TTM FFO the multiple cannot
+            # price — the Gordon model gives a zero/negative justified P/FFO,
+            # which is nonsense, not a target. Same honesty as the sales
+            # path's non-positive-margin guard (batch 26).
+            return reit_watch
+        if shares_outstanding is None or shares_outstanding <= 0:
+            return reit_watch
+        dominant = _dominant_ffo_quarter(ffo_quarters)
+        if dominant is not None:
+            # One quarter owns the TTM — the base is a one-off, not a
+            # run-rate, and a P/FFO multiple on it would fabricate a target
+            # (SPG's $2.9B Taubman remeasurement gain sits inside its TTM).
+            # Normalizing by dropping the quarter would invent a "clean"
+            # number, so the branch declines with the quarter named.
+            dom_label, dom_value, dom_median = dominant
+            return ValuationSignal(
+                ticker=ticker,
+                current_price=current_price,
+                target_price=None,
+                upside_pct=None,
+                signal="Watch",
+                confidence="Low",
+                method="unavailable",
+                fair_multiple=None,
+                current_multiple=None,
+                growth_pct=round(ffo_growth_pct, 1) if ffo_growth_pct is not None else None,
+                reasoning=[
+                    f"TTM funds from operations are dominated by a single "
+                    f"quarter — {dom_label} ran ${dom_value / 1e9:.2f}B "
+                    f"against ~${dom_median / 1e9:.2f}B in a typical quarter "
+                    "— so the TTM base is a one-off, not a recurring "
+                    "run-rate.",
+                    "The XBRL facts don't isolate the spike (one-off gains "
+                    "filed with dimensional tags are invisible to the SEC "
+                    "companyfacts API, so the FFO composite can't strip "
+                    "them) — no P/FFO target until the quarter rolls off "
+                    "the TTM window.",
+                ],
+            )
+        yld = ten_year_yield_pct
+        if yld is None or yld <= 0:
+            yld = _TEN_YEAR_YIELD_DEFAULT_PCT
+        coe_pct = max(_COE_FLOOR_PCT, yld + _REIT_ERP_PCT)
+        # The Gordon g is a *perpetual* rate — a TTM print is cyclical, not
+        # perpetual. Observed growth above the long-run rate is NOT
+        # capitalized into the multiple: the first live backfill showed why —
+        # O's 7.5% TTM print implied a 71.7x justified P/FFO (Strong Buy
+        # +119% on the 28x cap), and DLR/EQIX/SPG/WELL at 11.8–80.9% hit the
+        # singularity and declined entirely. Observed declines ARE kept: a
+        # shrinking FFO stream really is worth less. Mirrors the bank path
+        # (batch 71), whose perpetual g is fixed at the long-run rate while
+        # the observed level (ROE there, FFO/share here) carries the signal.
+        growth_cap_note: str | None = None
+        if ffo_growth_pct is not None:
+            g_obs = ffo_growth_pct
+            if g_obs > _FFO_GROWTH_PCT:
+                growth_cap_note = (
+                    f"TTM FFO growth of {g_obs:.1f}% is above the "
+                    f"{_FFO_GROWTH_PCT:.0f}% long-run rate — a cyclical "
+                    "print, not a perpetual one — so the multiple is valued "
+                    "at the long-run rate instead of capitalizing the spike."
+                )
+            g = min(g_obs, _FFO_GROWTH_PCT)
+            g_display = g_obs
+            growth_note = (
+                "growing" if g_obs >= 0 else "declining"
+            )
+            growth_line = (
+                f"TTM funds from operations {growth_note} {abs(g_display):.1f}% "
+                + (
+                    "(same fiscal quarter a year ago)"
+                    if ffo_growth_is_fallback
+                    else "(TTM over prior TTM)"
+                )
+                + "."
+            )
+        else:
+            g = _FFO_GROWTH_PCT
+            g_display = g
+            growth_line = (
+                f"No FFO growth history yet — assuming {_FFO_GROWTH_PCT:.0f}% "
+                "long-run FFO growth; the target moves with the assumption, "
+                "so confidence is capped at Medium."
+            )
+        raw_pffo = (100.0 + g) / (coe_pct - g)
+        fair_pffo = _clamp(raw_pffo, _MIN_PFFO, _MAX_PFFO)
+        ffo_per_share = ttm_ffo / shares_outstanding
+        current_pffo = current_price / ffo_per_share
+        target = ffo_per_share * fair_pffo
+        upside = (target - current_price) / current_price * 100.0
+        signal = _signal_for_upside(upside)
+        # Confidence mirrors the top-of-function rule but on the FFO growth
+        # input, not the EPS one: a REIT's card is only as good as its FFO
+        # trend.
+        ffo_confidence = (
+            "High"
+            if ttm_quarters >= 4 and not ffo_growth_is_fallback
+            else "Medium"
+        )
+        if ffo_growth_pct is None:
+            ffo_confidence = "Medium"
+        pffo_clamp_note: str | None = None
+        if raw_pffo > _MAX_PFFO:
+            pffo_clamp_note = (
+                f"Note: {g:.1f}% FFO growth implies a fair P/FFO of "
+                f"{raw_pffo:.1f}× — above the {_MAX_PFFO:.0f}× cap for REIT "
+                "cash-flow multiples, so valued at "
+                f"{fair_pffo:.1f}× instead; the target is driven by the "
+                "guardrail, so confidence is capped at Medium."
+            )
+            ffo_confidence = "Medium"
+        elif raw_pffo < _MIN_PFFO:
+            pffo_clamp_note = (
+                f"Note: {g:.1f}% FFO growth implies a fair P/FFO of "
+                f"{raw_pffo:.1f}× — below the {_MIN_PFFO:.0f}× floor for "
+                "declining or no-growth REIT cash flows, so valued at "
+                f"{fair_pffo:.1f}× instead; the target is driven by the "
+                "guardrail, so confidence is capped at Medium."
+            )
+            ffo_confidence = "Medium"
+        multiple_line = (
+            f"A {g:.1f}% FFO growth rate against a {coe_pct:.1f}% cost of "
+            f"equity (10-year {yld:.1f}% + {_REIT_ERP_PCT:.1f}pp REIT equity "
+            f"premium) implies a fair P/FFO of {raw_pffo:.1f}×"
+            + (
+                f" — above the {_MAX_PFFO:.0f}× cap, so valued at "
+                f"{fair_pffo:.1f}× "
+                if raw_pffo > _MAX_PFFO
+                else (
+                    f" — below the {_MIN_PFFO:.0f}× floor, so valued at "
+                    f"{fair_pffo:.1f}× "
+                    if raw_pffo < _MIN_PFFO
+                    else " "
+                )
+            )
+            + f"(current P/FFO is {current_pffo:.1f}×)."
+        )
+        reasoning = [
+            f"TTM funds from operations ${ttm_ffo / 1e9:.2f}B "
+            f"(${ffo_per_share:.2f}/share) — net income plus property "
+            "depreciation, less disposition gains, plus real-estate "
+            "impairments, computed from filed XBRL (quarters with no filed "
+            "gain or impairment facts count as zero).",
+            growth_line,
+            multiple_line,
+            f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
+            f"({upside:+.1f}% implied upside).",
+        ]
+        if pffo_clamp_note is not None:
+            reasoning.append(pffo_clamp_note)
+        if growth_cap_note is not None:
+            reasoning.append(growth_cap_note)
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=round(target, 2),
+            upside_pct=round(upside, 1),
+            signal=signal,
+            confidence=ffo_confidence,
+            method="ffo",
+            fair_multiple=round(fair_pffo, 1),
+            current_multiple=round(current_pffo, 1),
+            growth_pct=round(g_display, 1),
+            reasoning=reasoning,
+            # No FCF cross-check on the FFO path: for REITs TTM free cash
+            # flow mixes operating cash with property-investment flows, so
+            # an FCF-yield footnote would be noise, not context (same call
+            # as the book path, batch 71).
+            fcf_note=None,
+        )
+    # 2. Banks/lenders and insurers (batches 70, 71): balance-sheet businesses
+    #    the industry values on book value and normalized earnings, not EPS
+    #    growth. Loan-loss provisions, reserve releases, and rate cycles make
+    #    their EPS growth cyclical rather than compoundable, so a PEG-implied
+    #    "fair" P/E is market fiction — banks rarely sustain even 15x through
+    #    a cycle, yet the growth curve was printing 26-37x fair multiples
+    #    (BAC Strong Buy +196% at 37.0x, CI +216% at 37.0x, PNC +199% at
+    #    36.4x, TFC +159% at 27.7x). The sales fallback is no rescue — fair
+    #    P/S = P/E x net margin inherits the same broken multiple (BRK.B
+    #    Strong Sell -38% on a P/S the market never uses for a book-value
+    #    stock) — so this branch owns banks/insurers, valuing them on
+    #    price-to-book via the Gordon justified multiple (batch 71). When
+    #    the book-value inputs are missing or the bank is not earning on its
+    #    equity, no honest P/B target exists and the branch returns
+    #    Watch/unavailable with honest copy. Placed before the hyper-growth
+    #    guard so a bank with a cyclical EPS spike gets the sector-native
+    #    treatment, which is the more fundamental reason.
+    if is_bank_insurer:
+        bank_watch = ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=None,
+            upside_pct=None,
+            signal="Watch",
+            confidence="Low",
+            method="unavailable",
+            fair_multiple=None,
+            current_multiple=None,
+            growth_pct=round(roe_pct, 1) if roe_pct is not None else None,
+            reasoning=[
+                "This is a bank, lender, or insurer — a balance-sheet business "
+                "the industry values on book value and normalized earnings, "
+                "not EPS growth. Loan-loss provisions, reserve releases, and "
+                "rate cycles make bank/insurer earnings cyclical rather than "
+                "compoundable, so a growth-implied 'fair' P/E is market fiction "
+                "(banks rarely sustain even 15x through a cycle).",
+                "Book-value inputs are incomplete, so no price-to-book target "
+                "can be computed — Watch the price-to-book trend and return on "
+                "equity instead.",
+            ],
+        )
+        if book_value_per_share is None or book_value_per_share <= 0:
+            return bank_watch
+        if roe_pct is None or roe_pct <= 0:
+            # A bank not earning on its book equity cannot be priced on book
+            # value — the Gordon model gives a zero/negative justified P/B,
+            # which is nonsense, not a target. Same honesty as the sales
+            # path's non-positive-margin guard (batch 26).
+            return bank_watch
+        yld = ten_year_yield_pct
+        if yld is None or yld <= 0:
+            yld = _TEN_YEAR_YIELD_DEFAULT_PCT
+        coe_pct = max(_COE_FLOOR_PCT, yld + _BANK_ERP_PCT)
+        raw_pb = (roe_pct - _PB_GROWTH_PCT) / (coe_pct - _PB_GROWTH_PCT)
+        fair_pb = _clamp(raw_pb, _MIN_PB, _MAX_PB)
+        current_pb = current_price / book_value_per_share
+        target = book_value_per_share * fair_pb
+        upside = (target - current_price) / current_price * 100.0
+        signal = _signal_for_upside(upside)
+        book_confidence = confidence
+        pb_clamp_note: str | None = None
+        if raw_pb > _MAX_PB:
+            pb_clamp_note = (
+                f"Note: a {roe_pct:.1f}% ROE implies a fair P/B of {raw_pb:.1f}× — "
+                f"above the {_MAX_PB:.1f}× cap for cyclical bank/insurer book "
+                f"earnings, so valued at {fair_pb:.1f}× instead; the target is "
+                "driven by the guardrail, so confidence is capped at Medium."
+            )
+            book_confidence = "Medium"
+        elif raw_pb < _MIN_PB:
+            pb_clamp_note = (
+                f"Note: a {roe_pct:.1f}% ROE implies a fair P/B of {raw_pb:.1f}× — "
+                f"below the {_MIN_PB:.1f}× floor for distressed book earnings, "
+                f"so valued at {fair_pb:.1f}× instead; the target is driven by "
+                "the guardrail, so confidence is capped at Medium."
+            )
+            book_confidence = "Medium"
+        multiple_line = (
+            f"A {roe_pct:.1f}% return on equity against a {coe_pct:.1f}% cost of "
+            f"equity (10-year {yld:.1f}% + {_BANK_ERP_PCT:.0f}pp bank equity "
+            f"premium) implies a fair P/B of {raw_pb:.1f}×"
+            + (
+                f" — above the {_MAX_PB:.1f}× cap, so valued at {fair_pb:.1f}× "
+                if raw_pb > _MAX_PB
+                else (
+                    f" — below the {_MIN_PB:.1f}× floor, so valued at {fair_pb:.1f}× "
+                    if raw_pb < _MIN_PB
+                    else " "
+                )
+            )
+            + f"(current P/B is {current_pb:.1f}×)."
+        )
+        reasoning = [
+            f"TTM return on equity {roe_pct:.1f}% on book value — banks and "
+            "insurers are balance-sheet businesses, so this card values book "
+            "value, not earnings growth.",
+            multiple_line,
+            f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
+            f"({upside:+.1f}% implied upside).",
+        ]
+        if pb_clamp_note is not None:
+            reasoning.append(pb_clamp_note)
+        return ValuationSignal(
+            ticker=ticker,
+            current_price=current_price,
+            target_price=round(target, 2),
+            upside_pct=round(upside, 1),
+            signal=signal,
+            confidence=book_confidence,
+            method="book",
+            fair_multiple=round(fair_pb, 1),
+            current_multiple=round(current_pb, 1),
+            growth_pct=round(roe_pct, 1),
+            reasoning=reasoning,
+            # No FCF cross-check on the book path: for banks/insurers TTM
+            # free cash flow mixes operating cash with deposit/loan balance
+            # moves, so an FCF-yield footnote would be noise, not context.
+            fcf_note=None,
+        )
+    # Batch 74: hyper-growth no longer returns Watch here. The PEG curve
+    # cannot price EPS growth above the 40% model maximum (clamped fiction
+    # on a usually snapback base — MU Strong Buy +167% on 877% growth, ALL
+    # +697% on 135%), but the sales fallback below prices *revenue* growth,
+    # the more durable input, through the same margin-anchored fair-P/S
+    # machinery. The PEG path is skipped for these names (its growth input
+    # is the unreliable one); names the fallback cannot price (no positive
+    # margin, missing revenue inputs) still land on the honest Watch
+    # copies below.
+    hyper_growth = eps_growth_pct is not None and eps_growth_pct > _MAX_GROWTH_PCT
+
     # ── Primary: PEG-implied P/E ──────────────────────────────────────────
-    if ttm_eps_diluted is not None and ttm_eps_diluted > 0 and eps_growth_pct is not None:
+    if (
+        ttm_eps_diluted is not None
+        and ttm_eps_diluted > 0
+        and eps_growth_pct is not None
+        and not hyper_growth
+    ):
         raw_pe = PEG_TARGET * _clamp(eps_growth_pct, _MIN_GROWTH_PCT, _MAX_GROWTH_PCT)
         fair_pe, rate_note = _fair_pe_for_growth(eps_growth_pct, ten_year_yield_pct)
         target = ttm_eps_diluted * fair_pe
@@ -507,14 +968,30 @@ def compute_valuation(
             sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
         if sales_rate_note is not None:
             sales_confidence = "Medium"  # cap: the rate environment, not the data, drives the target
+        if hyper_growth:
+            # Batch 74: per-share earnings exist here — the PEG path was
+            # skipped because the EPS *growth* is outside the model's 40%
+            # range, not because earnings are missing. The batch-33 "no
+            # per-share earnings" line would be false for these names, so
+            # name the reroute instead.
+            sales_opening = (
+                f"TTM EPS growth of {eps_growth_pct:.1f}% is outside the PEG "
+                f"model's {_MAX_GROWTH_PCT:.0f}% design range — a growth "
+                "multiple on that base would be clamped fiction, so valuing "
+                "on sales instead (less reliable)."
+            )
+        else:
+            sales_opening = (
+                "No per-share earnings to anchor a P/E multiple — valuing on sales "
+                "instead (less reliable)."
+            )
         reasoning = [
             # Batch 33: the sales path is only reachable with a positive TTM
             # net margin, so TTM earnings ARE positive here — what is missing
             # is per-share earnings data to anchor a P/E multiple (e.g. ET,
             # an MLP that files no XBRL EPS facts). The old "No positive TTM
             # earnings" claim was false for every company on this path.
-            "No per-share earnings to anchor a P/E multiple — valuing on sales "
-            "instead (less reliable).",
+            sales_opening,
             ps_line,
             f"Fair value ≈ ${target:.2f} vs ${current_price:.2f} today "
             f"({upside:+.1f}% implied upside).",

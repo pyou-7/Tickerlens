@@ -80,6 +80,15 @@
       </div>
     </div>
 
+    <!-- 1b. Data-freshness honesty note (batch 56) — prints on the PDF so a
+         stale latest-quarter figure can't be read as current. -->
+    {% if overview.pending_filing_note %}
+    <div class="p-4 rounded-xl border border-amber-300 bg-amber-50 page-break-inside-avoid">
+      <div class="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1">Latest Quarter Data</div>
+      <p class="text-xs leading-relaxed text-slate-800">{{ overview.pending_filing_note }}</p>
+    </div>
+    {% endif %}
+
     <!-- 2. Market & Valuation Overview Bar -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5 rounded-xl bg-slate-50 border border-slate-200 page-break-inside-avoid">
       <div>
@@ -227,6 +236,26 @@
               <td class="py-1.5 px-2 text-right">{{ fmt_large(row.total_liabilities) }}</td>
               {% endfor %}
             </tr>
+            {% set mezz_ns = namespace(show=false) %}
+            {% for row in rows[-8:] %}{% if row.mezzanine_is_third_leg %}{% set mezz_ns.show = true %}{% endif %}{% endfor %}
+            {% if mezz_ns.show %}
+            <tr class="bg-slate-50/50">
+              <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Redeemable NCI <span class="text-xs font-normal text-slate-400">(mezzanine)</span></td>
+              {% for row in rows[-8:] %}
+              <td class="py-1.5 px-2 text-right">{{ fmt_large(row.redeemable_nci if row.mezzanine_is_third_leg else none) }}</td>
+              {% endfor %}
+            </tr>
+            {% endif %}
+            {% set temp_ns = namespace(show=false) %}
+            {% for row in rows[-8:] %}{% if row.temporary_equity_is_third_leg %}{% set temp_ns.show = true %}{% endif %}{% endfor %}
+            {% if temp_ns.show %}
+            <tr class="bg-slate-50/50">
+              <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Temporary equity <span class="text-xs font-normal text-slate-400">(mezzanine)</span></td>
+              {% for row in rows[-8:] %}
+              <td class="py-1.5 px-2 text-right">{{ fmt_large(row.temporary_equity if row.temporary_equity_is_third_leg else none) }}</td>
+              {% endfor %}
+            </tr>
+            {% endif %}
             <tr class="bg-slate-50/50">
               <td class="py-1.5 px-2 font-sans font-semibold text-slate-900">Stockholders' Equity</td>
               {% for row in rows[-8:] %}

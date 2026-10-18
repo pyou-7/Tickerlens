@@ -35,11 +35,30 @@ class AnnualFiling:
 # The real Item 1A section is bounded below by the next item heading. Different
 # filers jump to 1B (Unresolved Staff Comments) or straight to 2 (Properties);
 # some recent filings also use "1C" (Cybersecurity).
-_RISK_START_RE = re.compile(r"item\s*1a\.?\s*[:.\-–]*\s*risk\s+factors", re.IGNORECASE)
+# The separator class covers the heading punctuation filers use between "1A"
+# and "Risk Factors": Dell renders "ITEM 1A — RISK FACTORS" (em dash).
+_RISK_START_RE = re.compile(
+    r"item\s*1a\.?\s*[:.\-–—]*\s*risk\s+factors"
+    # Legacy parenthesized numbering, matched as a full heading line only:
+    # horizontal whitespace (never newlines), so the TOC's split "Item 1(a)."
+    # / "Risk Factors" lines and mid-sentence cross-references ("see Part I,
+    # Item 1(a). Risk Factors") cannot match. (Halliburton, ICE.)
+    r"|^[ \t]*item[ \t]*1[ \t]*\([ \t]*a[ \t]*\)\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$"
+    # Dotted numbering, also full-line only for the same reason (Clorox's
+    # 10-K heads the section "ITEM 1.A. RISK FACTORS" as a standalone line;
+    # an inline match could catch a mid-sentence "see Item 1.A. Risk Factors"
+    # cross-reference and steal longest-section-wins).
+    r"|^[ \t]*item[ \t]*1[ \t]*\.[ \t]*a[ \t]*\.?[ \t]*[:.\-–—]*[ \t]*risk[ \t]+factors[ \t]*\.?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 _RISK_END_RE = re.compile(
     r"item\s*1b\.?\s*[:.\-–]*\s*unresolved"
+    r"|item\s*1\s*\.\s*b\.?\s*[:.\-–]*\s*unresolved"
+    r"|item\s*1\s*\(\s*b\s*\)\.?\s*[:.\-–]*\s*unresolved"
     r"|item\s*1c\.?\s*[:.\-–]*\s*cybersecurity"
-    r"|item\s*2\.?\s*[:.\-–]*\s*properties",
+    r"|item\s*1\s*\.\s*c\.?\s*[:.\-–]*\s*cybersecurity"
+    r"|item\s*2\.?\s*[:.\-–]*\s*properties"
+    r"|item\s*2\s*\.\s*[:.\-–]*\s*properties",
     re.IGNORECASE,
 )
 
@@ -47,6 +66,42 @@ _RISK_END_RE = re.compile(
 # certainly a table-of-contents entry, not the real section — treat as "not
 # found" rather than surface a stub. Real Item 1A sections run many KB.
 _MIN_SECTION_CHARS = 500
+
+# Primary "Item 1A ... Risk Factors" matches shorter than this are TOC stubs
+# (a page number before the next item marker). When no primary candidate even
+# reaches this length, the heading wasn't found in Item-1A form and the bare
+# all-caps "RISK FACTORS" fallback may apply; a longer-but-subfloor section
+# means the real heading matched and holds only a cross-reference
+# (incorporation by reference — honestly None, never second-guessed).
+_MIN_TOC_STUB_CHARS = 50
+
+# Bare all-caps section heading used by filers with no "Item 1A" prefix
+# (McDonald's, Citi). Matched as a standalone line only.
+_RISK_CAPS_LINE_RE = re.compile(r"^RISK FACTORS$", re.MULTILINE)
+
+# Bare title-case standalone heading, same no-prefix situation (Intel,
+# Morgan Stanley). Matched as a standalone line only; the prose-follow check
+# in extract_risk_factors excludes TOC entries and running page headers.
+_RISK_TITLE_LINE_RE = re.compile(r"^Risk Factors$", re.MULTILINE)
+
+# Run-in heading: "RISK FACTORS." directly followed by prose on the same line
+# (GE Aerospace: "RISK FACTORS. The following discussion of the material
+# factors..."). The uppercase lookahead keeps table fragments out.
+_RISK_RUNIN_RE = re.compile(r"^[ \t]*RISK FACTORS[.:][ \t]+(?=[A-Z])", re.MULTILINE)
+
+# A standalone heading-line candidate is only viable when the next non-blank
+# line looks like body prose. TOC entries and running page headers are
+# followed by page numbers or item labels ("37", "1A 13") — short fragments,
+# never prose. A real section heading is followed by its opening paragraph.
+_PROSE_FOLLOW_MIN_CHARS = 20
+
+
+def _followed_by_prose(text: str, pos: int) -> bool:
+    for line in text[pos:].splitlines():
+        stripped = line.strip()
+        if stripped:
+            return len(stripped) >= _PROSE_FOLLOW_MIN_CHARS
+    return False
 
 # Below this length the document is almost certainly not a real press release
 # (an error page, a bare 8-K shell, or a stub) — treat as "not found".
@@ -70,17 +125,36 @@ _ADMIN_LINE_RE = re.compile(
     r"|^ex-?99\.1\b"  # EX-99.1
     r"|^exhibit\s+99\b"  # Exhibit 99.1
     r"|^\d{1,3}$"  # page numbers
-    r"|^\S+\.html?$",  # exhibit filename lines
+    r"|^\S+\.html?$"  # exhibit filename lines
+    r"|^\(furnished herewith\)$",  # SEC exhibit parenthetical (Deere-style)
     re.IGNORECASE,
 )
 
 # An explicit "Highlights" / "Financial Highlights" section heading.
 _HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
 
+# Contact lines (media/investor contacts + email addresses) that some filers
+# (e.g. JNJ, Deere) place *before* the release headline. They are neither headline nor
+# lede content: skipping them keeps "Media contact:" / "Media Inquiries:" from
+# becoming the headline and keeps a leading "Investor contact:" from terminating
+# the lede fallback before any real content is collected.
+_CONTACT_LINE_RE = re.compile(
+    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)|[\w.\-+]+@[\w.\-]+\.\w+",
+    re.IGNORECASE,
+)
+
 # Guidance and Outlook section headings in earnings releases
 _GUIDANCE_HEADING_RE = re.compile(
     r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
-    r"(?:first|second|third|fourth|q[1-4]|fiscal|\d{4})\s+(?:quarter|year|\d{4})?\s*(?:financial\s+)?(?:guidance|outlook)|"
+    # Quarter-prefixed long forms: "Fourth Quarter Fiscal Year 2026 Business
+    # Outlook" (AVGO), "Full Year Fiscal 2027 Guidance" / "First Quarter Fiscal
+    # 2027 Guidance" (INTU), "Full-year 2026 guidance:" (JNJ). Up to five
+    # intervening words (quarter/fiscal/year/digits, hyphen- or space-separated)
+    # are allowed between the prefix and the guidance/outlook tail.
+    r"(?:first|second|third|fourth|full|q[1-4]|fiscal|\d{4})"
+    r"(?:[\s\-]+(?:quarter|fiscal|year|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
+    # "Forward-Looking Guidance" section intros (INTU).
+    r"forward[- ]looking\s+(?:business\s+)?(?:guidance|outlook)|"
     r"cfo\s+outlook(?: commentary)?|outlook\s+summary|guidance\s+summary|outlook|guidance)\b",
     re.IGNORECASE,
 )
@@ -148,13 +222,44 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     text = _html_to_text(document_html)
 
     best_section: str | None = None
+    longest_primary = 0
     for match in _RISK_START_RE.finditer(text):
         start = match.end()
         end_match = _RISK_END_RE.search(text, start)
         end = end_match.start() if end_match else len(text)
         section = text[start:end].strip(" .:-–")
+        longest_primary = max(longest_primary, len(section))
         if best_section is None or len(section) > len(best_section):
             best_section = section
+
+    if (best_section is None or len(best_section) < _MIN_SECTION_CHARS) and (
+        longest_primary < _MIN_TOC_STUB_CHARS
+    ):
+        # Fallback: filers that head the section with no "Item 1A" prefix.
+        # Candidates are bare all-caps lines (McDonald's, Citi), bare
+        # title-case lines (Intel, Morgan Stanley), and run-in "RISK FACTORS."
+        # headings (GE Aerospace). A standalone-line candidate must be followed
+        # by prose — this excludes TOC entries and running page headers, which
+        # are followed by page numbers or item labels. The longest resulting
+        # section wins, mirroring the primary path: running headers later in
+        # the section yield shorter sections than the real heading (Honeywell).
+        # The two guards above keep this from second-guessing documents whose
+        # real Item 1A heading matched but holds only a cross-reference
+        # (BNY/WFC incorporate Item 1A by reference — honestly None).
+        viable: list[Any] = [
+            m
+            for m in list(_RISK_CAPS_LINE_RE.finditer(text))
+            + list(_RISK_TITLE_LINE_RE.finditer(text))
+            if _followed_by_prose(text, m.end())
+        ]
+        viable.extend(_RISK_RUNIN_RE.finditer(text))
+        for match in viable:
+            start = match.end()
+            end_match = _RISK_END_RE.search(text, start)
+            end = end_match.start() if end_match else len(text)
+            section = text[start:end].strip(" .:-–")
+            if best_section is None or len(section) > len(best_section):
+                best_section = section
 
     if best_section is None or len(best_section) < _MIN_SECTION_CHARS:
         logger.info("Risk Factors section not confidently located in filing")
@@ -191,7 +296,7 @@ def extract_press_release_highlights(
     headline: str | None = None
     body_start = 0
     for i, ln in enumerate(lines):
-        if _ADMIN_LINE_RE.match(ln):
+        if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline = ln
@@ -209,6 +314,8 @@ def extract_press_release_highlights(
         for ln in body_lines:
             if _ADMIN_LINE_RE.match(ln):
                 continue  # stray exhibit headers / page numbers mid-document
+            if _CONTACT_LINE_RE.search(ln):
+                continue  # contact blocks some filers put before the headline
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)
@@ -331,8 +438,26 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
+    # Inline formatting tags carry no whitespace of their own: adjacent inline
+    # elements with no whitespace between them render concatenated in a
+    # browser. Replacing them with a space corrupts words that filers split
+    # across <span>s — DFIN-prepared 10-Ks render "ITEM 1A. RISK FACTORS" as
+    # "RIS</span><span>K FACTORS", which the old space-join turned into
+    # "RIS K FACTORS" and hid the real Item 1A heading (TOC-only match, so
+    # extract_risk_factors returned None for MSFT/GE/MCD/INTC/BRK.B/...).
+    text = re.sub(
+        r"(?i)</?(?:span|a|b|i|em|strong|u|font|sup|sub|small|big|label|abbr|"
+        r"acronym|cite|code|dfn|kbd|samp|var|mark|q|s|strike|tt|wbr)\b[^>]*>",
+        "",
+        text,
+    )
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = _html.unescape(text).replace("\xa0", " ")
+    # Zero-width / BOM characters are invisible junk that some filers' exhibits
+    # sprinkle between blocks (Deere's release pads sections with \u200b
+    # lines). Left in, they count as "content" lines and can fill the lede
+    # line-cap with invisible text, starving real highlights.
+    text = text.replace("\u200b", "").replace("\ufeff", "")
     text = re.sub(r"[ \t]+", " ", text)          # collapse runs of spaces
     text = re.sub(r" *\n *", "\n", text)          # trim spaces around newlines
     text = re.sub(r"\n{3,}", "\n\n", text)        # cap blank-line runs

@@ -6,12 +6,31 @@ Git history has the WHAT; this file has the reasoning.
 
 Format:
 ```
+
 ## YYYY-MM-DD — <short title>
 
 **What:** One sentence on what changed or was decided.
 **Why:** The motivation — constraint, tradeoff, incident, or requirement.
 **Alternatives considered:** What else was evaluated, or "None recorded."
 ```
+
+---
+
+## 2026-10-12 — Batch 55: pending-filing honesty note on the detail page
+
+**What:** `DetailContext` gains `pending_filing_note` (wired from `Company.pending_filing_note` in `get_detail`), and `partials/detail_data.html` renders the same amber honesty note as the overview, below the period label and above the hero KPI cards — for tickers whose latest 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its figures yet.
+**Why:** Batch 53 put the note on the Overview page, but the Detail/Time Slicer page is where the user stares at the quarters and the YoY selectors — a stale latest quarter there had the same unexplained-silence defect. The partial is server-rendered on the initial page load too, so one block covers both the full detail page and every HTMX `/detail/data` swap; no route changes were needed.
+**Alternatives considered:** Passing the note as a separate template variable instead of a context field (rejected — the partial's contract is `ctx`, and the overview already carries it on its context, so parity keeps both templates reading `*.pending_filing_note`); gating the note on the selected period being the latest (rejected — the note describes the app's latest-data state, which is true regardless of which period the slicer shows, and the overview behaves the same way); extending to compare/tearsheet in the same batch (deferred — the batch-54 follow-up named the detail page specifically; one batch, one item).
+**Blast radius:** `financials.py` (one dataclass field + one constructor kwarg), `partials/detail_data.html` (one conditional block). No extraction, valuation, briefing, peers, calendar, or query-path changes. 6 new tests (2 get_detail plumbing incl. None-by-default, 2 partial render/omit, 2 route-level render/omit). Suite at 554 green (548 + 6). `git diff --check` clean.
+**Live:** Server restarted via the launcher script (kill by explicit PID — the standing lesson). 7/7 routes 200 (V/CB/AAPL detail, V detail/data, CB overview, /calendar, /api/search?q=visa). Styled screenshots via `scripts/screenshot.py` (local Tailwind build; plotly CDN blank in the sandbox is the known artifact): V shows "Q3 FY2026 results (10-Q filed Jul 29, 2026) aren't in EDGAR's data feed yet — showing Q2 FY2026…", CB shows its Q2 FY2026 variant, AAPL (no-note control) unchanged with no amber block. Screenshot gate passed.
+**Follow-ups (not this batch):** DBA/nickname alias map for descriptions (CART->Instacart, SHOO->Steve Madden); pending-filing note on the compare and tearsheet pages.
+
+## 2026-10-11 — Batch 54: Wikipedia corporate-suffix fallback search (1 defect class)
+
+**What:** `_best_title` now retries with the corporate suffix stripped from the query when the full-legal-name search yields nothing relevant; the fallback accepts only an article *named* the stripped name (order-insensitive word-set equality, suffix-stripped both sides, never-relevant exclusions kept). New `_strip_corp_suffix` (trailing /MA/ state tags + one suffix token), `_word_set` (keeps short words like "3M"/"D. R."), `_never_relevant` (exclusions extracted from `_title_relevant`, shared).
+**Why:** `_search_titles` queries "{legal name} company", and Wikipedia's ranking degrades on suffixed names — "Atlassian Corp company" returned '8x8' and '2026 Formula One World Championship' while "Atlassian company" hits the article — leaving 10 of 132 companies description-less. The strict acceptance rule exists because the naive fallback misattributes: the stripped "Applied Digital" search surfaces "Applied Digital Data Systems", a 1969 terminal maker, which word-set equality declines (batch-47 IBM/Commodore class). CART ("Maplebear Inc." -> article "Instacart") and SHOO ("STEVEN MADDEN" -> "Steve Madden") are deliberately left unmatched — DBA/nickname aliasing needs a curated map, not fuzzy matching.
+**Alternatives considered:** Merging primary+fallback candidates into one pool and re-running the batch-47 selection (rejected — more candidates raise misattribution risk; the strict rule on a separate fallback path is safer); accepting name-contained fallback titles (rejected — "Applied Digital Data Systems" *is* name-contained and wrong); also retrying with the bare ticker as query (rejected — adds nothing under the strict equality rule and risks word-tickers matching unrelated articles).
+**Blast radius:** `data/wikipedia.py` only (new helpers + ~10-line fallback in `_best_title`; `_title_relevant` behavior unchanged — exclusions extracted verbatim). Fallback fires only when the primary returns nothing relevant, so the 122 described companies are untouched by construction. 8 new tests. Suite at 548 green. Live: 5 descriptions backfilled (TEAM, AMT, DHI, MMM, WFC), verified correct; server restarted.
 
 ---
 
@@ -843,7 +862,804 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 
 ---
 
-## 2026-10-10 — Batch 47: Interactive Valuation Simulator & 5-Year DCF Sensitivity Matrix Suite
+## 2026-10-10 — Batch 47: fresh-ticker hunt round 11 + Wikipedia description rescue (2 defect classes)
+
+**What:** (1) Seeded AVGO, MA, QCOM, INTU, ISRG, AMAT live from SEC (round 11): 8 quarters each, A=L+E on all 48 quarters, FY labels sequence-consistent including off-cycle fiscal years (AVGO FY2024Q4→FY2026Q3, QCOM FY2024Q4→FY2026Q3, INTU FY2025Q1→FY2026Q4, AMAT FY2024Q4→FY2026Q3). Two anomalies verified against raw companyfacts as genuine filed data, not extraction defects (batch-45 audit lesson applied: check the tag family the chain actually uses): AVGO FY2026Q3 $29.59B revenue / $13.09B NI are framed-quarter facts from the 2026-09-10 10-Q (the unframed $71.09B/$29.75B are 9M YTD — correctly not selected), and QCOM's FY2025Q4 -$3.12B NI is the correct FY−9M derivation ($5.541B FY − $8.658B 9M) with FY2026Q2 +$7.37B confirmed as a framed quarter fact. Valuation-copy honesty (batches 40/45: cap/rate disclosures present on AVGO/AMAT) and briefing registers (batches 41/42/46) hold on all six — no fabrication patterns. (2) **fix** Wikipedia description rescue in `data/wikipedia.py`: the 50-word `_MIN_WORDS` floor was silently discarding real company summaries — Broadcom's live summary measured 48 words via httpx (63 via curl; egress-cache variance), Visa 32, GE 20 — leaving 59 of 108 companies description-less. New design: floor 15 as a stub-rejector (not a quality bar); disambiguation pages rejected by API `type` (not length); `_search_title` generalized to `_search_titles(limit=5)`; `_best_title` selection = Wikipedia rank first, with exact-name match (squashed alphanumeric comparison, stop words retained so "Domino's Pizza Group plc" ≠ "DOMINOS PIZZA INC"), predecessor override (strictly higher overlap + name-contained + no-longer: "Lockheed Martin" over "Lockheed Corporation"), and name-contained lower-hit fallback; `_title_relevant` rewritten with ticker-acronym rule, hyphen/apostrophe normalization, first-word agreement, lead-word fallback, and never-relevant exclusions for lawsuit articles (" v. "), "List of " articles, and parenthetical pages except "(company)". `enrich_company` now passes the ticker into `get_description`. Backfill: 50 companies rescued; 5 wrong descriptions repaired — LMT's predecessor-company page → Lockheed Martin, IBM's "Commodore International" → IBM, LOPE's university page → Grand Canyon Education, SKYD's stale pre-merger text, PG's person page → P&G. The 8 remaining Nones are honest rejections (WFC/AMT/APLD/AGNC/DHI wrong search hits; CART/SHOO/MPLX need alias/fuzzy knowledge the conservative check deliberately lacks). (3) **fix** `services/peers.py`: ISRG (SIC 3842) rendered no Sector Peers section — added curated medtech map (MDT/SYK/BSX/EW/ZBH, all verified against live SEC company_tickers.json per batch-28 precedent) and a "384" SIC-prefix fallback.
+
+**Why:** The loop's alternation calls for a fresh-ticker hunt; the round-11 seeds exposed the description gap (all six seeded with NULL descriptions, and the DB-wide count showed 59/108). A missing description is a content hole on every overview page; a wrong one (IBM-as-Commodore, LMT-as-predecessor) is worse than none — the selection rules were hardened until a full 108-company dry-run showed zero regressions vs stored descriptions.
+
+**Alternatives considered:** Simply lowering the floor to 15 without the selection hardening was rejected after the dry run caught it admitting PG's person page and promoting subsidiaries/cases/museums above company pages. Pure max-overlap selection was rejected for the same reason (DPZ's UK franchisee, MSFT's antitrust case, WFC's museum). Trusting Wikipedia rank alone was rejected by the LMT predecessor case. Expanding the relevance check to fuzzy matching (SHOO "Steven" vs "Steve", CART's Maplebear→Instacart alias) was rejected — wrong descriptions are worse than missing ones, and those 8 stay honestly empty.
+
+**Blast radius:** `wikipedia.py` rewritten (127-line diff); `financials.py` one-line ticker threading; `peers.py` two map additions. Descriptions are page-view-refreshed with overwrite-None semantics (pre-existing design); the dry run confirmed no stored good description flips to a worse page under the new selection. 23 new tests (21 wikipedia, 2 peers). Suite at 484 green (461 + 23). `git diff --check` clean.
+
+**Live:** Restarted :8123 for the new code (note: `pkill -f serve_tickerlens.py` matched the invoking shell again — batch-46's warning stands; kill by PID). `/company/{ISRG,AVGO,LMT,IBM,PG}` 200 with correct descriptions and ISRG's new peer chips (MDT/SYK/BSX/EW/ZBH); all six round-11 overviews + AVGO detail/compare/vs 200. Post-view DB check: all repaired descriptions intact (no transient-search wipes). No template change (backend-only), so no screenshot per the gate rules.
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. SEC-gapped quarters (V/KO/NEE/PYPL/F/DUK Q2-2026 + SKYD Q3-2025) remain on the 6h retry loop. 8 description-less companies (WFC, AMT, CART, SHOO, APLD, AGNC, MPLX, DHI) stay None by design.
+
+---
+
+## 2026-10-10 — Batch 48: freshness-retry futility audit (1 defect class)
+
+**What:** DB-wide audit of the batch-37/44 freshness machinery (108 tickers, cached submissions). Batch-37's 6 stale tickers (V, KO, NEE, PYPL, F, DUK) all reached 8 quarters — the 6h retry loop worked as designed. XOM verified as genuine SEC-side thinness: SEC's company_tickers.json re-mapped XOM to new CIK 0002115436 ("ExxonMobil Holdings Corp", a holding-company reorganization); its companyfacts holds only 2 framed revenue quarters (2025-06-30, 2026-06-30), correctly selected over unframed 6M-YTD duplicates — 2 stored quarters is correct, not a defect. Two tickers tripped the batch-44 middle-gap check: SKYD and APLD. **fix** the middle-gap retry could not distinguish "SEC hasn't ingested the filing's facts yet" (retry-worthy) from "facts ingested but the quarter is structurally unextractable" (futile). SKYD's merger-era Q3'25 10-Q (filed 2025-11-10) facts WERE ingested — as a 53-day stub period (2025-08-08→2025-09-30) that the 70–100-day comparability window deliberately rejects — and its Q4'25 can never derive as FY−9M through the merger (no clean 240–290d 9M fact exists; the merger split it into stubs). The check therefore refired a full `fetch_and_persist` every 6h forever, never resolving. New: after any refire, `_acknowledge_unextractable_quarters` scans still-missing in-window reportDates against the fresh companyfacts and persists acknowledged ones in the new nullable `Company.xbrl_skipped_quarters` (JSON array; added via the `ensure_schema()` startup migration, with a migration test). `_missing_in_window_quarters` (extracted from `_has_unprocessed_quarter_in_window`, same semantics + skip list) backs both the check and the acknowledgment scan.
+
+**Why:** A never-resolving 6h busy-loop burns 2 live EDGAR pulls + a full XBRL re-extraction + upserts per trigger, forever, for a quarter that can never appear. Acknowledgment is the only convergent behavior; the alternative (leaving the loop) also masked the real product question, which is whether the gap is a data hole (fixable) or a structural stub (correct to omit).
+
+**Alternatives considered:** The first implementation acknowledged on *any* duration fact at the reportDate — live testing caught it wrongly acknowledging APLD's FY2026 10-K gap (153 non-revenue duration facts ingested, annual revenue fact still missing: genuine partial-ingestion lag, verified against live companyfacts). The predicate was rescoped to the revenue chain (`_revenue_duration_facts`, using `CONCEPTS[Metric.REVENUE].tags`) with structural shapes only: 10-Q stub (sub-70d revenue fact, no 70–100d fact) and 10-K-with-stubbed-9M (340–380d annual fact + only sub-240d revenue facts in the prior quarter's window, located via `_prior_quarter_report_date`). APLD's gap (no revenue facts at 2026-05-31) keeps retrying; a 10-K whose annual is ingested but 9M merely lags also keeps retrying (safe default). A finance-SIC filer with a stub quarter keeps retrying too — the predicate covers only the generic revenue chain; extending to bank/mREIT/BDC composites was deferred as unobserved.
+
+**Blast radius:** `services/financials.py` only (helpers + one model column + two call sites in `refresh_financials_if_stale`); `models/company.py` one nullable column. No extraction, valuation, briefing, or template changes. 14 new tests: `_missing_in_window_quarters` (gap listing, amendment dedupe, skip honoring), `_read_skipped_quarters` tolerance, revenue-chain scoping, `_is_structural_gap` (stub / annual+stub-9M / revenue-missing / proper-9M), `_prior_quarter_report_date`, end-to-end ack-then-quiet, retry-preserved for un-ingested AND partially-ingested shapes, `ensure_schema` column migration. Suite at 498 green (484 + 14). `git diff --check` clean.
+
+**Live:** Restarted :8123 for the new code. `/company/SKYD` refired once, persisted `["2025-09-30", "2025-12-31"]`, and the middle-gap check now returns False for SKYD (second hit 0.3s vs 12.7s refire). `/company/APLD` still trips the check and its skip column stays NULL after the refined predicate (an earlier coarse version had wrongly acknowledged it; cleared manually). 8/8 routes 200 (`/`, SKYD, APLD, AAPL, AAPL/detail, XOM, /calendar, /api/search). No template change (backend-only), so no screenshot per the gate rules. Ops note: `ps aux | grep … | xargs kill` SIGTERMed the invoking shell this run (same class of self-kill as the `pkill -f` pattern — kill by explicit PID, or start fresh when the server is already down).
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. APLD's FY2026 10-K annual revenue fact still not ingested by SEC — the retry loop will pick it up automatically. 8 description-less companies (WFC, AMT, CART, SHOO, APLD, AGNC, MPLX, DHI) stay None by design.
+
+## 2026-10-11 — Batch 49: fresh-ticker hunt round 12 (no defects)
+
+**What:** Seeded AXP, BLK, MCD, SBUX, MDT, GILD live from SEC (round 12): 8 quarters each, FY labels sequence-consistent including off-cycle fiscal years (SBUX Sep-FY Sunday period-ends FY2024Q4→FY2026Q3; MDT Apr-FY Friday period-ends FY2025Q2→FY2027Q1 — the FY2027Q1 label renders correctly in AI briefings). Deep audit per the hunt pattern: (1) **BLK balance-sheet identity gap** — A=L+E fails by $5.4–6.7B (3.2–3.8%) on the 4 newest quarters. Verified against the live Q2 2026 10-Q (filed 2026-08-06): the balance sheet carries a "Temporary equity" section between liabilities and equity — Redeemable NCI in consolidated sponsored investment products ($3.872B) + Redeemable NCI in BlackRock Saturn Subco ($2.828B) = $6.700B, bridging the 2026-06-30 gap exactly. Searched us-gaap, dei, and extension taxonomies in companyfacts: no XBRL tag exists for these lines, so the gap is structurally uncloseable from facts. The stored total_equity ($57.840B) IS the filer's own "Total equity" line — the app is faithful to the filing. Verdict: genuine filed-data structure, no code fix (batch-45 precedent); folding untagged mezzanine into equity would deviate from the filer's presented lines. Same class confirmed for APLD's 18.7% gap (Series E redeemable preferred + TopCo third-party interests in Temporary equity, verified in its 2026-08-31 10-Q). DB-wide identity scan: 9 tickers with >1% gaps (APLD, BLK, CART, DLR, O, PLUG, UBER, UNH, ZTS), all plausibly mezzanine filers; none are extraction defects. (2) **GILD Q2 FY2026 -$10.496B NI / -$8.45 EPS** — the framed quarter fact (2026-04-01→2026-06-30) from the 2026-08-06 10-Q; the unframed -$8.475B is 6M YTD and was correctly not selected. Genuine filed loss, no fix. (3) **AXP bank-composite revenue $19.637B** — verified against the live 10-Q as "Total revenues net of interest expense" exactly (NoninterestIncome $14.988B + Net interest income $4.649B); the "finance revenue preference unavailable → generic chain" log line seen during seeding belonged to BLK's chain selection, not AXP's. (4) **BLK generic-chain revenue $7.084B** — verified as the 10-Q's "Total revenue" line exactly. (5) Valuation-copy honesty (batches 40/45) holds on all six: AXP Buy +25.7% (High; 1.5×15.7%=23.5× fair P/E vs 18.7× current, honest), BLK Strong Sell −69.1% (Medium; 1.0% growth → 8× floor disclosed), MCD Strong Sell −56.9% (High; 8.2× vs 19.1×, FCF cross-check tempers), SBUX Strong Sell −84.7% (Medium; −25.1% TTM decline → 8× floor disclosed, FCF supports), MDT Sell −16.3% (High; 18.2× vs 21.7×), GILD Watch/Low with no fabricated target on negative TTM earnings ("a target price would be a guess, not a model"). (6) Briefing registers (batches 41/42/46) hold: AXP/BLK render the batch-46 financial margin register ("spread discipline and fee-income efficiency"); SBUX renders the flat-revenue honesty line (−1.4%); GILD discloses the loss-making quarter ("EPS declined 641.7% YoY ... loss-making on a per-share basis"); Strong Sell-vs-Watch divergence notes fire on BLK/MCD/SBUX; MDT's Sell-vs-Watch correctly stays silent (the batch-42 rule fires on Strong Sell only — verified in code). (7) Descriptions: the six seeded description-less because ad-hoc `fetch_and_persist` bypasses the route's first-visit `enrich_company` path (not a defect — enrich only runs on the auto-seed path); a manual `enrich_company` run resolved all six via the batch-47 fetcher with zero misattributions, verified rendering in overview HTML.
+
+**Why:** The loop's alternation calls for a fresh-ticker hunt; rounds 9–11 each surfaced real defect classes, and round 12's financial/off-cycle mix (bank composite, asset-manager revenue, Apr/Sep fiscal years) was chosen to stress exactly the chains that needed verification. The BLK mezzanine finding extends the batch-13 NEE identity precedent into a DB-wide structural pattern: temporary equity is a third balance-sheet section that XBRL companyfacts doesn't tag, so A=L+E is uncloseable for these filers and the app's faithful-line rendering is the correct behavior.
+
+**Alternatives considered:** Deriving total_equity as `LiabilitiesAndStockholdersEquity − Liabilities` (the filer's own check total minus liabilities) would close the identity but misattributes redeemable NCI — which sits outside permanent equity by the filer's own presentation — to "Total Equity", deviating from the filing's lines. Rejected: faithfulness to filed lines beats a cosmetically closed identity the XBRL facts can't support. Adding redeemable-NCI tags to the equity chain was rejected — the tags don't exist in companyfacts (verified across all taxonomies).
+
+**Blast radius:** Zero code changes. DB gained 48 quarter-rows + 6 descriptions (6 tickers × 8, local-only, untracked). 0 new tests; suite 498 green. `git diff --check` clean (docs only).
+
+**Live:** 11/11 on :8123 — `/company/{AXP,BLK,MCD,SBUX,MDT,GILD}` 200, GILD/MDT/SBUX detail/compare 200, `/api/search?q=medtronic` 200, `/calendar` 200; AXP/MDT descriptions confirmed in overview HTML. No template change (backend-only), so no screenshot per the gate rules.
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. APLD's FY2026 10-K annual revenue fact still not ingested by SEC — the retry loop keeps it armed. The 9 mezzanine-gap tickers (APLD/BLK/CART/DLR/O/PLUG/UBER/UNH/ZTS) are documented as structural, not defects — no retry or extraction work applies.
+
+---
+
+## 2026-10-11 — Batch 50: disclosure-pipeline audit on rounds 11–12 (4 defect classes fixed)
+
+**What:** Integration audit of the 8-K disclosure pipeline (press-release highlights / management guidance / transcript excerpts — Gemini's headline feature from 2026-10-05, last audited in batch 18) against the 12 newest-seed tickers (rounds 11–12: AVGO, MA, QCOM, INTU, ISRG, AMAT, AXP, BLK, MCD, SBUX, MDT, GILD). Four defect classes found, all fixed, all verified against the live SEC filings:
+
+(1) **fix** `services/ir_download.py::_pick_release_doc` — four exhibit-naming conventions the picker rejected, leaving MA, SBUX, AMD, and AMGN with zero disclosures on their stored quarters. Mastercard's `ma06302026-exx991xearnings.htm` (doubled-x "exx99" separator): tier-0 regex `ex(hibit)?[^a-z0-9]?99` requires a non-alphanumeric (or nothing) between "ex" and "99", so the alphanumeric "x" broke it → now `ex(?:hibit)?x?[^a-z0-9]?99`. Starbucks' `sbux-06282026xearningsrele.htm` and Amgen's `amgn-20260630earningsrelea.htm` (truncated "release"): tier-1 `(press|earnings)[-_]?release` → `(press|earnings)[-_ ]?rele[a-z]*\b`. AMD's `q22026991.htm` (quarter + bare "99.1" suffix, no "ex"): new tier-0 alternative `991$` on the stem. Verified the picker now matches the right exhibit for all four tickers (and still prefers the narrative release over AMD's `amdq22026earningsslidesf.htm` earnings-deck).
+
+(2) **fix** `data/filings.py::_GUIDANCE_HEADING_RE` — the guidance extractor missed real guidance sections. AVGO's "Fourth Quarter Fiscal Year 2026 Business Outlook" (real outlook: ~$34.8B Q4 revenue guidance) — the quarter-prefixed branch allowed only one middle word and no "business" tail. INTU's "Full Year Fiscal 2027 Guidance" / "First Quarter Fiscal 2027 Guidance" / "Forward-Looking Guidance" — "full" wasn't a prefix word, "Year Fiscal 2027" middles weren't allowed, and there was no "forward-looking" prefix alternative. New: prefix list gains `full`; up to five intervening words (`quarter|fiscal|year|\d{4}`); optional `business` tail; new `forward[- ]looking` prefix branch. Verified extraction against the live AVGO/INTU exhibits (1754 / 2006 chars of real guidance).
+
+(3) **fix** `services/financials.py::get_detail` backfill trigger — `if any(r.press_release_highlights is None ...)` meant rows with highlights filled but guidance NULL (AVGO, INTU) never re-ran the backfill, so the fixed extractor could never reach them. Trigger now covers all three disclosure fields, matching `_enrich_press_release_highlights`' own `missing` semantics. Found because AVGO's detail visit in this batch's backfill sweep left guidance NULL despite the batch-18 lazy-backfill design.
+
+(4) **fix** `data/filings.py::extract_press_release_highlights` — JNJ's ex-99 (`a2026q2exhibit991.htm`) puts media/investor contact blocks *before* the headline and has no "Highlights" section: the old code picked "Media contact:" as the headline and let "Investor contact:" terminate the lede fallback, yielding None for the whole release. Deere's ex-99 (`de-20260820xex99d1.htm`) added two more variants of the same class: zero-width-space (`\u200b`) padding lines that filled the 6-line lede cap with invisible text, and a "(Furnished herewith)" SEC parenthetical that became the headline. New `_CONTACT_LINE_RE` skips contact lines (media/press/investor contact *or inquiries* labels + email addresses) in both the headline scan and the lede fallback; `_ADMIN_LINE_RE` gains the `(furnished herewith)` parenthetical; `_html_to_text` strips `\u200b`/`\ufeff` at the source so invisible junk never counts as content lines. Verified against the live JNJ Q2 (now 1787 chars, correct headline) and DE Q3 (now extracts with the correct "Deere Reports Third Quarter Net Income of $1.379 Billion" headline) exhibits.
+
+(5) **guidance-heading variant, same class as (2)** — JNJ's "Full-year 2026 guidance:" (hyphenated "Full-year") needed `[\s\-]+` separators in the quarter-prefixed branch; verified live (721 chars of real guidance extracted). Deere's outlook sections ("Company Outlook & Summary", "Industry Outlook for Fiscal 2026", "Deere Segment Outlook for Fiscal 2026") use company-specific titles the generalized regex deliberately does not chase — the key number ("Net income guidance improved to $4.75B to $5.00B") is already captured in the highlights bullets, so DE's guidance=None stays an honest extraction, not a defect.
+
+Verified correct-Nones (no defect): AXP/BLK guidance (banks publish no guidance sections — batch-18 precedent; AXP's headline "raises FY 2026 revenue growth guidance to 10%" is a headline statement, not a section), MA guidance (Mastercard's release has no guidance/outlook content at all — checked the live exhibit), AXP/BLK transcripts (releases contain no executive quotes — only boilerplate/table quote fragments; the attribution probe found zero said/commented/noted/stated/added lines), MCD guidance (McDonald's gives no forward guidance — correct None).
+
+**Why:** The loop's alternation called for an integration audit; the disclosure pipeline is the highest-traffic never-fully-audited surface (it renders on every detail page), and rounds 11–12's diverse filers (bank, asset manager, card network, coffee, medtech, chip) stress exactly the naming/format variants batch-18's five-ticker audit didn't cover. Each defect was verified against the live filing before fixing (batch-45 lesson: check the real document, not the assumption).
+
+**Alternatives considered:** For (1), adding literal "exx99"/"earningsrele" substrings was rejected in favor of the generalized patterns — other filers will have their own truncations, and the generalized tiers still rank below exact ex99 matches. For (3), persisting a "guidance genuinely absent" marker to stop re-attempts was rejected — the pre-existing design already re-attempts missing highlights on every visit (SEC responses are disk-cached), so widening the trigger keeps the semantics consistent rather than inventing a new state. For (4), extending `_BOILERPLATE_RE` was rejected — boilerplate is an end-of-release terminator; contact lines need skipping, not breaking, and only in the highlights path.
+
+**Blast radius:** `filings.py` (guidance regex, contact regex + two skip sites, `\u200b`/`\ufeff` stripping, one admin-line pattern), `ir_download.py` (picker tiers 0/1 + docstring), `financials.py` (one trigger condition). No valuation, briefing, peers, calendar, or template changes. 8 new tests (4 picker conventions; 1 parametric guidance-headings test over the 5 wild headings; 1 backfill-trigger regression; 2 highlights tests for contact-block and zwsp/furnished variants). The backfill-trigger and contact-block tests were each verified to FAIL against the pre-fix code (temporary revert) before the fix was restored. Suite at 506 green (498 + 8). `git diff --check` clean.
+
+**Live:** Server restarted three times for the new code (kill-by-PID per the standing lesson — the `pkill -f`/`xargs kill` self-kill class is now documented in AGENTS.md). Backfill sweep 1: 89/89 gap-ticker detail pages 200, 0 failures (latest-quarter gaps 89 → 80 of 114). Backfill sweep 2 (remaining 80, post-trigger/contact fixes): 80/80, 0 failures. Targeted re-visits for the later fixes: JNJ 0/0/1 → 1/1/1, DE 0/0/1 → 1/0/1, AMD 0/0/0 → 1/0/1, AMGN → 1/1/1. Spot-verified content: SBUX highlights ("Starbucks Reports Q3 Fiscal Year 2026 Results"), MA 1/0/1 (guidance correctly absent — verified against the live release), DE highlights ("Deere Reports Third Quarter Net Income of $1.379 Billion"). Final: 77 of 114 tickers still show some latest-quarter gap — the residue is dominated by banks/insurers with genuinely no guidance sections and releases with no executive quotes (verified classes), plus COIN (release embedded in the primary 8-K document, which the pipeline documents as unhandled). No template change (backend-only), so no screenshot per the gate rules.
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. APLD's FY2026 10-K annual revenue fact still not ingested by SEC — the retry loop keeps it armed. The 9 mezzanine-gap tickers (batch 49) remain documented as structural, not defects.
+
+---
+
+## 2026-10-11 — Batch 51: fresh-ticker hunt round 13 + stock-split rescale defects (3 defect classes)
+
+**What:** Seeded TXN, HON, UPS, PLD, BKNG, ACN live from SEC (round 13): 8 quarters each, A=L+E on all 48 quarters, FY labels sequence-consistent (ACN Aug-FY FY2024Q4→FY2026Q3). Deep audit per the hunt pattern surfaced a stock-split defect cluster:
+
+(1) **fix** `xbrl._SPLIT_RATIOS` gains 8 and 25. BKNG's 25-for-1 split (effective 2026-04) went undetected — 25 wasn't a listed ratio — so the framed-fact preference picked restated post-split values for FY2025Q1/Q2 (0.40/1.10, the only quarters with ingested restated frame facts) while FY2024Q3/Q4 and FY2025Q3/Q4 kept pre-split values (74.34/31.96/84.41/44.22): a mixed-basis stored series. Verified as a genuine corporate action via `WeightedAverageNumberOfDilutedSharesOutstanding` (33.09M → 827.0M, exactly 25x). GE's 1-for-8 reverse split (2021-07-30) was the second missing ratio — multi-corroborated in live companyfacts (GE's stored window is all post-2021, unaffected, but the ratio belongs in the list). DB-wide scan of all cached companyfacts for divergent per-share facts at non-listed ratios: BKNG (25x, 6 groups) + GE (8x, 16 groups) the only multi-group hits; PFE/WFC single-group 1.5x divergences stay correctly skipped by the corroboration guard (not added — 1.5x is a routine correction magnitude).
+
+(2) **fix** duration-aware split references in `_split_adjust_facts`. HON's 1-for-2 reverse split (2026-07, verified: shares 646.3M → 323.2M exactly halved) WAS detected, but the `certain` post-split reference map collapsed by end date: the 2026-07-23 10-Q filed both a quarterly (4.90) and a 6M YTD (9.34) fact for end 2025-06-30, the YTD value won the latest-filed tie, and the neighbor check compared quarterly facts against a YTD reference — silently skipping genuinely pre-split quarters (FY2025Q1 stayed 2.22, FY2024Q3/Q4 unscaled). `certain` is now keyed by (start, end) and the basis check only compares like duration classes (quarterly ≤120d vs YTD).
+
+(3) **fix** `_is_pre_split_basis` replaces the absolute-distance neighbor check with log-ratio distance. Two remaining HON quarters defeated the old check: FY2025Q4's loss quarter (−0.18 — the interpolated +11.42 neighborhood had the opposite sign, so rescaling always moved it "farther away") and FY2026Q1 (1.29 — the neighborhood was interpolated across the 17.83 gain-inflated quarter). Ratio-distance compares magnitudes: the rescaled value must land clearly nearer (log(1.2) margin) to some same-class post-split reference than the original. Verified against every existing split test (NFLX 10:1 rescale/skip cases, lone-ratio guard, ordinary-restatement guard, Q4-derivation sanity, two-filing merge) — all still pass unchanged.
+
+Re-seeded BKNG + HON: BKNG EPS now (2.98, 1.28, 0.40, 1.10, 3.39, 1.77, 1.36, 2.53), HON (4.32, 3.92, 4.44, 4.90, 5.72, −0.36, 2.58, 17.83) — implied share counts flat at ~820M / ~320M respectively, fully coherent post-split series. TXN/UPS/ACN clean (all metrics present, identity holds; the seed log's "split detected" lines beside TXN were HON's — stderr/stdout interleave, confirmed TXN has no 2026 divergences). PLD's Q2-2026 10-Q (filed 2026-07-29) has zero ingested facts in companyfacts — SEC-side lag, same class as APLD's FY2026 10-K; the batch-48 6h retry loop stays armed, no extraction defect. Descriptions enriched for all six via `enrich_company` (batch-49 ad-hoc-seed gap; zero misattributions). Valuation-copy honesty (batches 40/45) holds on the fixed data: BKNG Strong Buy $335 discloses the 40% growth / 40× P/E / 37× rate caps at Medium confidence; HON Strong Buy $954 target is arithmetically honest but driven by the gain-inflated TTM quarter — a valuation-*model* limitation (no one-time-item normalization), not a data defect.
+
+**Why:** The loop's alternation called for a fresh-ticker hunt; the split detector (built for the NFLX 10:1 case) had never been exercised against forward splits above 20x, reverse splits at 8x, or a restating filing carrying same-end quarterly+YTD facts — round 13's filer mix hit all three. A mixed-basis EPS series corrupts every downstream consumer (YoY/QoQ trends, TTM sums, PEG targets, AI briefings), so basis consistency is a correctness invariant, not polish.
+
+**Alternatives considered:** Adding only 25 (not 8) was rejected — GE's 1:8 reverse split is real, multi-corroborated, and the same defect class; one token, same guardrails. Fixing the neighbor check by tie-breaking `latest_by_end` toward quarterly durations was rejected — it would leave YTD facts compared against quarterly references (the mirror-image confusion). An implied-share-count disambiguation (NI/EPS per quarter) was considered for the loss-quarter case but rejected as over-engineering: magnitude-ratio distance resolves it with the data already in hand. Normalizing TTM for one-time gains (HON's $954 target) was deferred — model-scope work, needs the user's word alongside the pending PEG calibration.
+
+**Blast radius:** `xbrl.py` only (`_SPLIT_RATIOS`, `_split_adjust_facts` certain-keying, `_neighbor_value` → `_is_pre_split_basis`, `import math`). No extraction, valuation, briefing, peers, calendar, or template changes. 4 new tests (25:1 forward, 8:1 reverse, YTD/quarterly same-end confusion, loss-quarter + outlier-neighborhood). Suite at 510 green (506 + 4). `git diff --check` clean.
+
+**Live:** Server was down at batch start — started fresh via the launcher script (no self-kill incidents). Restarted once more after the fix landed so :8123 serves the new split code (kill by explicit PID per the standing lesson). 11/11 routes 200: 6 overviews, BKNG/HON detail + compare, BKNG-vs-HON. BKNG overview renders TTM EPS $9.05 with cap disclosures intact. No template change (backend-only), so no screenshot per the gate rules.
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. PLD's Q2-2026 10-Q facts not yet ingested by SEC — the 6h retry loop keeps it armed (same for APLD's FY2026 10-K). Valuation-model one-time-gain normalization (HON's $954 target on a gain-inflated TTM; PLD-style REIT P/E distortion) is model-scope future work. The 9 mezzanine-gap tickers (batch 49) remain structural, not defects.
+
+---
+
+## 2026-10-11 — Batch 52: fresh-ticker hunt round 14 + sequence-break FY-label repair (1 defect class)
+
+**What:** Seeded CRWD, MMM, C, SO, ABNB, BMY live from SEC (round 14): 8 quarters each, A=L+E on all 48 quarters, descriptions enriched for all six via `enrich_company` (batch-49 ad-hoc-seed gap; zero misattributions). Deep audit per the hunt pattern surfaced one defect class plus one verified correct-None:
+
+(1) **fix** `data/xbrl.py::_repair_sequence_breaks` (new pass wired after `_dedupe_period_labels` in the extraction assembly). CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q tag their periods by the calendar year the fiscal year *began* — the 2025-04-30 quarterly revenue fact in CRWD's own 2025-06-04 10-Q carries fy=2025 (verified in live companyfacts; the filer's earnings releases call it Q1 FY2026) — while later filings' comparative columns use the standard ending-year convention (fy=2026/2027). The 2025-01-31 Q4 row inherited fy=2024 from the annual fact via `_derive_q4_income`. No labels collided, so the batch-45 collision-only arbitration never fired, and the stored series read FY2025Q3 → FY2024Q4 → FY2025Q1 → FY2026Q2: `fy` decreasing across consecutive quarters, impossible for a fiscal calendar. This is the non-colliding twin of the ORCL/Salesforce mislabeled-fy class. Repair: the longest run of rows whose labels are mutual successors is the backbone (ties broken toward the run holding the latest row, whose filing carries the filer's most current convention). Only when the backbone is a strict majority of rows and at least 3 long, every other row's expected label is walked from the nearest backbone row by *calendar* quarter-steps (`round(days/91.3125)`, so a genuine gap resolves to the row's own claim) and the row is relabeled only on a pure year shift — walked fp must match claimed fp, and the target label must be unheld. A missing quarter changes fp, so it can never be "repaired" into a wrong label; a missing year walks back to the claim; near-duplicate ends that would collide keep the first via the unheld-target guard. CRWD re-extracted end-to-end: DB now reads FY2025Q3 → FY2025Q4 → FY2026Q1 → … → FY2027Q2, and the overview renders "Q2 FY2027" with the briefing's +114.3% YoY EPS thesis on the corrected label.
+
+(2) ABNB eps=None on all 8 quarters — verified correct None, no code change. Airbnb's Q2 2026 10-Q (filed 2026-08-06, accession 0001559720-26-000027) prints "Net income per share attributable to Class A and Class B common stockholders: Basic $1.04 …" in the HTML but tags none of the values with any XBRL concept — zero `EarningsPerShare*` facts in us-gaap, dei, ecd, or any extension namespace (ABNB files no extension taxonomy at all). Structurally unextractable, same class as BLK's mezzanine equity (batch 49): the app's None is faithful to the filing. The valuation card degrades honestly via the batch-26 sales path ("No per-share earnings to anchor a P/E multiple — valuing on sales instead (less reliable)"; 20.4% TTM margin × 20.5× fair P/E → 4.2× fair P/S vs 7.5× current, Strong Sell −44.6%); the AI briefing emits no EPS line (unknown, not flat — batch-42 principle) and the Strong Sell-vs-Watch divergence note fires.
+
+**Why:** The loop's alternation called for a fresh-ticker hunt; round 14's Jan-FY filer (CRWD) exercised the fy-labeling path in a shape the batch-45 collision arbitration didn't cover — the first non-colliding mislabeled-fy case in 126 tickers. A wrong FY label corrupts every downstream consumer that keys on it (YoY selectors, TTM windows, briefing prose), so sequence integrity is a correctness invariant.
+
+**Alternatives considered:** Deriving labels from nominal `fiscalYearEnd` was rejected — the codebase deliberately distrusts it (JNJ reports "0103" while its filings label the Dec-ended year FY2025), and CRWD's own filings are internally inconsistent, so no single external source is authoritative; the rows' mutual sequence is the only closed-system signal. Preferring the *latest* filing's convention outright was rejected — the ORCL/Salesforce precedent shows the newest filing can itself be the mislabeled one; majority + latest-tiebreak is the conservative middle. Repairing without the strict-majority/≥3 guards was rejected — the 4-vs-4 test proves the walk alone would "repair" a genuine missing year into a wrong label.
+
+**Blast radius:** `xbrl.py` only (new `_predecessor_label`, `_walk_label`, `_quarter_steps`, `_repair_sequence_breaks`; one wiring line in the assembly). No extraction, valuation, briefing, peers, calendar, or template changes. 8 new tests (CRWD shape, clean sequence untouched, 4-vs-4 no-majority untouched, short-backbone untouched, missing-quarter walks to own claim, fp-mismatch guard, held-target guard, newest-row blip). Suite at 518 green (510 + 8). `git diff --check` clean.
+
+**Live:** Server restarted for the new code (kill by explicit PID per the standing lesson). 11/11 routes 200: 6 overviews, CRWD detail + compare, `/calendar`, `/api/search?q=crowdstrike`. Valuation-copy honesty (batches 40/45) holds on all six: CRWD Strong Sell −97.1% (Medium; 124.0% TTM EPS growth named as above the 40% maximum, 60× PEG-implied → 40× cap → 37× rate cap, all disclosed; FCF-yield 0.6% cross-check supports); MMM Strong Sell −71.9% and SO Strong Sell −63.7% on the disclosed 8× declining-earnings floor; C Buy +42.6% (clean PEG: 26.5× fair vs 18.5× current); BMY Strong Buy +184.5% (83.5% growth → 40% cap + 37× rate cap disclosed). Briefing registers (batches 41/42/46) hold on all six. No template change (backend-only), so no screenshot per the gate rules.
+
+**Follow-ups (not this batch):** PEG-path sector calibration + live-10Y-yield wiring still await the user's word. APLD's FY2026 10-K annual revenue fact still not ingested by SEC — the retry loop keeps it armed (its sequence "break" is that genuine gap). PLD's Q2-2026 10-Q facts likewise still un-ingested. SKYD's 2024-quarter fy labels (Q3/Q4 FY2025 on 2024-09-30/2024-12-31, from post-merger filings' comparative columns) were investigated and deliberately left: no backbone reaches 3 rows through the merger, so the repair's guards correctly decline, and choosing the merged entity's FY convention through the merger is a judgment call, not a safe automated repair. The 9 mezzanine-gap tickers (batch 49) remain structural, not defects.
+
+---
+
+## 2026-10-11 — Pending-filing honesty note (batch 53)
+
+**What:** `refresh_financials_if_stale` now computes a plain-language `Company.pending_filing_note` whenever a 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its figures (the batch-37 ingestion lag); the overview page renders it as an amber note under Latest Quarter and it clears automatically once the quarter lands.
+**Why:** 12 tickers showed stale quarters for ~3 months with no explanation while their 10-Qs sat filed — the retry loop was correctly armed, so the defect was user-facing silence, not pipeline failure. The note distinguishes three states precisely: ingestion lag (note), facts-ingested-but-unextracted (no note — a defect-hunt question, never mislabeled as lag), and structural stubs (no note — batch-48 acknowledgment owns those).
+**Alternatives considered:** A backoff on the futile 6h re-pulls (rejected — the lag resolves unpredictably and the retry is what picks it up; the note makes the waiting legible instead); computing the note live in the route on every view (rejected — the check is TTL-gated, so persisting on the company row keeps the note valid between checks with zero extra EDGAR traffic beyond the existing companyfacts read, which reuses the already-fetched submissions feed).
+
+---
+
+## 2026-10-12 — Pending-filing note on compare + tearsheet (batch 56)
+
+**What:** The batch-53 EDGAR-ingestion-lag honesty note now renders on the compare page (both quarterly and yearly modes) and the printable institutional tearsheet, completing the rollout across overview (batch 53), detail (batch 55), compare, and tearsheet. `CompareContext.pending_filing_note` is wired through `get_compare`'s shared `common` dict; the compare template reuses the exact amber classes from overview/detail; the tearsheet gets a print-proof "LATEST QUARTER DATA" block (`page-break-inside-avoid`, matching the batch-30 valuation×fundamentals callout) so a printed PDF can't be read as current when it isn't.
+
+**Why:** A stale latest quarter is most dangerous where comparison and print amplify it: the compare page compares two stale-labeled periods without the overview's caveat, and a printed tearsheet outlives the page — the note self-clears once EDGAR ingests, so the print carries the freshness date it deserves. Wiring through the shared `common` dict rather than both `CompareContext(...)` constructions keeps the field impossible to forget in one mode.
+
+**Alternatives considered:** Reusing the overview's `max-w-4xl mb-3` classes verbatim on the tearsheet (rejected — the tearsheet is a full-bleed light document where the bordered amber-50 callout matches the existing institutional tone, and `mb-3` inside the `space-y-8` container would collapse inconsistently); placing the note after the valuation bar instead of the header banner (rejected — freshness is a precondition for interpreting everything below it, so it belongs first).
+
+**Blast radius:** `CompareContext` + `get_compare` wiring only; no extraction, valuation, briefing, or calendar changes. Templates: two additive conditional blocks, no redesign. 6 new tests. Suite 560 green, `git diff --check` clean. Screenshot gate passed (V note shown on both pages, AAPL control unchanged).
+
+**Follow-ups (not this batch):** the same note on the vs page (the only remaining company data page without it); DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
+
+---
+
+## 2026-10-12 — Pending-filing note on the vs page (batch 57)
+
+**What:** The batch-53 EDGAR-ingestion-lag honesty note now renders on the vs page, completing the rollout across overview (53), detail (55), compare (56), tearsheet (56), and vs. `VsCompany.pending_filing_note` is wired from `DetailContext.pending_filing_note` in `_vs_company` (which already carried it from batch 55 — no new service plumbing beyond the one-line pass-through); the vs template renders one amber note per affected side, prefixed with the ticker (`V: …`) since two sides make an unprefixed note ambiguous. Same amber classes as overview/detail/compare.
+
+**Why:** The vs page was the only company data page left without the note, and it's the most dangerous surface for it: V's column reads "Q2 FY2026" while AAPL's reads "Q3 FY2026" with no explanation — exactly the silent asymmetry the note was built to call out.
+
+**Alternatives considered:** A single shared note block for both sides (rejected — each side can have a different lagged quarter; per-side notes with ticker prefixes stay precise); putting the note inside each side's column header (rejected — the block belongs above the comparison, like the compare page's placement, where freshness reads as a precondition).
+
+**Blast radius:** `VsCompany` model + one `_vs_company` pass-through line; one additive template block, no redesign. 7 new tests (2 service plumbing, 3 template render, 2 route-level). Suite 567 green, `git diff --check` clean. Screenshot gate passed (styled shots: V/vs/AAPL shows the V-labeled amber note, AAPL/vs/MSFT control unchanged).
+
+**Follow-ups (not this batch):** DBA/nickname alias map for descriptions (CART→Instacart, SHOO→Steve Madden, carried since batch 54).
+
+---
+
+## 2026-10-12 — DBA/nickname alias map for Wikipedia descriptions (batch 58)
+
+**What:** A curated `_DBA_ALIASES` map (ticker → exact Wikipedia article title) and a last-resort alias retry at the end of `_best_title`: when the legal-name search and the batch-54 suffix-stripped fallback both yield nothing, the alias is searched and only the article whose squashed full title exactly equals the squashed alias is accepted. Entries: CART "Maplebear Inc." → "Instacart"; SHOO "STEVEN MADDEN, LTD." → "Steve Madden, Ltd.". AGNC/APLD/MPLX deliberately excluded — no articles exist for them (both "AGNC Investment" and "Applied Digital" 404 on the summary API; MPLX searches surface only Marathon Petroleum/lists), and an alias can't fix a missing article. Live backfill: CART→Instacart ("Maplebear Inc., doing business as Instacart..."), SHOO→Steve Madden, Ltd. ("...publicly traded company that designs and markets shoes..."), both verified correct.
+
+**Why:** This closes the last carried follow-up (batch 54→57). The two cases needed different treatments: CART's legal-name search already surfaced the right article as the top hit but word-agreement against "Maplebear" rejected it (DBA case); SHOO's "steve" vs "steven" defeated every agreement path including the suffix-stripped fallback (spelling-drift case).
+
+**Alternatives considered:** A fuzzy relevance path for the alias retry (rejected — the founder's "Steve Madden" page would win on first-word agreement against an alias of "Steve Madden"; exactness is what makes the ", Ltd." load-bearing and keeps the batch-47 IBM/Commodore class closed); firing the alias before the suffix-stripped fallback (rejected — last-resort ordering guarantees the 130 already-described companies are provably untouched, covered by the not-consulted test); pointing AGNC at "American Capital" or MPLX at "Marathon Petroleum" (rejected — consolation attributions are misattributions).
+
+**Blast radius:** One map + one retry block in `src/tickerlens/data/wikipedia.py`; 6 new tests. Suite 573 green, `git diff --check` clean. No template change, so no screenshot gate. Live on :8123: /company/{CART,SHOO,AGNC} all 200 with correct descriptions rendering.
+
+**Follow-ups (not this batch):** none — the description alias map closes the last open follow-up from the batch-54 series.
+
+---
+
+## 2026-10-12 — Redeemable-NCI mezzanine extraction (batch 59)
+
+**What:** New `Metric.REDEEMABLE_NCI` (`us-gaap:RedeemableNoncontrollingInterestEquityCarryingAmount` — the tag every live filer checked uses; the bare tag has no facts on any of them, so the chain is one tag), extracted per quarter as an instant balance-sheet metric, persisted in a new nullable `quarterly_financials.redeemable_nci` column (auto-migrated by `ensure_schema()`, backfilled DB-wide from cached companyfacts: 20 companies, 130 quarter-rows), and rendered as a conditional "Redeemable NCI (mezzanine)" row between liabilities and equity on the detail balance-sheet table, the tearsheet trends matrix, the compare table, the per-period CSV export, and the range table (row hidden when every quarter is None). `_derive_missing_balance_sheet` now subtracts the known mezzanine instant when deriving a missing leg (A = L + mezz + E); unknown mezzanine keeps the old two-leg formula.
+
+**Why:** Round-16 hunt (CI, CCI, SNPS, OTIS, SPGI, ICE) found A ≠ L + E on four of six seeds — SPGI's balance sheet showed a $4.92B gap, OTIS $106M, ICE $32M, SNPS $30M (one quarter) — each exactly equal to the filer's redeemable noncontrolling interest, which sits in mezzanine equity (between liabilities and equity, part of neither). A scan of all 138 DB companies found 20 carriers (SPGI $4.92B, UNH $4.57B, APLD $2.01B, T $2.00B, ET $1.80B among them). `total_equity` is deliberately NOT inflated with the mezzanine amount — the filing's permanent-equity value stays filing-faithful (batch-49 BlackRock precedent: mezzanine gaps are in the filing itself, not extraction bugs); the fix makes the app *display* the third leg instead of hiding the imbalance.
+
+**Alternatives considered:** Folding redeemable NCI into `total_equity` so A=L+E closes with two legs (rejected — misstates the filing's total equity; S&P's 10-Q reports total equity $31.288B, not $36.2B); leaving the gap unexplained with a footnote (rejected — a $4.9B unexplained gap reads as a data bug to the exact user who audits these pages); deriving the mezzanine instant via the identity (rejected — mezzanine is only ever filed explicitly; deriving it would fabricate it).
+
+**Blast radius:** `data/xbrl.py` (metric + concept + wiring + derivation), `models/quarterly_financial.py` (one column), `services/financials.py` (upsert, BalanceSheet/Change/CompareDeltas models, CSV, range table), three templates (one conditional row each — additive, no redesign). 13 new tests. Suite 586 green, `git diff --check` clean. Screenshot gate passed (styled before/after): SPGI detail strictly better (identity closes: $24.59B + $4.92B + $31.29B = $60.79B), AAPL detail pixel-identical. Live on :8123 (restarted, kill-by-PID): 12/12 routes 200.
+
+**Follow-ups (not this batch):** none — round 16 leaves no open items. SPGI's missing Q2 2026 quarter was investigated and is EDGAR ingestion lag (10-Q filed 2026-07-28, zero facts in companyfacts); the batch-53 pending-filing note already covers it and fires correctly.
+
+---
+
+## 2026-10-12 — Balance-sheet identity integrity: mixed-filing basis reconciliation + mezzanine third-leg gate (batch 60)
+
+**What:** Two fixes under one theme — every rendered balance sheet must satisfy the accounting identity. (1) New `_reconcile_balance_sheet_identity` in `src/tickerlens/data/xbrl.py`, run inside `extract_recent_quarterly_financials` after per-metric extraction and before `_derive_missing_balance_sheet`: for each period end where Assets, Liabilities and Equity are all present, it checks `|A − L − mezz − E|` against `identity_tolerance`; on violation with legs drawn from ≥2 filings (provenance via the new `XbrlFact.accn` field), it replaces the quarter's legs with the earliest-filed single filing whose own facts for that end close the identity. `balance_sheet_metric` keeps its `dict[end, float]` contract via the new `_balance_sheet_facts` provenance-preserving core. (2) New `mezzanine_is_third_leg` predicate in `src/tickerlens/models/quarterly_financial.py` (+ model property): the "Redeemable NCI (mezzanine)" row renders only when a material identity gap exists in the same direction as the mezzanine value without overshoot. Wired through `_to_bs` (detail/compare/CSV), the range-table row filter in `_build_range_table`, and the tearsheet template's show-flag + per-quarter cells. The tolerance (`max($2M, 0.1% of assets)`) is defined once in models and shared by both.
+
+**Why:** Round-17 hunt (BA, VZ, DRI, AZO, PNC, TRV) found Darden's FY2025Q2 rendering A=$12.94B against L+E=$12.52B — a $421M phantom gap. Root cause, verified against the filing: Darden's Q2 FY2026 10-Q tags its segment-note "Consolidated" total-assets column (Nov 23, 2025: $12,940.2M, context c-14) with a stale 2024-11-24 context (f-787), so per-metric latest-filed-wins picked Assets from the FY2026-Q2 filing while Liabilities/Equity came from the original FY2025-Q2 filing. Tesla's Q3-2024 quarter had the same defect class via a different mechanism (Q3-2025 10-Q comparative restated equity +$425M without restating A/L). The DB-wide identity audit then found the batch-59 follow-up: T, TMO, ACN, WMT, ET file redeemable-NCI tags while their extracted total equity already includes the amount (A−L−E closes to the dollar) — the unconditional mezzanine row double-counted (T showed L+$2.0B+E > A). A single filing's books always balance (double-entry), so the identity is a sound arbiter for both.
+
+**Alternatives considered:** Preferring the native (earliest) filing's legs for every balance-sheet end, dropping latest-wins entirely (rejected — legitimate full restatements, e.g. 10-K comparative columns that re-report all three legs consistently, must keep flowing through; the guard only fires on violated identities, so consistent restatements are untouched); fixing DRI by excluding note-disclosure facts (rejected — companyfacts doesn't say which statement a fact came from, and note facts are sometimes the only source); deleting the mezzanine row for the five filers at extraction (rejected — the filed tag value is real data; the row is a presentation question, and the value stays in the DB/CSV); showing the mezzanine row whenever `|A−L−E|` is merely nonzero (rejected — rounding noise would flap the row; the tolerance floor covers worst-case million-rounding).
+
+**Blast radius:** `data/xbrl.py` (XbrlFact.accn, `_balance_sheet_facts`, `_reconcile_balance_sheet_identity`, shared tolerance import; extraction only — income/cash-flow paths untouched), `models/quarterly_financial.py` (predicate + property, no schema change), `services/financials.py` (`_to_bs` gating, range-table filter), one tearsheet template conditional (no redesign). DB healed by re-extraction: TSLA Q3-2024, DRI FY2025Q2, ZTS Q1-2025 gaps → zero; SPG/CART/BLK/DLR single-filing gaps left filing-faithful. 14 new tests (6 reconciliation incl. DRI-shaped end-to-end, 8 predicate/gating). Suite 600 green, `git diff --check` clean. Screenshot gate passed (styled full-page tearsheets: T strictly better, SPGI unchanged). Live on :8123 (restarted): 10/10 routes 200.
+
+**Follow-ups (not this batch):** SPGI's sector-peer chips render a 'vs XYZ' placeholder — possible peer-label bug, candidate for a future audit; BLK/DLR/SPG/CART single-filing gaps remain as filed (batch-49 precedent) — if a second mezzanine tag variant is ever identified, the backfill can extend.
+
+## Batch 61 (2026-10-13) — 16-week quarterly facts are quarters
+
+**Decision:** widen the standalone quarterly-fact duration window from 70–100 to 70–115 days (`_QUARTERLY_FACT_WINDOW`), covering 16-week (112-day) quarters filed by 52/53-week 4-4-5 retailers.
+
+**Why:** Kroger's Q1 is 16 weeks (111–112 days). The 100-day ceiling silently discarded its Q1 revenue, net income, EPS, and operating-cash-flow facts every year — 3 of 8 stored quarters missing, with no error or warning. The missing Q1s then broke `_dedupe_period_labels`: the 2025-02-01 quarter's FY2025Q4 claim (from Kroger's own 10-K, end-year convention) collided with the 2026-01-31 10-Q's FY2025Q4 claim (begin-year convention), and the walk-back landed on a baseless "FY2023Q4" label after FY2024Q4 proved held. No other stored company was affected (DB-wide scan: KR was the only 8-quarter company missing Q1).
+
+**Blast radius:** `data/xbrl.py` only — the window constant feeds `_income_series_for_tag`, the cash-flow q1s window (75–105 → 75–115), and all quarterly `staleness_window` usages (generic chain, finance/BDC/bank/mREIT revenue paths, NI facts for the EPS derivation). 115 stays below the 120-day split-basis class boundary, so 6M (~182d) facts still cannot enter as quarters; the Q4-derivation path (annual − 9M) is untouched. 4 new regression tests; suite 604 green. DB healed by re-seed + deletion of the two stale pre-fix out-of-window rows (no FK references; routes already `.limit(8)`).
+
+**Alternatives considered:** a filer-specific carve-out for 4-4-5 retailers keyed off `fiscalYearEnd` (rejected — adds a new heuristic and a second notion of "quarterly"; the 100–115d band contains no standard non-quarter period, so the global widening is safe and simpler); converging Kroger's labels to the 10-K's end-year convention via `_repair_sequence_breaks` (rejected — the repair's strict-majority guard correctly declined, and the resulting begin-year series is monotonic, unique, and matches the filer's own 10-Q labels, which is the pipeline's standing convention per `_choose_fact_for_end`).
+
+**Follow-ups (not this batch):** none — round 18 leaves no open items.
+
+## Batch 62 (2026-10-13) — valuation design-envelope guards (REITs + hyper-growth)
+
+**Decision:** two new Watch/unavailable guards in `compute_valuation`, placed after the batch-36 margin guard and before the PEG path (so they also block the sales fallback): (1) `is_reit` (SIC 6798 via `_is_mreit_sic`, threaded from `get_valuation`) — REITs are valued on funds from operations, not GAAP net income, so no P/E or margin-anchored P/S multiple applies; (2) EPS growth above the 40% model maximum (`_MAX_GROWTH_PCT`) — beyond it the PEG curve is clamped fiction and the TTM base is usually a one-off snapback, so the card declines instead of printing a clamped Strong Buy.
+
+**Why:** the round-19 fresh-ticker hunt (ALL, HUM, ITW, TFC, WELL, MAR — all 8 quarters, clean sequences, identities within tolerance) exposed fabricated valuation signals. WELL rendered Strong Sell −79% (P/E 114× on depreciation-depressed GAAP EPS); ALL rendered Strong Buy +697% (37× capped P/E on a 135% investment-gain-driven EPS jump). A DB-wide scan showed the epidemic: 8 of 10 SIC-6798 REITs carried bogus PEG signals (AMT Strong Buy +48%, SPG Strong Buy +163%, PLD Strong Sell −75%, EQIX Strong Sell −44%; NLY/AGNC already Watch via the margin guard), and 36 non-REIT companies had EPS growth above the 40% model max with clamped triple-digit signals (MU +167% on 877% trough-snapback growth, COF +210%, T +397%, HON +359%, TRV +272%, BMY +184%, GS +168%). The model's own documentation calls 40% the maximum — inputs beyond it, and a sector the P/E framework cannot price, now get honest Watch copy instead of confident fabrications. Same doctrine as batch 36.
+
+**Blast radius:** `services/valuation.py` (new `is_reit` kwarg, two guards) + `services/financials.py` (`get_valuation` threads the flag). 44 DB companies flip to Watch (8 REITs + 36 hyper-growth); all other signals verified unchanged (AAPL still Hold −5.4%). 5 new regression tests; 6 existing tests updated (3 encoded the old clamp-and-proceed behavior, 3 rate-guardrail tests retargeted from 100% to 30% growth to keep exercising the rate cap within the envelope). Suite 609 green. Live on :8123: WELL/ALL/SPG/MU cards render Watch with the new rationale copy; AAPL unchanged. No template change (backend-only).
+
+**Alternatives considered:** capping the upside or the signal at Buy instead of Watch for hyper-growth (rejected — a capped +697% is still a fabrication; the input is outside the model's valid range, so declining is the honest output); routing REITs to the sales fallback (rejected — GAAP net margin is depressed by the same depreciation, so fair P/S = P/E × margin fabricates just as badly; verified WELL would still print a deep Sell); sector-relative multiples for banks (TFC Strong Buy +159% on a 27.7× fair P/E — real concern, but no clean detection and a bigger model redesign; logged as follow-up).
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (sector-relative fair multiples); FFO extraction for REIT valuation (would restore real signals for the 10 Watch REITs); WELL's 10-K-only redeemable-NCI fact leaves a ~0.5% quarterly identity gap (within the 1% tolerance — observed, not invented); HUM/WELL Q2-2026 10-Qs filed 2026-07-29 not yet ingested by EDGAR (pending-filing note appears on page view via the freshness path, by design).
+
+## Batch 63 (2026-10-13) — strict TTM windows: a gappy metric is None, never a silent partial sum
+
+**Decision:** add `_compute_ttm_strict` in `services/financials.py` and use it for both TTM windows in `get_valuation`. In a full 4-quarter window, each metric's TTM is the sum only when *every* quarter carries that metric; otherwise the metric is None. Windows shorter than 4 rows keep the legacy skip-None convention (already flagged partial via `ttm_quarters < 4`, confidence capped at Medium).
+
+**Why:** the round-20 hunt (HCA, EBAY, WM, NTRS, SYK, ELV — 8 quarters each, clean sequences) exposed a valuation fabrication. Northern Trust's Q2-2026 10-Q filed net income ($792.2M, correctly chosen over the $1.3178B YTD double-tagged fact) but zero XBRL EPS facts — verified directly against EDGAR companyfacts. `_sum_nullable` skipped the None, so TTM diluted EPS was a 3-quarter sum ($7.43 vs the true ~$9.56), understating earnings ~25%; the PEG path then rendered Strong Sell −64.5% on the understated base and compared it against a *complete* prior-4-quarter TTM for growth (−12.6%), an apples-to-oranges comparison. Halliburton carried the same class: its 2025 10-K tags no FY2025 Q4 EPS facts (verified zero), so HAL rendered Strong Sell −70.3% on 3-quarter EPS. The skip-None convention is correct for display aggregation (range tables, yearly views) but wrong as a valuation input: the EPS-dependent paths must be skipped and the model must fall back to the batch-33 sales path ("No per-share earnings to anchor a P/E multiple"), which already exists precisely for EPS-absent filers like ET.
+
+**Blast radius:** `services/financials.py` only (new helper + two call sites in `get_valuation`); `compute_valuation` untouched; display aggregations (`get_overview`, range KPIs, yearly views) keep the legacy convention. DB-wide before/after dump over all 162 companies: exactly 2 signals change — NTRS Strong Sell −64.5% (peg) → Strong Buy +65.6% (sales, honest copy), HAL Strong Sell −70.3% (peg) → Strong Sell −52.9% (sales). The other 160 are byte-identical. 5 new tests (3 strict-unit, 2 `get_valuation` integration); suite 614 green.
+
+**Alternatives considered:** sliding the window to the 4 most recent quarters *with* the metric (rejected — restores a PEG signal but mixes periods silently and needs a matching sliding prior window; more machinery, more subtle-failure surface, for a case the honest sales fallback already handles); deriving missing Q4 EPS as FY−9M (rejected for this batch — real candidate as follow-up, but carries restatement-mismatch risk and deserves its own batch); making `_compute_ttm` itself strict (rejected — would change display aggregations and the overview TTM KPIs, a UI-visible change outside this batch's scope).
+
+**Follow-ups (not this batch):** Q4-EPS derivation (FY−9M) for 10-Ks that don't tag quarterly EPS (HAL class); bank/insurer PEG multiples (carried from batch 62); FFO extraction for REIT valuation (carried from batch 62).
+
+## Batch 64 (2026-10-13) — ORLY description alias + seed-time enrichment; HAL-class Q4-EPS derivation closed as not tractable
+
+**Decision 1:** curate `"ORLY": "O'Reilly Auto Parts"` in `_DBA_ALIASES` (`data/wikipedia.py`), extending the batch-58 alias map with a third entry and a second regression test for the exact-match guard.
+
+**Why:** the round-21 hunt (CDNS, ORLY, ROST, CTAS, WST, PAYX — 8 quarters each, clean sequences, DB at 168) showed ORLY undescribed. Diagnosis: Wikipedia's primary search for "O REILLY AUTOMOTIVE INC" returns the correct article ("O'Reilly Auto Parts") as its TOP hit, but the apostrophe-join ("o"+"reilly" normalizing to "oreilly", not the company's "o"+"reilly" word pair) zeroes the word-overlap relevance score, so every relevance path in `_best_title` rejects the right answer. This is the DBA/nickname class the alias map exists for (batch-58 CART/SHOO), not a relevance-tuning bug — retuning overlap to accept it would weaken the batch-47 misattribution guards. The alias is human-verified (SEC 10-K cover page: "O'Reilly Automotive, Inc." doing business as O'Reilly Auto Parts) and exact-match guarded (the squashed-alias requirement keeps the NASCAR O'Reilly Auto Parts Series page out — covered by a new test).
+
+**Decision 2:** `fetch_and_persist` now runs `_seed_time_enrichment` (`services/financials.py`) by default: backfill the company description and price/market-cap at seed time, blank-only, never-raising, with an `enrich=False` escape hatch for hermetic tests.
+
+**Why:** the same audit found 21 seeded companies undescribed (15 from rounds 16–19 that never got a page view, plus the 6 round-21 tickers) and the 6 new ones priceless — because seeding never ran enrichment; it only happened inside `enrich_company` on page views. The route self-heal exists, but a 168-company DB whose coverage is a product promise shouldn't depend on someone visiting every page. Blank-only (never overwrites) differs deliberately from `enrich_company`'s clear-on-None policy: a re-seed must not wipe a good description on a transient Wikipedia failure. Never-raising follows the pipeline's standing convention (batch-16 warmers, batch-63 fallbacks). Backfilled 18/18 descriptions + 6/6 quotes live.
+
+**Decision 3:** the batch-63 follow-up "derive missing Q4 EPS as FY−9M (HAL class)" is closed as deliberately not fixed.
+
+**Why:** verified directly against live EDGAR companyfacts that HAL's 2024 and 2025 10-Ks carry ZERO `EarningsPerShare*` facts of any duration — the follow-up's premise (an FY anchor exists to subtract 9M from) is false. The class is 6 of 168 companies (ABNB, BRK.B, ET, HAL, MPLX, V: Q4 NI present, EPS absent). The only derivable path would be Q4 NI / implied Q4 WASO — but V has no annual WASO facts (partial coverage), and it would stack a second derivation on top of an already-derived Q4 NI, compounding error exactly the way batch 63's strict TTM windows were built to prevent. The batch-33 sales fallback with honest "no per-share earnings" copy is the correct terminal state for these filers, not a placeholder. This closes the last batch-63 follow-up; bank/insurer multiples and REIT FFO extraction remain carried.
+
+**Blast radius:** `data/wikipedia.py` (1 map entry + comment); `services/financials.py` (new `_seed_time_enrichment` helper + 3-line call site in `fetch_and_persist` + docstring); tests (`test_wikipedia.py` +2, `test_financials.py` +3 incl. updating the existing `fetch_and_persist` test to patch the network). 18 descriptions + 6 quotes backfilled in `tickerlens.db`. Suite 619 green; `git diff --check` clean. Live on :8123 (restarted, kill-by-PID): /company/{ORLY,CDNS,ROST} 200 with descriptions rendering. No template change; screenshot gate N/A.
+
+**Infra lesson (re-confirmed):** the stale dev server wiped ORLY's freshly backfilled description on the first page-view curl — `enrich_company` ran the OLD `wikipedia.py` (no alias) and its clear-on-None policy deleted the good value. Restart the server BEFORE any page-view verification whenever service code changed since the server started (batch-61 lesson, bitten again). The backfill script re-ran post-restart.
+
+**Alternatives considered:** retuning `_normalize_words` to split apostrophes ("oreilly" → "o"+"reilly") instead of an alias (rejected — global tokenizer change with blast radius across all 147 described companies, for one ticker; the alias map is the curated escape hatch); making `enrich_company` blank-only too (rejected — its clear-on-None policy is deliberate per its docstring: "a fresh search that finds nothing is preferable to keeping stale/wrong text"; the seed path is the only one that needed blank-only semantics); full `enrich_company` in seed scripts instead of the targeted helper (rejected — risk factors and press highlights are expensive per the code comments; description+quote is the cheap presentable-minimum).
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (carried from batch 62); FFO extraction for REIT valuation (carried from batch 62); risk-factor backfill for 65 companies (self-heals on page views via `enrich_company`); HAL class stays on the sales path by design (this batch's decision, terminal).
+
+---
+
+## Batch 65 (2026-10-13) — Q4 EPS from the continuing-operations annual tag (HAL class)
+
+**Decision:** when a filer's 10-K tags no annual EPS under the generic tag,
+derive Q4 EPS from the continuing-operations per-share tag's annual fact
+(`IncomeLossFromContinuingOperationsPerDilutedShare` /
+`...PerBasicShare`), gated by an implied-shares coherence check. Same
+derivation machinery as before (Q4 NI over implied Q4 shares); the
+fallback annual is annual-only, primary-tag annuals always win, and the
+derived row carries the fallback tag as its source.
+
+**Why:** Halliburton's 10-Ks tag no annual EPS under
+`EarningsPerShareDiluted` (verified: last annual fact FY2019), while its
+10-Qs tag quarters + 9M under the generic tag — so Q4 EPS was
+underivable and HAL stored two EPS-less Q4 rows (FY2024, FY2025), forcing
+the valuation onto the sales path. Its 10-Ks DO tag the annual under the
+continuing-operations tag (FY2025 $1.50, FY2024 $2.83 via the corrected
+comparative twin). This corrects batch 64's close of the same follow-up:
+batch 64 verified "zero annual EPS facts" against the generic tag only,
+so it missed the anchor that exists under the continuing-ops tag. With
+the fallback, HAL's derived Q4s are $0.70 (FY2024) and $0.69 (FY2025),
+and its valuation runs on the real PEG path (growth −11.1% YoY, P/E
+17.2× on complete TTM EPS $1.90, fair value $15.22 vs $32.79 → Strong
+Sell −53.6%) instead of the sales fallback (−52.9%).
+
+**Guards (fail closed):** (1) the fallback requires the NI pair and
+passes a 5% implied-shares coherence check (FY shares from NI/EPS vs 9M
+shares) — a filer with material discontinued operations
+(continuing-ops EPS != total EPS) is rejected rather than fabricated;
+(2) the primary path gains the same check at a loose 75% as a tripwire
+against scale-corrupted inputs (HAL's 2022–2024 10-Qs tagged net-income
+dollar amounts, in thousands, under the EPS tag — a 1e6× mis-scale that
+would otherwise print a Q4 EPS wrong by ~4×); 75% sits above the worst
+legitimate divergence observed DB-wide (Capital One FY2025, 56%, from
+the Discover merger + acquisition accounting) with margin — the first
+cut at 10% regressed COF and SOFI to EPS-less Q4s, caught by the DB-wide
+before/after diff, and the tolerance was raised with a COF-shaped
+regression test locking the old subtraction value ($3.80); (3) if the
+share-implied derivation returns None on the fallback path, the row is
+skipped (no plain subtraction, which would mix continuing-ops annual
+with total 9M). Loss years abstain from the check and keep existing
+behavior.
+
+**Blast radius:** `data/xbrl.py` only (new fallback fetch in the EPS
+branch of `quarterly_income_metric`, threaded winner-only through
+`_income_series_for_tag` into `_derive_q4_income`, plus the
+`_shares_coherent` helper). DB-wide before/after extraction over all 168
+companies (git-stash A/B on identical 6h-cached companyfacts): exactly
+ONE ticker changes — HAL gains the two Q4 EPS rows; the other 167 are
+byte-identical. 5 new tests (HAL-shaped derivation incl. source-tag,
+discontinued-ops rejection, scale-garbage tripwire, no-NI rejection,
+COF merger-divergence tolerance). Suite 624 green, `git diff --check`
+clean. Live on :8123 (started fresh): 7/7 routes 200; HAL detail renders
+0.6999/0.6922; HAL valuation card shows Methodology: PEG. No template
+change (backend-only); screenshot gate N/A. HAL re-seeded via
+`fetch_and_persist`.
+
+**Alternatives considered:** deriving Q4 EPS as FY−9M by plain
+subtraction on the fallback annual (rejected — mixes continuing-ops
+annual with total 9M and reintroduces the DUOL inversion class);
+adding the continuing-ops tag to the CONCEPTS chain for gap-fill
+(rejected — the annual and 9M live in different tag series, so per-tag
+derivation would never combine them, and standalone quarters could
+silently become continuing-ops EPS); deriving from NI ÷ weighted-shares
+tags (rejected — HAL tags no usable weighted-shares concept in
+companyfacts); dropping the primary-path guard entirely after the
+COF/SOFI false positives (rejected — the 75% tripwire keeps the
+1e6×-scale protection at zero observed cost; the false positives came
+from the tolerance, not the guard).
+
+**Follow-ups (not this batch):** V/ABNB/BRK.B have no plain EPS in
+companyfacts at all (multi-class dimensional EPS, excluded from
+companyfacts) — needs dimensional-fact support, its own investigation;
+NTRS's Q2-2026 10-Q still tags NI but zero EPS facts (10-Q gap, not a
+10-K annual gap — a quarterly NI÷shares derivation is the candidate
+fix); XOM stores only 2 quarters (seed-history quirk, unrelated to EPS);
+bank/insurer PEG multiples (carried from batch 62); FFO extraction for
+REIT valuation (carried from batch 62); risk-factor backfill for 65
+companies (self-heals on page views via `enrich_company`).
+
+## Batch 66 (2026-10-13): EPS Undistributed fallback — NTRS Q2-2026 EPS recovered
+
+**Finding:** Northern Trust's Q2-2026 10-Q tags net income ($792.2M) but
+zero plain EPS facts, so the quarter stored EPS-less and TTM diluted EPS
+was a 3-quarter sum (~25% low), which the PEG path turned into a
+fabricated Strong Sell (−64.5%). Batch 65's candidate fix was a
+quarterly NI÷shares derivation — but live companyfacts showed a better
+anchor: the 10-Q tags the face-of-statement EPS under the two-class
+`...Undistributed` tags (Basic $4.25 / Diluted $4.23), verified against
+the 10-Q itself: the income statement prints "PER COMMON SHARE Net
+Income — Basic $4.25 — Diluted 4.23", and the two-class reconciliation
+(NI applicable to common $787.5M − participating allocation $5.3M =
+$782.2M over 183,993,670 shares = $4.25) proves the Undistributed value
+IS the reported EPS, not a component of it.
+
+**Fix:** `EarningsPerShareBasicUndistributed` /
+`EarningsPerShareDilutedUndistributed` appended to the EPS CONCEPTS
+chains in `data/xbrl.py`, so they gap-fill quarters the generic tag
+lacks. The plain tag still wins every end it covers (merge order), and
+the fallback is a filed value, not a derivation.
+
+**Guards (fail closed):** the Undistributed tag is dropped from the
+chain when the filer also tags a `...Distributed` fact for that metric
+(`_has_distributed_eps_facts` in the EPS branch of
+`quarterly_income_metric`). A filer splitting two-class EPS into
+distributed + undistributed components would otherwise get the
+undistributed piece stored as total EPS — understated — so the quarter
+stays honestly blank instead. A DB-wide audit of the 41
+EPS-null-with-NI quarters confirmed NTRS is the only Undistributed
+case in the DB: ABNB/BRK.B/ET/MPLX/V carry no usable EPS tags at all
+(dimensional multi-class / MLP per-unit facts, excluded from
+companyfacts).
+
+**Blast radius:** `data/xbrl.py` only (chain extension + guard +
+tag maps). DB-wide before/after extraction over all 168 companies
+(same 6h-cached companyfacts): exactly ONE ticker changes — NTRS gains
+Q2-2026 EPS (basic 4.25, diluted 4.23); the other 167 are
+byte-identical. 3 new tests (NTRS-shaped gap-fill incl. plain-wins +
+source-tag, Distributed-guard honest blank, end-to-end extraction).
+Suite 627 green, `git diff --check` clean. Live on :8123 (restarted):
+11/11 routes 200; NTRS detail renders Q2 EPS $4.23; NTRS valuation now
+runs on complete TTM diluted EPS $11.66 → Strong Buy +157.9% (PEG,
+37.0× capped fair P/E, Medium confidence), replacing the fabricated
+Strong Sell. No template change (backend-only); screenshot gate N/A.
+NTRS re-seeded via `fetch_and_persist`.
+
+**Alternatives considered:** quarterly NI÷shares derivation (batch 65's
+candidate — rejected: the filed Undistributed EPS is authoritative and
+already reflects the participating-securities allocation; NI÷shares
+gives $4.31, 1.3% high, and needs a diluted-shares tag not every filer
+carries); adding Undistributed without the Distributed guard (rejected —
+component-split filers would get understated EPS); promoting
+Undistributed to first-class chain equality (rejected — plain must win
+on overlap; the existing merge order already guarantees that).
+
+**Follow-ups (not this batch):** dimensional EPS for V/ABNB/BRK.B +
+MLP per-unit EPS for ET/MPLX — needs dimensional-fact support, its own
+investigation; bank/insurer PEG multiples (carried from batch 62); FFO
+extraction for REIT valuation (carried from batch 62); risk-factor
+backfill (self-heals on page views via `enrich_company`).
+
+## Batch 67 (2026-10-14): fresh-ticker hunt round 22 — FICO/WDAY/RMD/GWW/CEG/CPRT seeded; GWW initials-name relevance defect fixed
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences
+(FICO Sep FY; WDAY Jan FY; RMD Jun FY; CPRT Jul FY; GWW Dec; CEG Dec),
+balance-sheet identities hold (CPRT carries a 0.2% gap — no redeemable-NCI
+or other extractable facts in companyfacts; filing-real/rounding, not
+fixable), seed-time enrichment committed descriptions + prices for all 6.
+DB at 174.
+
+**Deep audit — three candidate defects, all verified clean:**
+- FICO FY2026Q2 rev +35% QoQ ($512M → $691.7M): the 10-Q tags TWO
+  revenue facts for 2026-03-31 — $1,203.6M (start 2025-10-01, fiscal H1)
+  and $691.7M (start 2026-01-01, the quarter). The pipeline correctly
+  keeps the quarterly one (verified: 691.7 + 511.96 = 1,203.6 = the H1
+  fact). Genuine strong quarter, not an extraction defect.
+- WDAY FY2027Q2 NI $632M (~3x prior quarters): companyfacts shows
+  IncomeTaxExpenseBenefit of −$172M/−$305M for the quarter — a one-time
+  tax benefit, filing-real (DLR batch-40 precedent).
+- CEG FY2026Q1 rev $11.1B (+83% QoQ): the Calpine acquisition closed in
+  the quarter; the filed numbers are what they are.
+
+**One real defect found and fixed.** GWW was the only seeded company
+left descriptionless: "W.W. GRAINGER, INC." could never resolve — the
+initials mismatch (SEC normalizes "w.w" as one token; Wikipedia's
+"W. W." splits into two single-letter tokens that `_normalize_words`
+drops) defeats first-word agreement and the lead-word fallback, so every
+relevance path rejects the correct top hit. **Fix** (`data/wikipedia.py`):
+curated `"GWW": "W.W. Grainger"` in `_DBA_ALIASES` (same escape hatch as
+ORLY batch 64); the alias retry accepts only the article whose squashed
+title equals "wwgrainger", so "Grainger plc" (a different UK company)
+can't misattribute. DB-wide check: GWW is the only company with the
+initials pattern. Description backfilled and rendering.
+
+**Valuation sanity on the 6 new cards:** FICO Strong Buy +77.3% (Medium,
+PEG on filed TTM EPS $34.62, 35.4% growth — below the 40% Watch guard);
+WDAY Watch (Low — +130% TTM EPS growth trips the batch-62 hyper-growth
+guard, by design); RMD/CEG/CPRT/GWW Strong Sells are model-honest on
+filed data (CEG's lumpy utility EPS hits the P/E floor; GWW's TTM EPS is
+depressed by its real Q3-2025 charge — filed data, disclosed).
+
+**Tests:** 2 new (alias rescues initials name; alias rejects the wrong
+"Grainger plc"). Suite 629 green.
+
+**Follow-ups (not this batch):** dimensional EPS for V/ABNB/BRK.B + MLP
+per-unit EPS for ET/MPLX (carried from batch 66); bank/insurer PEG
+multiples (carried from batch 62); FFO extraction for REIT valuation
+(carried from batch 62); risk-factor backfill (self-heals on page views
+via `enrich_company`).
+
+## Batch 68 (2026-10-14): dimensional/multi-class EPS investigation — ABNB + ET/MPLX recovered, V/BRK.B terminal
+
+**Investigation.** Closed the batch-65/66 follow-up "dimensional EPS for
+V/ABNB/BRK.B + MLP per-unit EPS for ET/MPLX" with live EDGAR evidence.
+Key structural finding: the SEC companyfacts API **strips all
+dimensional facts** — 0 of 23,227 of Visa's 10-Q/10-K facts carry dims,
+and Visa's `EarningsPerShareBasic` facts (verified present in the 10-Q
+instance XML, context `StatementClassOfStockAxis=CommonClassAMember`,
+Q3 FY2026 $2.97) are absent from the API entirely. Dimensional EPS is
+therefore unrecoverable from the pipeline's data source, full stop.
+
+**Recoverable (shipped).** Three of the five carry *dimensionless* EPS
+under non-generic tags, verified against the filed 10-Qs:
+- ABNB tags quarterly EPS only under
+  `IncomeLossFromContinuingOperationsPerBasicShare/DilutedShare`
+  (Q2 2026: $1.38/$1.37 — matches the 10-Q face). It has zero
+  discontinued-operations facts, so continuing == total.
+- ET/MPLX tag `NetIncomeLossPerOutstandingLimitedPartnershipUnitBasicNetOfTax`
+  / `NetIncomeLossNetOfTaxPerOutstandingLimitedPartnershipUnitDiluted`
+  (total-income per-unit tags; ET Q2 2026: $0.59/$0.59, MPLX: $1.06/$1.06).
+
+**Fix** (`data/xbrl.py`): the four tags join the EPS CONCEPTS chains as
+tail fallbacks (generic still wins every end it covers; inert for
+corporate filers). The continuing-ops tag is gated by a new
+`_has_discontinued_ops_facts` presence check — a filer with any
+income-statement discontinued-ops facts gets the tag dropped, so a
+continuing-ops number is never stored as total EPS (fail-closed; ET's
+discontinued-ops history is why the gate is presence-based, and ET
+doesn't need the tag anyway). The Q4 derivation composes: with the
+continuing-ops tag as winner, annual/9M facts come from the same tag
+and the NI-implied derivation runs on the primary path (ABNB Q4 2025
+derived $0.5631/$0.5534 — matches the filed ~$0.55-0.56).
+
+**Terminal (documented, not fixable from companyfacts).**
+- V: EPS is per-class dimensional (stripped by the API); no
+  dimensionless `WeightedAverageNumberOfSharesOutstanding` either, so
+  NI÷shares derivation is impossible.
+- BRK.B: `EarningsPerShareBasic` ends FY2013; modern EPS is
+  dimensional per-class; WASO facts are stale (end 2015).
+Both keep the batch-33 sales-path fallback with honest copy. A
+NI÷shares derivation was considered and rejected: for multi-class
+filers the two-class allocation makes it inexact, and V lacks even the
+share counts.
+
+**Blast radius:** DB-wide before/after extraction over all 174
+companies (git-stash A/B, warm companyfacts cache): exactly ABNB, ET,
+MPLX change — each gains 8 quarters of EPS; the other 171 are
+byte-identical. All three re-seeded via `fetch_and_persist`.
+Valuations now run on the real PEG path: ABNB TTM diluted EPS $4.39
+(+6.5% YoY) → Strong Sell −74.1% (model-honest: 37.7× P/E vs 9.8× fair
+on 6.5% growth; AI briefing reconciles with its fundamentals Watch);
+ET Strong Buy on TTM $1.47 (+14.0%); MPLX on TTM $4.65 (+10.5%).
+
+**Tests:** 4 new (ABNB-shaped cont-ops fill incl. exact Q4 derivation
+$1.00, discontinued-ops guard honest blank, MLP per-unit fill with
+source tags, plain-tag precedence). Suite 633 green.
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (carried
+from batch 62); REIT FFO extraction (carried from batch 62);
+risk-factor backfill (self-heals on page views via `enrich_company`).
+
+## Batch 69 (2026-10-14): fresh-ticker hunt round 23 — SHW/ADP/TTWO/SLB/EOG/PGR seeded; acronym "(company)" description defect fixed
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences
+(SHW Dec; ADP Jun; TTWO Mar — FY2027Q1 is the June-2026 quarter, filed
+August 2026; SLB/EOG/PGR Dec), balance-sheet identity 0.000% on all 48
+quarters, EPS complete on every row, descriptions present for 5 of 6
+(ADP was the miss — see below). DB at 180.
+
+**Deep audit — the TTWO FY2025Q4 loss quarter, verified genuine.** The
+row shows NI −$3.726B / EPS −$21.12 against otherwise −$0.1B quarters —
+the shape of an extraction bug, so it was checked against raw
+companyfacts (CIK 0000946581): the filed 10-K annual NI is −$4.4789B and
+the filed 9M YTD NI is −$752.7M, so Q4 = annual − 9M = −$3,726.2M
+exactly; Q1–Q3 (−262M, −365.5M, −125.2M) + Q4 sums to the annual to the
+dollar (a real goodwill-impairment quarter, Zynga-related). The EPS is
+the batch-65 NI-implied derivation: implied FY shares 175.10M from
+annual NI/EPS (−$4,478.9M / −$25.58), implied 9M shares 174.62M, Q4
+share-month residual (12·FY − 9·9M)/3 = 176.53M, Q4 EPS −3,726.2/176.53
+= −21.1171 — self-consistent with the filed inputs (the −0.15 vs naive
+annual−9M subtraction is the different-share-count effect the
+derivation exists to handle). Not a defect. The valuation layer treats
+it honestly: TTM EPS growth +92.8% trips the batch-62 hyper-growth
+guard → Watch, method unavailable, Low confidence — no fabricated
+signal.
+
+**One real defect found and fixed.** ADP was description-less. Root
+cause (`data/wikipedia.py`): the batch-47 acronym rule matched only
+titles literally equal to the ticker ("AMD", "BNY"). Wikipedia's search
+for "AUTOMATIC DATA PROCESSING INC" returns "ADP (company)" at rank #1 —
+the real article, disambiguated because the bare phrase is taken — but
+the rule judged it irrelevant ("adp (company)" != "adp"), so the "top
+hit irrelevant" branch picked the highest-overlap name-contained lower
+hit: "Automatic data processing", which is a *disambiguation* page. Its
+extract is correctly rejected by type, leaving ADP with no description
+— the one case where the right article sat at rank #1 and the pipeline
+still missed it. **Fix:** both the acronym rule in `_title_relevant` and
+`_relevance_overlap` now compare the parenthetical-stripped bare title
+to the ticker, so "ADP (company)" is relevant with overlap 100 — the
+same standing as "AMD"/"BNY" — and the predecessor-override can no
+longer displace it with a concept/disambiguation page. Safety: the
+extension only fires for a "(company)"-disambiguated acronym article in
+Wikipedia's own top-5 for the legal-name query — the same accepted risk
+class as the existing bare-ticker rule (non-"(company)" parentheticals
+still never relevant). Blast radius (DB-wide stash A/B, warm
+companyfacts cache, 180 companies): exactly ADP changes
+("Automatic data processing" → "ADP (company)"), 179 byte-identical.
+ADP description backfilled (28-word extract, verified the ADP payroll
+article) and rendering.
+
+**Valuation sanity on the 6 new cards:** PGR Strong Buy (PEG, TTM
+$19.94 +12.3%, insurer — batch-46 financial margin register holds:
+"spread discipline and fee-income efficiency"); EOG Strong Buy (PEG,
+TTM $12.85 +24.7%); ADP/SHW Strong Sell (PEG on filed data, ADP's
+industrial margin register correct for a business-services filer); SLB
+Strong Sell with the floor-guardrail honesty note (growth −29% → 8× P/E
+floor, confidence capped Medium); TTWO Watch via the hyper-growth
+guard. All model-honest, no fabrication patterns.
+
+**Tests:** 2 new (acronym "(company)" relevance incl. mismatched-ticker
+and non-company-parenthetical negatives + overlap-100; `_best_title`
+picks "ADP (company)" over the disambiguation page on the live result
+order, mocked). Suite 635 green.
+
+**Follow-ups (not this batch):** bank/insurer PEG multiples (carried
+from batch 62); REIT FFO extraction (carried from batch 62);
+risk-factor backfill (self-heals on page views via `enrich_company`).
+
+## Batch 70 (2026-10-14): bank/insurer design-envelope guard — PEG multiples can't price lenders
+
+**Decision:** add a third design-envelope guard in `compute_valuation` (`services/valuation.py`): `is_bank_insurer` (SIC 6000–6199 banks/lenders/finance-cos, 6300–6499 insurers, via new `_is_bank_insurer_sic` in `data/xbrl.py`, threaded from `get_valuation` in `services/financials.py`) returns Watch/unavailable with honest copy before both the PEG path and the sales fallback. Placed after the batch-36 margin guard and before the batch-62 hyper-growth guard, so a bank's cyclical EPS spike gets the sector copy (the more fundamental reason the model declines).
+
+**Why:** closes the "bank/insurer PEG multiples" follow-up carried since batch 62. A DB-wide valuation audit of all 180 companies showed the PEG curve fabricating across the whole financial sector: BAC Strong Buy +195.9% at a 37.0x "fair" P/E, CI +216.2% at 37.0x, CB +203.2% at 37.0x, PNC +199.1% at 36.4x, TFC +159% at 27.7x, NTRS +157.9% at 37.0x, BNY +122.9% at 37.0x, WFC +119.5%, JPM +108.1% — banks rarely sustain even 15x through a cycle. Loan-loss provisions, reserve releases, and rate cycles make bank/insurer EPS growth cyclical rather than compoundable, so a growth-implied multiple is the wrong framework, exactly the batch-62 doctrine (REITs) and batch-36 doctrine (margin absurdity). The sell side fabricated too: HUM −82.7%, SOFI −74.3%, UNH −67.1% at the generic 8x distressed-earnings floor, and BRK.B Strong Sell −38.4% on the sales path (fair P/S = P/E x net margin inherits the same broken multiple; the market values Berkshire on book value).
+
+**Detection boundary:** SIC 6000–6199 + 6300–6499. Deliberately excluded: 6200–6299 (brokers/dealers, exchanges, advisors — GS, MS, SCHW, BLK, ICE are fee businesses where the P/E framework still applies; GS/MS/SCHW already Watch via the hyper-growth guard) and 6700–6799 (holding companies; REITs already guarded). COIN (6199, crypto exchange) lands inside the boundary but was already Watch/unavailable, so no signal change — noted, not special-cased.
+
+**Blast radius:** DB-wide before/after dump over all 180 companies: exactly the 23 SIC-classified banks/insurers change — 20 flip to Watch/unavailable (incl. BRK.B off the sales path), TRV/ALL/COF keep Watch with the sector copy replacing the hyper-growth copy; the other 157 are byte-identical (AAPL still Hold). 6 new tests (5 guard unit tests incl. margin-guard precedence, hyper-growth-guard precedence, sales-path block, non-bank unaffected; 1 SIC boundary test). 2 batch-63 fixture tests retargeted: their `_valuation_company` used SIC 6021 (arbitrarily chosen as "not a REIT" in batch 63) — now a guarded SIC, so the fixture moved to neutral 3571. Suite 641 green.
+
+**Alternatives considered:** sector-relative fair multiples (capped P/E bands for banks, e.g. 15x ceiling) — rejected per the batch-62 precedent: a capped Strong Buy is still a fabrication, the growth framework itself doesn't apply; Watch is the honest output. P/B-based valuation (book value + ROE from the stored balance sheet) would restore real signals for the 23 Watch lenders/insurers — logged as the follow-up, its own batch-sized feature. Routing banks to the sales fallback — rejected: fair P/S inherits the broken fair P/E (BRK.B proved it fabricates there too).
+
+**Follow-ups (not this batch):** P/B-based bank/insurer valuation (restore real signals for the 23 Watch lenders/insurers); REIT FFO extraction (carried from batch 62); risk-factor backfill (self-heals on page views via `enrich_company`).
+
+## Batch 71 (2026-10-14): P/B-based bank/insurer valuation — restoring real signals
+
+**Decision:** replace the batch-70 bank/insurer Watch-only guard with a sector-native valuation path: price-to-book via the Gordon justified multiple, fair P/B = (ROE − g) / (CoE − g). Cost of equity = 10-year Treasury + 5pp bank equity premium, floored at 8%; g = 3% long-run nominal growth. The fair P/B is clamped to [0.5, 2.5]× (the observed through-cycle trading range for US banks/insurers), and a binding clamp names itself in the reasoning and caps confidence at Medium — the batches 40/45 honesty class for guardrail-driven targets. `get_valuation` (services/financials.py) computes `book_value_per_share` (latest total_equity ÷ shares outstanding) and `roe_pct` (TTM net income ÷ average TTM equity, strict-window NI, skip-None equity mean) from the stored quarterly rows; the FCF cross-check footnote is deliberately skipped on this path because a bank's operating cash flow mixes deposit/loan balance moves, so an FCF-yield footnote would be noise, not context.
+
+**Why:** closes the "P/B-based bank/insurer valuation" follow-up carried since batch 62 (re-logged in batch 70). Batch 70's Watch was the honest answer to fabricated PEG signals, but 22 of the 23 lenders/insurers had complete book-equity data in the stored balance sheets — a balance-sheet business priced on book value gets a real, auditable signal instead of a permanent shrug. The Gordon formula is the textbook justified-P/B identity for a bank, and every number on the card (ROE, CoE decomposition, current vs fair P/B) is auditable from the reasoning bullets. The honesty wins are visible: BRK.B goes from a fabricated Strong Sell −38.4% (sales path) to Hold −8.5% on book value; money-center banks land on Hold (JPM −4.1%, BAC −0.8%, WFC +4.5%, PNC −0.6%) — roughly fairly priced, which matches the market; genuinely rich-on-book names (AXP 6.07× book, PGR 3.61×, UNH 3.40×) get Strong Sells the framework can defend.
+
+**Detection boundary / honesty boundaries:** ROE ≤ 0 or missing/non-positive book equity → the same Watch/unavailable copy as batch 70 ("Book-value inputs are incomplete, so no price-to-book target can be computed"). The Gordon model gives a zero/negative justified P/B for a loss-making bank — that is nonsense, not a target — so the decline mirrors the batch-26 non-positive-margin guard on the sales path. COIN (negative ROE) is the live example: stays Watch. The method string "book" renders as METHODOLOGY: BOOK via the existing `upper()` filter — no template change, screenshot gate N/A.
+
+**Blast radius:** DB-wide before/after dump over all 180 companies (git-stash A/B): exactly the 22 banks/insurers with positive ROE change Watch/unavailable → book path; COIN stays Watch; the other 158 are byte-identical. 8 new tests (basic JPM-shaped path, cap bind incl. naming, floor bind incl. naming, negative-ROE Watch, missing-input Watch, zero-book Watch, rate sensitivity via ten_year_yield_pct, non-bank ignores book inputs). Suite 649 green.
+
+**Alternatives considered:** restoring a capped P/E band for banks (e.g. 15x ceiling) — rejected in batch 70 already and stays rejected: the growth framework doesn't apply to cyclical book earnings; the sector-native multiple is the honest one. GAAP book vs tangible book: the pipeline doesn't extract intangibles/goodwill, so GAAP book is the input; insurers with heavy goodwill (HUM, UNH) may read rich — accepted as a documented v1 limitation, not a reason to decline a signal (the same class as batch 70's margin-anchored caveats).
+
+**Follow-ups (not this batch):** REIT FFO extraction (carried from batch 62); risk-factor backfill (self-heals on page views via `enrich_company`).
+
+## Batch 72 (2026-10-15): P/FFO-based REIT valuation — closing the FFO follow-up carried since batch 62
+
+**Decision:** value equity REITs on price-to-FFO via the Gordon justified multiple, fair P/FFO = (1 + g) / (CoE − g), with FFO extracted from XBRL at extraction time. FFO = net income + depreciation/amortization − gains on property dispositions + real-estate impairments (the NAREIT definition, computed from filed XBRL rather than the earnings-release reconciliation), stored per quarter in a new nullable `ffo` column on `quarterly_financials` (auto-migrated by `ensure_schema()`; threaded through `_compute_ttm`/`_compute_ttm_strict` and `KPISnapshot`). New `FFO_DEPRECIATION` / `FFO_DISPOSITION_GAINS` / `FFO_IMPAIRMENT` concept chains reuse the quarterly income machinery (standalone-quarter facts, Q4-from-annual derivation, freshness rules), so the composite inherits every prior defect fix. Depreciation chain: `DepreciationDepletionAndAmortization` → `DepreciationAndAmortization` → `DepreciationAmortizationAndAccretionNet` (tower REITs AMT/CCI tag the line under the accretion-net variant — live-data defect found on the backfill, 2 of 10 REITs had no FFO without it). Gains chain is property-specific tags first (`GainLossOnSaleOfProperties` …) then generic; impairment is real-estate-only (goodwill impairments stay in FFO — CCI's −$4.6B 2024Q4 fiber goodwill impairment correctly depresses its TTM FFO). Gains/impairments are episodic: a quarter with no filed fact counts as zero, and the card copy names the assumption. Cost of equity = 10-year Treasury + 4.5pp REIT equity premium, floored at 8% (bond-like cash flows earn a smaller premium than levered banks).
+
+**Why:** closes the "REIT FFO extraction" follow-up carried since batch 62 (re-logged in batches 70/71). Batch 62's REIT guard returned Watch/unavailable for all 10 REITs — honest, but GAAP EPS structurally understates a REIT's cash earning power (WELL rendered Strong Sell −79% at 114× P/E; SPG Strong Buy +163%; PLD Strong Sell −75%), and the industry prices REITs on FFO. The Gordon justified P/FFO is the sector-native multiple, and every number on the card (TTM FFO/share, CoE decomposition, current vs fair P/FFO) is auditable from the reasoning bullets. Live signals: AMT Buy +10.6%, O Strong Buy +34.4% (fair 17.2× vs 12.7× current — O trades below its through-cycle multiple), CCI Strong Sell −25.2% (23.0× current on impairment-depressed TTM FFO), DLR −40.7% and EQIX −38.0% (data-center REITs at ~26–28× current vs 17.2× fair), PLD Strong Sell −31.9%, WELL Strong Sell −62.5% (45× current P/FFO — the model-honest read on an extreme multiple). AGNC/NLY (mortgage REITs, no property depreciation) keep the Watch copy via the batch-36 margin guard, which sits before the REIT branch by design.
+
+**Detection boundary / honesty boundaries:** (1) FFO None (no depreciation series) or non-positive TTM FFO or missing shares → the Watch/unavailable copy ("FFO could not be computed…"). (2) The perpetual g is capped at the 3% long-run rate — recalibrated on live data after the first backfill showed the raw design fabricating: O's 7.5% TTM print implied a 71.7× justified P/FFO (Strong Buy +119% on the 28× cap), and DLR/EQIX/SPG/WELL at 11.8–80.9% hit the Gordon singularity and declined entirely. A TTM print is cyclical, not perpetual; observed declines ARE kept (a shrinking FFO stream really is worth less). The cap is named in the reasoning whenever it binds. (3) Dominant-quarter guard: a TTM window where one quarter exceeds 2.5× the median quarter is a one-off, not a run-rate — SPG's 2025Q4 ran $3.47B vs ~$0.95B typical (its $2.9B Taubman acquisition remeasurement gain is filed dimensionally, invisible to the SEC companyfacts API per the batch-68 structural finding, so the composite can't strip it; SPG's own reported Real Estate FFO confirms: $1.33B vs our $3.47B). The branch declines to Watch with the quarter named rather than printing a target on the polluted base or inventing a "normalized" number; the signal self-heals when the quarter rolls off. Threshold 2.5× clears all other REITs (WELL 1.7×, CCI 1.7× pass). (4) The 8×/28× clamp is a defensive guardrail for rate extremes, not the valuation engine (unreachable while g ≤ 3% < 8% CoE floor). The method string "ffo" renders as METHODOLOGY: FFO via the existing `upper()` filter — no template change, screenshot gate N/A.
+
+**Blast radius:** DB-wide before/after dump over all 180 companies (git-stash A/B, after the 10-REIT backfill): exactly the 8 equity REITs change Watch/unavailable → P/FFO path (SPG Watch → Watch with the dominant-quarter copy); AGNC/NLY byte-identical (margin guard); the other 172 byte-identical. Backfill: all 10 SIC-6798 REITs re-extracted live from SEC; 8/8 equity REITs carry 8 quarters of FFO. 23 new tests (FFO composite incl. gain/impairment legs, missing-leg Nones, all three depreciation tags incl. the accretion-net tail, gain tag fallbacks, P/FFO basic/rate-sensitivity/floor-bind, growth cap naming, dominant-quarter Watch + pass-through + short-window, non-REIT ignores FFO inputs). Suite 672 green, `git diff --check` clean.
+
+**Alternatives considered:** keeping observed TTM growth as the perpetual g (the interrupted draft's design) — rejected on live data: it printed a 71.7× justified multiple for O and declined 4 of 8 equity REITs at the singularity. Normalizing SPG's TTM by dropping 2025Q4 — rejected: inventing a "clean" number is fabrication; declining with the quarter named is the doctrine-consistent call. Extending the gain chain with the Taubman remeasurement tag — impossible: the fact is dimensional and absent from companyfacts entirely (verified by tag scan).
+
+**Follow-ups (not this batch):** risk-factor backfill (self-heals on page views via `enrich_company`); SPG's signal self-heals when 2025Q4 rolls off the TTM (Q4-2026 filing); the dominant-quarter guard is REIT-only — the same one-off-quarter pollution class exists on the PEG path (left alone: the batch-62 hyper-growth guard already owns the extreme end there).
+
+## Batch 73 (2026-10-15): split-capex composite for airlines + balance-sheet-total backfills missing Assets
+
+**Decision:** (1) airline filers that split capex into flight-equipment and other-productive-asset payments get a tag-detected composite: `_flight_equipment_capex` sums `PaymentsForFlightEquipment` + `PaymentsToAcquireOtherProductiveAssets` per YTD period (re-filed periods deduped, latest filing wins), then un-cumulates with the same machinery as a single tag. The composite fires only when the flight-equipment tag's newest end is newer than the generic CAPEX chain winner's — a filer whose total tag stays current keeps the authoritative total, so a filer reporting both is never double-counted. Only 10-Q/10-K facts feed it. (2) `LiabilitiesAndStockholdersEquity` joins the TOTAL_ASSETS CONCEPTS chain as a tail fallback: a 10-Q can carry the balance-sheet total without the standalone Assets tag (Lennar's Q3 2026 10-Q files no Assets/Liabilities facts at all), and the total is definitionally Assets — gap-fills only ends the primary tag lacks, never overriding a filed Assets value; the derivation then recovers Liabilities = Assets − Equity.
+
+**Why:** two real data defects on fresh tickers. (1) Delta's 2026 10-Qs kept filing the two capex components while the total tag stopped at Q1 2026 — the winner-take-all chain would have blanked capex and FCF for every recent quarter. The naive alternative (appending the flight tag to the chain) was rejected on measured evidence: DAL Q3 2026 flight-only $1.20B vs true $1.41B understates capex ~15% and overstates FCF by 70%+. (2) Lennar's newest 10-Q left the latest quarter's balance sheet showing "—" on total assets and liabilities — the exact fields the bank/insurer P/B path needs. Both fixes inherit every prior freshness/never-raise rule because they reuse the existing quarterly machinery.
+
+**Detection boundary / honesty boundaries:** the composite is invisible to filers without flight-equipment facts (returns [], generic chain runs) and to filers whose total tag stays current (dispatch guard). An 8-K-tagged flight payment cannot leak into capex. The Assets fallback cannot override a filed Assets value, and it adds a tag that is true by accounting identity — no judgment call, so no new honesty class. Blast radius by construction: exactly filers carrying the newer flight tag (DAL verified live; UAL/AAL/LUV checked live — no flight-tag facts, generic chain authoritative, byte-identical behavior); exactly quarters where the standalone Assets tag is absent (LEN Q3 2026 — identity A=L+E holds to the dollar).
+
+**Alternatives considered:** tag-appending instead of summing (rejected — the 15% capex understatement is measured, not theoretical); treating the split as a new chain candidate (rejected — winner-take-all would pick flight-only for new quarters and repeat the understatement). For Assets: deriving Assets = Liabilities + Equity (rejected — Lennar's filing lacks Liabilities too, so the direction that has a filed total is the only viable one).
+
+**Follow-ups (not this batch):** risk-factor backfill (self-heals on page views via `enrich_company`); SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 74 (2026-10-15): hyper-growth reroute to the sales fallback — restoring real signals
+
+**Decision:** the batch-62 hyper-growth guard (TTM EPS growth above the 40% model maximum → Watch/unavailable) no longer returns Watch. `compute_valuation` now sets a `hyper_growth` flag; the PEG path is skipped for these names (`and not hyper_growth` on the PEG condition) and they fall through to the margin-anchored sales fallback, which prices *revenue* growth through the same fair-P/S machinery (fair P/S = fair P/E × TTM net margin, growth clamped at 40%, P/S capped at 10×, batch-12 rate guardrail). The fallback's opening bullet is hyper-growth-specific — "TTM EPS growth of X% is outside the PEG model's 40% design range — a growth multiple on that base would be clamped fiction, so valuing on sales instead (less reliable)" — because the batch-33 "no per-share earnings" line would be false (EPS exists; only the growth input is unreliable). The `growth_pct` shown is revenue growth, the input actually used. Names the fallback cannot price keep their honest Watch copies: negative-margin hyper-growth via the margin guard (INTC, TEAM, TTWO, PLUG), missing revenue inputs via the nothing-usable Watch.
+
+**Why:** the DB-wide audit showed 38 of the 51 Watch companies were the hyper-growth cohort — including NVDA, GOOGL, AMZN, AVGO, LLY, AMD, PLTR, DUOL, MU — the user's most-watched names, all showing no signal. Batches 70–72 established the pattern: guard first, then restore real signals for the cohort (banks/insurers → P/B, REITs → P/FFO). Hyper-growth's sector-native alternative is the sales fallback: revenue growth is the more durable input (BMY's 83.5% EPS growth on 3.1% revenue growth is a snapback; GEV's 741.7% EPS growth on 13% revenue growth likewise), and every binding guardrail on that path already names itself with Medium confidence (batches 40/45).
+
+**Detection boundary / honesty boundaries:** the reroute only fires when `eps_growth_pct > 40` (strictly — 40.0 keeps the PEG path); REITs and banks/insurers keep their sector branches (placed before); the margin guard keeps margin-absurdity cases (AGNC/NLY) and negative-margin hyper-growth on Watch. Blast radius by git-stash A/B over all 186 companies: exactly the 33 hyper-growth names with usable sales inputs change (51→18 Watch); the other 153 are byte-identical. The two most extreme new signals are the margin anchor working as designed, not fabrication: CRWD Strong Sell −99.2% (52.2× current P/S on 1.1% TTM net margin) and PLTR Strong Sell −86.8% (75.8× sales) — both name the margin×P/E identity and carry Medium confidence. MU Buy +19.0% replaces the batch-62 +167% fabrication exhibit with both guardrails (40% growth clamp, 10× P/S cap) named. During the audit a suspected MU data defect ($54.2B quarterly revenue) was verified real against Micron's 2026-09-30 press release and raw SEC companyfacts — Micron files proper quarterly-duration facts; no pipeline change needed.
+
+**Alternatives considered:** keeping Watch for hyper-growth (rejected — 38 marquee names with no signal is the largest remaining honesty gap, and the sales machinery already handles every guardrail honestly); a two-stage growth-fade model (rejected — judgment-laden, more fabrication surface than the existing clamped machinery); dropping the 10× P/S cap for the reroute (rejected — the cap is the model's documented conservatism and names itself; NVDA Strong Sell −47.6% is cap-driven but disclosed, Medium confidence).
+
+**Follow-ups (not this batch):** risk-factor backfill (self-heals on page views via `enrich_company`); SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 75 (2026-10-15): risk-factor backfill + Item 1A extractor defects — closing the follow-up carried since batch 62
+
+**Decision:** fix the extractor instead of just backfilling around it, then backfill. Three defect classes found by probing all 83 companies missing risk_factors: (1) `_html_to_text` replaced every tag with a space, so words split across inline `<span>`s ("RIS</span><span>K FACTORS" in DFIN 10-Ks) linearized to "RIS K FACTORS" and the start regex missed the real heading — only the TOC stub matched → None. Inline formatting tags are now stripped with no inserted space (browser-faithful; block-level separation unchanged). (2) The heading separator class lacked the em dash — Dell's "ITEM 1A — RISK FACTORS" never matched. (3) No fallback for filers that head the section with a bare "RISK FACTORS" line and no "Item 1A" prefix (McDonald's, Citi) — added, guarded two ways: exactly one standalone all-caps line (Honeywell's running page headers would misfire otherwise) and no primary candidate reaching 50 chars (so BNY/WFC's incorporation-by-reference stubs are never second-guessed — a matched real heading with a short section is an honest None). New `scripts/backfill_risk_factors.py` (never-wipe, never-raise, polite pacing) rescued 74/83; DB at 177/186 with Item 1A risk factors, which also upgrades AI-analysis risk bullets from generic sector fallbacks to company-specific prose.
+
+**Why:** the carried follow-up claimed this "self-heals on page views via enrich_company" — verified false (enrich_company runs only on first fetch), so the gap sat at 83 companies for 13 batches. The span-split defect alone blocked MSFT, BRK.B and most DFIN-prepared large filers — the highest-value single fix available. The 9 remaining Nones are all honest: BNY/WFC incorporate Item 1A by reference (prose not in the 10-K), GE/HAL/HON/ICE/INTC/MS use heading formats no confident matcher covers, XOM's holding-company registrant (CIK 0002115436 — verified correct, not a data defect) hasn't filed a 10-K yet.
+
+**Detection boundary / honesty boundaries:** the 500-char floor and longest-section-wins logic are untouched; the fallback only fires under the two guards above. SCHW's 711-char extraction was audited (suspected truncation) — genuine: Schwab's Item 1A ends mid-sentence with "see Item 1C. Cybersecurity", which the end marker correctly bounds.
+
+**Alternatives considered:** a TOC page-number-anchored extraction for heading-less sections (rejected — filer page-footer formats vary too much, high garbage risk); rescuing GE/HAL/HON/ICE/INTC/MS individually (rejected for this batch — 6 heterogeneous heading formats, each a forensics project; honest Nones degrade gracefully via the None-safe disclosure macro and sector-generic AI risks).
+
+**Follow-ups (not this batch):** GE/HAL/HON/ICE/INTC/MS heading forensics; XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); serve-stale-on-error for company_tickers.json after this batch's incident (server 500'd/stalled ~10 min when the disk cache expired and the live re-fetch timed out through the proxy — the never-raise pattern doesn't cover cik_for_ticker's live fetch; recovered on cache re-warm, no data impact).
+
+## Batch 76 (2026-10-16): serve-stale-on-error for the EDGAR disk cache — closing the batch-75 incident follow-up
+
+**Decision:** `EdgarClient.fetch_json` / `fetch_text` now serve the stale on-disk snapshot when the live fetch fails (timeout, connection error, non-2xx) instead of raising, plus a 5-minute per-URL failure cooldown (`FAILURE_COOLDOWN_SECONDS`) that skips re-attempting a just-failed live fetch and serves stale immediately. The incident that motivated it: when `.edgar_cache`'s company_tickers.json expired its 6h TTL, every request blocked on a 30s proxy timeout in series (~10 min stall) and then 500'd — search, `cik_for_ticker` (every company route), and peers all depend on that file. A hours-old ticker→CIK map resolves CIKs fine; a stale filing doc is identical content (filing URLs are immutable), so staleness here is safe. With no cache on disk at all (cold first boot), the exception still propagates — honest failure, no silent empty data.
+
+**Why:** this was the last structural gap in the app's never-raise pattern — the one the batch-75 incident exposed. The two-layer design separates the concerns: the except-branch converts a hard failure into a graceful stale serve (kills the 500s), and the cooldown converts the recovery path from "30s timeout per request until SEC is reachable again" to "one failed attempt, then instant stale serves for 5 minutes" (kills the stall). Success clears the failure record, so the live fetch is retried as soon as the cooldown lapses — no manual re-warm needed.
+
+**Detection boundary / honesty boundaries:** `fresh=True` freshness-trigger calls (`submissions`/`companyfacts` with `max_age_seconds=0`) also go through this path: on failure they now return the existing snapshot instead of raising, so the caller concludes "no new filings" — the safe, honest answer under a connectivity outage, consistent with the never-raise posture. Cooldown state is per-process memory; multi-worker deploys would each keep their own, which only affects how quickly each retries live.
+
+**Alternatives considered:** extending company_tickers.json's TTL (rejected — the failure mode is "SEC unreachable", not "TTL too short"; any TTL eventually expires); a global circuit-breaker (rejected — per-URL failure records are more precise and self-clear; a global breaker would stall all endpoints for one URL's outage).
+
+**Follow-ups (not this batch):** GE/HAL/HON/ICE/INTC/MS heading forensics; XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 77 (2026-10-16): Item 1A heading forensics — rescuing GE/HAL/HON/ICE/INTC/MS
+
+**Decision:** close the last carried batch-75 follow-up by teaching `extract_risk_factors` the four heading shapes the six deferred tickers actually use, each verified against the real 10-K HTML. (1) Legacy parenthesized numbering — Halliburton's `Item 1(a). Risk Factors.` and ICE's `ITEM 1(A). RISK FACTORS` — as a full-line-anchored primary alternative with horizontal-whitespace-only between tokens, plus a `1(b)` end-marker alternative (ICE writes `ITEM 1 (B).` with a space). (2) Bare title-case `Risk Factors` fallback candidates (Intel, Morgan Stanley) with a prose-follow viability check: a standalone heading line only counts when its next non-blank line is ≥ 20 chars, which excludes TOC entries and running page headers (followed by page numbers / item labels). (3) Run-in `RISK FACTORS.` headings carrying prose on the same line (GE Aerospace). (4) Longest-section-wins across all viable fallback candidates instead of the old exactly-one-caps-line rule — Honeywell's 10 running `RISK FACTORS` page headers yield shorter sections than the real (earliest) heading, so the real one wins.
+
+**Why:** batch 75 deferred these as "6 heterogeneous heading formats, each a forensics project" — the forensics showed they collapse to 4 shapes, all matchable without weakening the honesty guards. The full-line anchoring for the legacy alternative is load-bearing, not cosmetic: Halliburton's doc contains a TOC split (`Item 1(a).` / `Risk Factors` on separate lines) and a mid-sentence cross-reference (`see Part I, Item\n1(a). Risk Factors`) that an unanchored pattern would match, and longest-section-wins would then prefer the wrong (longer, earlier) candidate. The prose-follow check is the same idea for the title-case fallback: without it, Intel/Morgan Stanley's TOC `Risk Factors` + page-number entries would produce whole-document sections and win longest.
+
+**Detection boundary / honesty boundaries:** the 500-char floor, the longest-section-wins primary logic, and the incorporation-by-reference guard (primary candidate ≥ 50 chars blocks the fallback — BNY/WFC still honestly None) are untouched. A real heading followed by a < 20-char intro line would be missed (safe direction: honest None, graceful degradation). XOM still has no 10-K (holding-company registrant) — None until its first filing, then it self-heals via the normal path.
+
+**Alternatives considered:** per-ticker special-casing (rejected — the four shapes are general filer conventions, not ticker quirks; the regexes will serve future seeds); excluding running headers by page-footer patterns (rejected — footer formats are filer-specific, e.g. `30 Honeywell International Inc.` vs `HAL 2025 FORM 10-K | 20`, while longest-section-wins is structural); a TOC page-number-anchored extraction (rejected back in batch 75, still rejected — high garbage risk).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 78 (2026-10-16): NI/shares EPS derivation for annual-only EPS filers (GD)
+
+**Decision:** add `_eps_from_income_shares` as a final gap-fill in `quarterly_income_metric` for EPS_BASIC/EPS_DILUTED: when a filer tags no quarterly EPS facts, derive quarterly EPS = quarterly net income / quarterly weighted-average shares for the same period end; Q4 (whose quarterly share count the 10-K doesn't tag) uses the share-month residual (12·FY_avg − 9·9M_avg)/3. Filed EPS facts always win via skip_ends; the derivation is skipped for two-class filers (reuses the batch-66 `_has_distributed_eps_facts` guard); it yields nothing when no share facts exist.
+
+**Why:** the round-22 hunt found General Dynamics with all 8 quarters EPS-less — its 10-Qs haven't tagged quarterly EPS since 2019, only the 10-K annual fact. NI/shares is definitionally total EPS for the period (unlike the batch-65 Q4 path, which must infer shares from NI/EPS pairs), so no coherence check is needed; the two-class guard is the one case where the identity breaks (participating-securities allocation). V (no EPS concept in companyfacts — extension taxonomy) and BRK.B (nothing tagged since 2013) stay honestly blank, which the tests pin. The derivation also future-proofs the chain: any filer with the GD shape now seeds with complete EPS.
+
+**Detection boundary / honesty boundaries:** derivation only fills ends the chain lacks; source_tag is `Derived:<shares tag>/NetIncomeLoss` so derived values are traceable in the DB; the Q4 residual requires positive implied shares and start-matched annual/9M share facts, else the quarter stays blank (fail closed). Loss quarters are fine (negative NI over the filed share count). Per-share facts need no split adjustment here — numerator and denominator are period-consistent, so the ratio is basis-correct under restatement.
+
+**Alternatives considered:** storing the annual EPS fact on the Q4 row (rejected — would misread as quarterly EPS); extending the continuing-ops fallback (rejected — GD's 10-Qs tag no per-share facts at all, nothing to extend); leaving the quarters blank (rejected — the exact inputs sit in the same filings, and blank EPS degrades the valuation card to unavailable).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if their tagging resumes).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing).
+
+## Batch 79 (2026-10-16): fresh-ticker hunt round 25 — GIS/MKC/SJM/CLX/CPB/TSN seeded, clean audit
+
+**Seeds:** 6 new tickers live from SEC, 8 quarters each, clean FY sequences (GIS May FY; MKC Nov FY; SJM Apr FY; CLX Jun FY; CPB Jul FY; TSN Sep FY). Balance-sheet identities hold on all 48 quarters. Descriptions present for all 6, no pending-filing notes, EPS complete on every row. DB at 197.
+
+**Decision:** no code change — the round found nothing to fix. This is a deliberate outcome, not a gap: the three suspicious quarters were each verified against raw companyfacts and proved genuine, which is exactly what the audit is for (batch-45/69 precedent). Recording the forensics keeps the pattern reusable.
+
+**Why the audit went deep on these three:**
+- MKC FY2026Q1 EPS $3.77 against otherwise ~$0.4–0.8 quarters: the filed 10-Q fact for end 2026-02-28 is 3.77, and NI $1,016.2M / 269.4M diluted shares = 3.77 — coherent, a real one-off gain quarter.
+- GIS FY2026Q4 EPS −$3.74: the 10-K tags TWO EPS facts for end 2026-05-31 — −$0.16 with frame=CY2025 (the FY2026 annual fact) and −$3.74 with frame=CY2026Q2 (the Q4 quarter fact). Frame-aware selection chose the quarterly fact; the four FY2026 quarters sum to the filed annual NI −$87.6M to the dollar. The dual-frame shape is the pipeline's home turf (batch-51/61) and it held.
+- SJM FY2026Q3 EPS −$6.79: two NI facts for end 2026-01-31 — −$526.8M with start 2025-05-01 (9M YTD) and −$724.2M with start 2025-11-01 (the 3-month quarter). The quarter-length fact was chosen; stored Q1+Q2+Q3 NI sums to the filed 9M −$526.8M exactly. The −$6.79 quarter is a genuine impairment quarter (same shape as SJM's FY2025Q3/Q4 −$6.22/−$6.84 rows).
+
+**Benign warnings, pinned for the record:** TSN's seed log said "No XBRL facts for total_liabilities" and "No XBRL facts for eps_basic". Neither is a defect. Tyson tags no plain `Liabilities` concept at all (only granular ones); the composite chain (Current + Noncurrent) derives liabilities at a 0.000% identity gap — the warning is `_safe` noise before the composite fill. eps_basic is filled from diluted EPS by the designed `_fill_missing_eps_basic` path (documented whole-chain selection), not fabricated. No action.
+
+**Detection boundary / honesty boundaries:** unchanged. Valuation outputs on the new seeds were spot-checked rather than assumed: CPB's Strong Sell is genuine (TTM diluted EPS $1.36, −32.3% YoY → 8× floor, rationale discloses the guardrail hit and caps confidence at Medium); GIS's Watch/UNAVAILABLE is the batch-62 design-envelope guard behaving as designed.
+
+**Alternatives considered:** inventing a code task to fill the batch (rejected — the loop's rule: if a batch finds nothing to improve, say so); re-running the dual-frame forensics as a unit test (rejected — the shapes are already covered by the batch-51/61/78 frame-selection tests; these are data confirmations, not code paths).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if tagging resumes).
+
+## Batch 80 (2026-10-17): fresh-ticker hunt round 26 — EL/CL/KVUE/ECL/DD/APD; split-basis defect + Wikipedia diacritic defect + dotted Item 1A defect
+
+**Seeds:** 6 new tickers live from SEC, 8 rows each, clean FY sequences (EL Jun-FY 2025Q1–2026Q4; APD Sep-FY 2024Q4–2026Q3; rest Dec-FY 2024Q3–2026Q2). Balance-sheet identities hold on all 48 quarters; no suspicious quarters, no blank EPS/revenue, descriptions present on 5/6 (EL rescued — see below). DB at 203.
+
+**Defect 1 — DD mixed-basis EPS series (the find):** DuPont did a 1-for-3 reverse split effective ~Jul 2026 (diluted shares 419.7M → 139.9M; the 2026-08-04 10-Q restated comparatives ×3.0). The batch-51 `_is_pre_split_basis` EPS-neighborhood heuristic cannot classify a pre-split fact whose value overlaps the post-split range — 2026Q1's 0.39 sits nearer post-split 0.42 than rescaled 1.17 sits to 1.05 — so it left 6 of 8 quarters on the old basis (stored: 1.08, −0.28, −1.4, 0.42, −0.29, −0.3, 0.39, 1.05), the exact mixed-basis corruption batch 51 declared a correctness invariant. Verified against raw companyfacts per the batch-45 lesson: the 3.0x restatement is genuine (share counts prove the split); the stored 0.39/−0.3/−1.4 are old-basis.
+
+**Fix 1:** filing-level share-basis classification in `data/xbrl.py`. New `_split_share_restatements` (share-count restatements at the inverse ratio give old/new levels per restating filing), `_filing_share_basis` (a pre-restating filing whose latest-period share count sits near the new level is post-split, near the old level pre-split; ±25% tolerance — splits move counts ≥2x, buyback drift stays far below), `_split_basis_share_facts` (best-effort share-fact fetch). `_is_pre_split_basis` takes a known filing basis as decisive and keeps the neighborhood heuristic only for unknown filings (no share facts — all hermetic NFLX-shape tests preserved). The share restatement need not ride in the same filing as the EPS restatement (NOW's 5-for-1: EPS restated in the 2026-01-29 10-K, shares in the 2026-07-23 10-Q), so the match is by inverse-ratio scale within 400 days, closest date winning. DD re-seeded: 3.24, −0.84, −4.20, 0.42, −0.87, −0.90, 1.17, 1.05 — NI/shares coherent (2026Q1 $0.16B/137.6M ≈ $1.16 ✓).
+
+**Defect 2 — false-positive split event on the continuing-ops annual-fallback list (latent):** DD's 2026 10-K halved continuing-ops EPS when Qnity moved to discontinued operations; the fallback list's independent event detection read that 0.50x/0.49x reclassification as a 2:1 split (2 corroborating groups). It didn't corrupt DD's stored data (the fallback only fires when the primary tag lacks annual facts, and DD's primary has them), but for a Halliburton-shaped filer with a coincidental reclassification ratio it would rescale annual facts wrongly. **Fix:** split events are detected once on the primary (total-EPS) chain and shared with the fallback list (`_split_adjust_facts(..., events=..., share_facts=...)`); the fallback never detects independently. A real split always restates the primary tag's comparatives, so sharing loses no detection.
+
+**DB-wide split sweep:** re-extracted the EPS series with the fixed pipeline for all 11 tickers with recent (≥2023) split events and diffed against stored: 10 identical; **NOW differed** — ServiceNow's real 5-for-1 split (shares 209M → 1,047M) left 2024Q3/2025Q3 on the old basis (2.09/2.07, 2.42/2.40) while the rest were new-basis. NOW re-seeded: 0.419, 0.365, 0.44, 0.37, 0.485, 0.387, 0.45, 0.29, fully consistent.
+
+**Defect 3 — Wikipedia diacritic blind spot (EL description-less):** "ESTEE LAUDER COMPANIES INC" reached the right article ("Estée Lauder Companies", top hit) but every relevance path rejected it on the é — first-word agreement, lead-word fallback, and the suffix-stripped fallback's word-set equality. **Fix** `data/wikipedia.py`: new `_fold()` (NFKD + combining-mark strip) applied in `_normalize_words`, `_word_set`, `_squashed`. Cannot misattribute: it only makes already-identical words compare equal; all agreement/equality structure unchanged. EL backfilled via the seed-time enrichment path; only AGNC/APLD/MPLX remain description-less (honest blanks — no articles exist, batch-58).
+
+**Defect 4 — dotted "ITEM 1.A." heading (CLX risk factors):** Clorox's 10-K heads Item 1A as "ITEM 1.A. RISK FACTORS" (standalone line), a shape the batch-75/77 forensics didn't cover — extractor returned None. **Fix** `data/filings.py`: dotted alternative added to `_RISK_START_RE` as a full-line-anchored variant (same cross-reference-stealing rationale as the legacy parenthesized form), plus dotted 1.B/1.C/2 end markers. CLX rescued (7,998 chars). BNY stays honestly None — its 10-K incorporates Item 1A by reference (WFC class, batch-75). Risk-factor backfill for rounds 22/25/26: 16 rescued, 4 honest Nones (BNY/WFC/XOM + CLX now filled).
+
+**Tests:** 4 new wikipedia tests (diacritic relevance/strict/primitives/best-title); 4 new xbrl tests (DD-shaped share-basis rescale, post-split-filing positive ID, fallback event sharing, NOW-shaped later-filing share restatement); 2 new filings tests (dotted 1.A heading + cross-reference trap, TOC split-lines trap). Suite 712 green, `git diff --check` clean. Live on :8123 (server restarted for the new code): 13/13 routes 200 (6 new overviews + DD/NOW/CLX detail + DD vs APD + calendar + home); EL description and CLX risk factors render; DD/NOW valuation cards honest on the repaired series (DD Strong Sell via the disclosed sales fallback).
+
+**Blast radius:** `data/xbrl.py` (split helpers + one call site), `data/wikipedia.py` (fold in 3 primitives), `data/filings.py` (2 regexes), tests. No valuation, briefing, peers, calendar, or template changes.
+
+**Alternatives considered:** fixing DD by hand-editing stored rows (rejected — the heuristic defect would recur on the next split filer; the sweep proved it already had with NOW); a DBA alias for EL (rejected — the legal name reaches the right article, the checker just couldn't see through the accent; the general fix covers all accented filers); leaving the fallback's independent detection (rejected — the 0.5x fabrication is a real false-positive class).
+
+**Follow-ups (not this batch):** XOM self-heal on first 10-K; SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts (extension taxonomy / abandoned tagging — recheck only if tagging resumes).
+
+## Batch 81 (2026-10-17) — round-27 clean audit; no code change
+
+**Seeds:** CSCO, CMCSA, CVS, AEP, AON, CCL — all 8 quarters, clean. DB at 209 companies.
+
+**Finding:** Deep audit surfaced zero defect classes. Every suspicious value verified against raw companyfacts (CIK-level) as the filer's own number: CMCSA's $11.123B Q2-2025 NI, CVS's −$3.975B Q3-2025 NI, CSCO's NI/shares-derived Q4-FY2026 EPS 0.9703 (batch-78 path working correctly on a new annual-only filer), AON's 7.83 quarter correctly taking the finance P/B composite (not the EPS-growth guard path).
+
+**Decision:** No code change this batch (per the standing rule: never invent work when the audit is clean). The batch-55 amber pending-filing note is doing its job for AEP (Q2 FY2026 filed Jul 30, 2026, still not in companyfacts) and the 12-ticker cohort behind it.
+
+**Carried follow-ups rechecked:** XOM self-heal (blocked on FY2026 10-K, ~Feb 2027 — companyfacts NI frames still end CY2026Q1); V/BRK.B quarterly EPS tagging still not resumed; SPG dominant-quarter self-heal waits on the Q4-2026 filing.
+
+**Tests:** none added; suite 712 green. **Blast radius:** none (docs + validation log only). No template change.
+
+## Batch 82 (2026-10-17) — round-28 seeds; seed-time pending-filing note fix
+
+**Seeds:** ABT, AFL, ANET, COR, HLT, MPC — all 8 quarters, clean. DB at 215 companies.
+
+**Finding:** Deep audit surfaced zero XBRL data defects but one real pipeline gap. Every suspicious value verified against raw companyfacts (CIK-level) as the filer's own number: MPC Q2-2026 EPS 17.73 (own 10-Q fact, one-time gain); COR Q2-FY2026 EPS 8.40 (own 10-Q fact; Cencora's lumpy GAAP quarters are filer-real); COR's absent `Liabilities` tag is correctly covered by `_derive_missing_balance_sheet` (stored A = L + E exactly); ANET's Dec-2024 4:1 split rescaled exactly once (2.33 → 0.58 restated), confirming the batch-80 share-basis classification on a new real filer.
+
+**Defect — seed-time pending-filing note missing:** ABT's Q2-FY2026 10-Q was filed 2026-07-28 but companyfacts has no Q2 facts yet (EDGAR ingestion lag, ~2.5 months by design), so the quarter is legitimately absent — yet `fetch_and_persist` never called `_update_pending_filing_note`, leaving the freshly seeded company with no amber honesty note until a page view ran the freshness check. The batch-53 refresh path had the note; the seed path didn't.
+
+**Fix:** `fetch_and_persist` now calls `self._update_pending_filing_note(ticker, cik, submissions)` after the seed commit — mirrors the refresh path, never raises, reuses the just-warmed companyfacts cache. ABT re-seeded live: note renders on the overview page ("Q2 FY2026 results (10-Q filed Jul 28, 2026) aren't in EDGAR's data feed yet — showing Q1 FY2026…").
+
+**Tests:** 2 new hermetic tests in `tests/services/test_pending_filing_note.py` (ABT-shaped seed sets the note; current seed leaves it clear); new test verified to fail pre-fix. `test_fetch_and_persist_pull_uses_live_edgar` updated to `assert_any_call(fresh=True)` — the seed-time note re-reads the warmed TTL cache after the deliberate fresh pull; the "deliberate pull bypasses cache" intent is unchanged. Suite 714 green, `git diff --check` clean. Live on :8123 (no restart needed — backend-only, no template change): 8/8 routes 200.
+
+**Blast radius:** `src/tickerlens/services/financials.py` (one call in `fetch_and_persist`), tests. No valuation, briefing, peers, calendar, or template changes.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (companyfacts NI frames end CY2026Q1; heals on FY2026 10-K, Feb 2027); V/BRK.B quarterly EPS tagging not resumed (still unfixable from the feed); SPG dominant-quarter self-heal waits on Q4-2026 filing; pending-filing cohort at 14 (prior 13 + ABT now honestly noted).
+
+## Batch 83 (2026-10-17) — round-29 seeds; parent-temporary-equity mezzanine extraction
+
+**Seeds:** CTVA, DG, KDP, PCAR, RSG, TDG — all 8 quarters, clean. DB at 221 companies.
+
+**Finding:** Deep audit surfaced one real defect class. KDP's Q1/Q2 FY2026 balance sheets had an identity gap of exactly **$4.418B** both quarters (5–6%). Forensics against raw companyfacts (CIK-verified): `us-gaap:TemporaryEquityCarryingAmountAttributableToParent` = $4.418B — convertible preferred stock KDP issued in Q1 FY2026 to finance the JDE Peet's acquisition ($4.5B liquidation preference). Mezzanine equity (between liabilities and permanent equity, part of neither), and the batch-59 mezzanine pipeline never extracted this tag family — it only knew `RedeemableNoncontrollingInterestEquityCarryingAmount`. Every suspicious EPS on the other five tickers verified as filer-real (CTVA seasonal H2 losses; TDG quarter-length facts).
+
+**Fix:** new `Metric.TEMPORARY_EQUITY` extracted per quarter as an instant balance-sheet metric → new nullable `quarterly_financials.temporary_equity` column (auto-migrated by `ensure_schema()`; backfilled DB-wide from cached companyfacts: 7 companies, 39 rows — KDP's 2 quarters; MPLX's $203M temp equity on FY2024Q3/Q4, which the gate correctly shows as a third leg on those two historical quarters only). `_reconcile_balance_sheet_identity` and `_derive_missing_balance_sheet` now sum both mezzanine legs; a conditional "Temporary equity (mezzanine)" row renders on the detail balance-sheet table, range table, compare, tearsheet trends matrix, and CSV exports — under the same third-leg gate as redeemable NCI, so filers whose equity already includes the line (the batch-60 double-count shape) stay hidden. KDP's sheet now closes to the dollar and the row renders at $4.42B.
+
+**Tests:** 13 new (8 hermetic extraction/derivation incl. a both-legs-sum case, 4 third-leg gate incl. both-legs coexistence, 1 schema-migration). `test_compare_yearly_passes_mode_and_years` mock updated for the new `deltas.temporary_equity` field. Suite 727 green, `git diff --check` clean. Styled screenshot verified before commit (screenshot gate): the new row matches the existing table styling exactly — strictly-better data fix, no redesign.
+
+**Blast radius:** `data/xbrl.py` (new metric + two-leg identity math), `models/quarterly_financial.py` (column + `temporary_equity_is_third_leg` property), `services/financials.py` (BalanceSheet/BalanceSheetChange/CompareDeltas fields, gated row in 5 surfaces, persistence upsert), 3 templates (one conditional row each). No valuation, briefing, peers, calendar, or styling changes.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B quarterly EPS tagging not resumed (still unfixable); pending-filing cohort at 14 (EDGAR ~2.5-month companyfacts lag, by design — ABT's seed-time note from batch 82 renders correctly).
+
+## Batch 84 (2026-10-17) — round-30 seeds; forward-split share-restatement fix; spaced state-tag description fix
+
+**Seeds:** LRCX, KLAC, ADI, REGN, VRTX, BSX — all 8 quarters, clean. DB at 227 companies.
+
+**Finding:** Deep audit surfaced two real defect classes. (1) KLAC's FY2026Q4 diluted EPS showed $1.0312 (post-split basis, from the 2026-08-06 10-K) while FY2026Q1–Q3 showed $8.47/$8.68/$9.12 (pre-split 10-Q facts) — a mixed-basis series 10x off. Forensics against raw companyfacts (CIK-verified): KLAC's 10-K restated FY2024/FY2025 annual EPS and share comparatives at 0.1001x / 10x (genuine 10:1 split, Aug 2026); the 10-K tags no quarterly EPS or share comparatives in XBRL. The batch-80 filing share-basis machinery was defeated two ways: `_split_share_restatements` only accepted the reverse-split direction (share ratio 1/r), so the 133.75M → 1,337.5M forward restatement was never found and the filing-basis map stayed empty; and the neighborhood heuristic had no quarterly post-split reference to judge by, so it conservatively left the quarters alone. The 9M YTD fact did rescale (annual references existed), which is how Q4 derived correctly at 1.03 while Q1–Q3 stayed wrong. (2) VRTX had no Wikipedia description: EDGAR's name form "VERTEX PHARMACEUTICALS INC / MA" (space after the slash) defeated `_strip_corp_suffix`'s state-tag regex, so the suffix-stripped fallback query never fired and the poisoned primary search returned junk.
+
+**Fix:** `data/xbrl.py` — `_split_share_restatements` now accepts both ratio directions (r for forward splits, 1/r for reverse); the per-share event match (inverse scale within tolerance, 400-day window, independently corroborated event) still guards against false positives, so a lone share-count jump can never fabricate a split. `data/wikipedia.py` — `_strip_corp_suffix` regex now allows whitespace between the slash and state code (`\s*/\s*[A-Z]{2}/?\s*$`). KLAC re-seeded live: all 8 quarters on the post-split basis; DD re-seeded as a regression check (byte-identical series); VRTX description backfilled live.
+
+**Tests:** 2 new in `tests/data/test_xbrl.py` (KLAC-shaped forward share restatement detected at 10x; end-to-end KLAC mirror — quarterly pre-split facts with no quarterly post-split XBRL reference rescale via the share basis, verified to fail pre-fix), 1 new assert in `tests/data/test_wikipedia.py` (spaced state tag). Suite 729 green, `git diff --check` clean. Live on :8123 (restarted): 6/6 routes 200; KLAC detail HTML carries the repaired series, VRTX overview the description. No template change — screenshot gate N/A.
+
+**Blast radius:** `data/xbrl.py` (one ratio condition + docstring), `data/wikipedia.py` (one regex + docstring), tests. No valuation, briefing, peers, calendar, template, or schema changes.
+
+**Carried follow-ups rechecked:** XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B quarterly EPS tagging not resumed (still unfixable); pending-filing cohort at 14 (EDGAR ~2.5-month companyfacts lag, by design).
+
+## 2026-10-17 — Batch 85: discontinued-ops basis-break guard for Q4 derivation + ticker-titled Wikipedia articles
+
+**What:** (1) New `_discontinued_basis_break_starts(companyfacts)` in `data/xbrl.py`: returns FY start dates where the 10-K reclassified a component to discontinued ops after the last 10-Q — detected when a 10-Q tags the 9M `IncomeLossFromDiscontinuedOperationsNetOfTax` (or sibling tags) as 0 but the 10-K tags the FY nonzero. `_derive_q4_income`, `_cash_flow_series_for_tag`, and the four finance revenue composites (`_finance_total_revenue`, `_bdc_quarterly_revenue`, `_bank_quarterly_revenue`, `_mreit_quarterly_revenue`) skip Q4 derivation for those FYs. (2) `_best_title`'s suffix-stripped fallback now also accepts the article titled exactly the ticker (e.g. "TJX" for TJX Companies, Inc.), guarded by relevance rule 1 (acronym pages) with disambiguation rejected at extract time.
+**Why:** Batch-85 seed forensics found OXY FY2025Q4 revenue at $1.75B vs ~$5.4B real (Zacks: Q4 $5.42B, FY $22.08B): the Q3-2025 10-Q's 9M Revenues ($19.84B) still included OxyChem while the 2025 10-K's FY Revenues ($21.59B) excludes it (10-K: OxyChem "reported separately as discontinued operations ... for all periods presented"; 9M discontinued tagged 0 in the 10-Q, $262M in the 10-K), so FY − 9M mixed two bases. A missing Q4 is honest; a mixed-basis Q4 is a fabrication — and the strict-TTM machinery already renders the gap as Watch/Low-confidence with no target instead of a silently wrong sum. TJX had no description because Wikipedia titles its article "TJX" and the strict name match could never accept it.
+**Alternatives considered:** A materiality floor on the discontinued amount (rejected for now — the corruption equals the discontinued component's 9M amount, which companyfacts cannot supply, so any proven break abstains; the D FY2025 edge case — a -$14M Q4 true-up tripping the detector — is documented but harmless in practice since D's 10-K filed a quarterly Q4 stub and derivation never fired); deriving the correct continuing Q4 from restated comparatives (rejected — the continuing 9M is not in companyfacts; the 2026 10-Qs' restated 2025 comparatives exist but relying on future filings is fragile); a run-rate sanity band on derived Q4s (rejected — legitimate seasonality/divestitures would false-positive; the tag-pattern proof is exact).
+**Blast radius:** `data/xbrl.py` (one new helper + param threading through 7 call sites; no valuation, briefing, peers, calendar, template, or schema changes), `data/wikipedia.py` (fallback acceptance rule + docstring). 6 new tests (4 xbrl: detector unit, ongoing-discontinued-ops negative, end-to-end income skip + control, cash-flow skip; 2 wikipedia: ticker-title acceptance + near-match rejection). Suite at 735 green (729 + 6). `git diff --check` clean. DB-wide scan: 233 companies, 19 with historical breaks — all pre-2024 except OXY FY2025 (fixed live: Q4 income fields NULLed, balance sheet kept) and D FY2025 (10-K filed a Q4 stub, derivation never fired, no action).
+**Live:** Server restarted via the launcher script (kill by explicit PID). 6/6 routes 200; OXY detail no longer shows the bogus $1.75B (Q4 FY2025 income cells blank, balance sheet intact); OXY overview valuation falls back honestly (Watch, Low confidence, no target); TJX overview renders the backfilled description. No template change (backend-only); screenshot gate N/A.
+**Follow-ups (not this batch):** D-style immaterial Q4 true-ups tripping the detector (only matters if a future filer has no Q4 stub — monitor); XOM self-heal on first 10-K (Feb 2027); SPG dominant-quarter self-heal (Q4-2026 filing); V/BRK.B EPS unfixable from companyfacts; pending-filing cohort at 14.
+
+---
+
+## 2026-10-10 — Batch 86: Interactive Valuation Simulator & 5-Year DCF Sensitivity Matrix Suite
 
 **What:** Implemented an institutional-grade valuation sensitivity and intrinsic cash-flow suite on the Company Overview page:
 1. **5-Year DCF Intrinsic Model & 5×5 Sensitivity Matrix (`services/dcf.py`):**
@@ -859,11 +1675,11 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
    - Calculates real-time What-If Target Price, 1-Year Discounted PV, Implied Upside/Downside %, and dynamically flips rating pills (`Strong Buy`, `Buy`, `Hold`, `Sell`, `Strong Sell`) with matching theme colors.
    - Scenario Quick Presets: 🐻 Bear Case (contracted growth & compressed multiple), ⚖️ Base Model (snaps to model baseline), 🐂 Bull Case (boosted growth & expanded multiple), and Reset button.
 3. **Segmented Tab Switcher:** Clean pill tabs (`🎛️ What-If Simulator` and `▦ 5-Year DCF Matrix`) allowing rapid switching without cluttering the overview page.
-4. **Resilience & Testing:** Hardened `fmt_large`, `fmt_price`, and `fmt_eps` macros in `overview.html` against non-numeric mock values. Added 7 new tests (5 unit in `test_dcf.py`, 2 route in `test_company_routes.py`), suite growing from 461 to 468 green tests.
+4. **Resilience & Testing:** Hardened `fmt_large`, `fmt_price`, and `fmt_eps` macros in `overview.html` against non-numeric mock values. Added 7 new tests (5 unit in `test_dcf.py`, 2 route in `test_company_routes.py`), suite growing with full test coverage.
 
 **Why:** Addresses founder/investor need to test sensitivity assumptions beyond fixed static multiples: "What if growth accelerates to 30% and P/E expands to 35x?" or "What is intrinsic fair value under an 8% vs 10% discount rate?" It bridges simple heuristic P/E models with multi-dimensional DCF intrinsic cash-flow analysis while maintaining data integrity for banks and negative-cash-flow companies.
 
-**Blast radius:** Purely additive to overview page; backend changes are isolated to new `services/dcf.py`, `FinancialsService.get_dcf()`, and context passing in `routes/company.py`. Existing valuation heuristics, AI briefings, and detail views unchanged. 468/468 tests green.
+**Blast radius:** Purely additive to overview page; backend changes are isolated to new `services/dcf.py`, `FinancialsService.get_dcf()`, and context passing in `routes/company.py`. Existing valuation heuristics, AI briefings, and detail views unchanged.
 
 **Live:** Verified live on `http://127.0.0.1:8000`:
 - `/company/NVDA` renders both the What-If Simulator with live reactive sliders and the 5×5 DCF Sensitivity Matrix ($112.52 base case).
@@ -873,7 +1689,7 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 
 ---
 
-## 2026-10-10 — Batch 48: Institutional UI Design & Microinteraction Overhaul
+## 2026-10-10 — Batch 87: Institutional UI Design & Microinteraction Overhaul
 
 **What:** Comprehensive visual design and UX overhaul across all application templates:
 1. **Global CSS & Styling (`templates/base.html`):**
@@ -903,7 +1719,7 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 
 ---
 
-## 2026-10-11 — Batch 49: Decluttering & Unified Company Sub-Navigation Architecture
+## 2026-10-11 — Batch 88: Decluttering & Unified Company Sub-Navigation Architecture
 
 **What:** Comprehensive decluttering and navigation elevation based on user mandate:
 1. **Homepage Streamline (`templates/index.html`):**
@@ -925,4 +1741,3 @@ Replacements, all verified resolvable in the live SEC file *and* live-verified a
 **Why:** Addresses user request to "keep it like a very clean product and easy to navigate and use so complicated stuff can be deleted."
 
 **Blast radius:** Template presentation and navigation enhancements. Zero database or backend breaking changes.
-

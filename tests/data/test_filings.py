@@ -2,6 +2,7 @@ from datetime import date
 
 from tickerlens.data.filings import (
     AnnualFiling,
+    _html_to_text,
     extract_risk_factors,
     filing_doc_url,
     latest_annual_filing,
@@ -91,6 +92,90 @@ def test_extract_risk_factors_stops_at_cybersecurity_item_1c() -> None:
     result = extract_risk_factors(html)
     assert result is not None
     assert "security program" not in result
+
+
+def test_extract_risk_factors_rescues_span_split_heading() -> None:    # DFIN-prepared 10-Ks (MSFT, BRK.B, MCD, INTC, ...) split the real heading
+    # across adjacent <span>s with no whitespace: "RIS</span><span>K FACTORS".
+    # The old tag->space join corrupted this to "RIS K FACTORS", so the real
+    # heading never matched and only the TOC stub survived -> None.
+    html = f"""
+    <html><body>
+      <table>
+        <tr><td><a href="#item_1a_risk_factors">Risk Factors</a></td><td>14</td></tr>
+        <tr><td>Item 1B. Unresolved Staff Comments</td><td>29</td></tr>
+      </table>
+      <p id="item_1a_risk_factors"><span>ITEM 1A. RIS</span><span>K FACTORS</span></p>
+      <p>{_REAL_BODY}</p>
+      <p><span>ITEM 1B. UNRESOLVED STAFF COMMENTS</span></p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert result.strip() != "14"
+
+
+def test_extract_risk_factors_matches_em_dash_heading_separator() -> None:
+    # Dell's 10-K heads the section "ITEM 1A — RISK FACTORS" (em dash); the
+    # separator class must cover it or only the TOC stub matches -> None.
+    body = "We face material operational and financial risks. " * 20
+    html = (
+        "<body><table><tr><td>Item 1A. Risk Factors</td><td>16</td></tr></table>"
+        f"<p>ITEM 1A — RISK FACTORS</p><p>{body}</p>"
+        "<p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p></body>"
+    )
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "material operational and financial risks" in result
+
+
+def test_extract_risk_factors_falls_back_to_bare_caps_heading() -> None:
+    # McDonald's/Citi style: no "Item 1A" prefix anywhere, one standalone
+    # all-caps "RISK FACTORS" line heads the real section.
+    body = "Our business results are subject to a variety of risks. " * 20
+    html = (
+        "<body><table><tr><td>Item 1A Risk Factors</td><td>27</td></tr></table>"
+        f"<p>Some Company 2025 Annual Report 26</p><p>RISK FACTORS</p><p>{body}</p>"
+        "<p>Item 1B. Unresolved Staff Comments</p></body>"
+    )
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "subject to a variety of risks" in result
+
+
+def test_extract_risk_factors_ignores_caps_running_headers() -> None:
+    # Honeywell style: "RISK FACTORS" repeats as a running page header — the
+    # fallback must not fire on ambiguity.
+    body = "We face material operational and financial risks. " * 4  # < floor
+    headers = "<p>RISK FACTORS</p>".join(f"<p>page {i} filler</p>" for i in range(6))
+    html = f"<body>{headers}<p>{body}</p></body>"
+    assert extract_risk_factors(html) is None
+
+
+def test_extract_risk_factors_no_fallback_when_real_heading_is_cross_ref() -> None:
+    # BNY/WFC style: the real "ITEM 1A. RISK FACTORS" heading matched but the
+    # section is only an incorporation-by-reference stub — the fallback must
+    # not second-guess the document's own structure, even when the lone caps
+    # line heads a long section that would pass the floor on its own.
+    long_body = "See our annual report for the full discussion of risks. " * 20
+    html = (
+        "<body><p>ITEM 1A. RISK FACTORS</p>"
+        "<p>The information required by this Item is set forth in our Annual Report.</p>"
+        "<p>ITEM 1B. UNRESOLVED STAFF COMMENTS</p><p>None.</p>"
+        f"<p>RISK FACTORS</p><p>{long_body}</p>"
+        "<p>ITEM 2. PROPERTIES</p></body>"
+    )
+    assert extract_risk_factors(html) is None
+
+
+def test_html_to_text_concatenates_adjacent_inline_spans() -> None:
+    # Adjacent inline elements with no whitespace render concatenated in a
+    # browser; the linearizer must not invent a space between them.
+    assert _html_to_text("<p>RIS</span><span>K FACTORS</p>") == "RISK FACTORS"
+    # Genuine whitespace between elements is preserved.
+    assert _html_to_text("<p><span>Q3</span> <span>revenue</span></p>") == "Q3 revenue"
+    # Non-inline tags still separate content (table cells must not glue).
+    assert _html_to_text("<td>foo</td><td>bar</td>") == "foo bar"
 
 
 def test_latest_annual_filing_picks_most_recent_10k() -> None:
@@ -332,3 +417,244 @@ def test_extract_transcript_excerpts_finds_attribution_with_phrase_before_colon(
     assert excerpts is not None
     assert "Jamie Dimon" in excerpts
     assert "very strong results" in excerpts
+
+
+def test_extract_management_guidance_quarter_prefixed_long_headings() -> None:
+    # Batch-50: long-form quarter-prefixed headings seen in the wild.
+    for heading in (
+        "Fourth Quarter Fiscal Year 2026 Business Outlook",  # AVGO
+        "Full Year Fiscal 2027 Guidance",  # INTU
+        "First Quarter Fiscal 2027 Guidance",  # INTU
+        "Forward-Looking Guidance",  # INTU
+        "Full-year 2026 guidance:",  # JNJ
+    ):
+        html = f"""<html><body>
+        <h1>Acme Corp Q3 Results</h1>
+        <h2>{heading}</h2>
+        <p>Revenue is expected to be between $11.5 billion and $12.0 billion next quarter, with strong growth across all segments and continued momentum.</p>
+        <p>GAAP gross margin is expected to be approximately 45.0% on the strength of the product mix.</p>
+        <h2>Condensed Consolidated Statements of Operations</h2>
+        <p>Revenue: $10,000</p>
+        </body></html>"""
+        guidance = extract_management_guidance(html)
+        assert guidance is not None, heading
+        assert heading in guidance
+        assert "$11.5 billion" in guidance
+        assert "Condensed Consolidated" not in guidance
+
+
+def test_extract_press_release_highlights_skips_leading_contact_block() -> None:
+    # Batch-50: JNJ's ex-99 puts media/investor contacts before the headline and
+    # has no "Highlights" section. The old code picked "Media contact:" as the
+    # headline and let "Investor contact:" terminate the lede fallback, yielding
+    # None for the whole release.
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>a2026q2exhibit991.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>Media contact:</p><p>media-relations@its.jnj.com</p>
+    <p>Investor contact:</p><p>investor-relations@its.jnj.com</p>
+    <p>For immediate release</p>
+    <p>Johnson &amp; Johnson reports Q2 2026 results, raises 2026 outlook</p>
+    <p>• 2026 Second-Quarter reported sales growth of 6.6% to $25.3 billion with operational growth of 5.6% and adjusted operational growth of 7.1%.</p>
+    <p>• 2026 Second-Quarter earnings per share (EPS) of $2.27 and adjusted EPS of $2.90, reflecting strong operational performance across the portfolio.</p>
+    <p>• Strong operational performance results in the Company increasing 2026 guidance with estimated reported sales growth now expected at the high end.</p>
+    <p>New Brunswick, N.J. (July 15, 2026) – Johnson &amp; Johnson today announced results for second-quarter 2026, delivering another quarter of strong growth.</p>
+    <h2>About Johnson &amp; Johnson</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "Johnson & Johnson reports Q2 2026 results" in hl
+    assert "$25.3 billion" in hl
+    assert "media-relations@its.jnj.com" not in hl
+    assert "Media contact" not in hl
+    assert "About Johnson" not in hl
+
+
+def test_extract_highlights_ignores_zwsp_and_furnished_parenthetical() -> None:
+    # Batch-50: Deere's ex-99 pads sections with zero-width-space lines and
+    # opens with "(Furnished herewith)". The zwsp lines filled the 6-line lede
+    # cap with invisible text and the parenthetical became the headline,
+    # yielding None for the whole release.
+    zwsp = "​"
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>2</p><p>de-20260820xex99d1.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>(Furnished herewith)</p>
+    <p>{zwsp}</p><p>{zwsp}</p><p>{zwsp}</p>
+    <p>News Release</p>
+    <p>{zwsp}</p>
+    <p>Media Inquiries:</p><p>PublicRelations@JohnDeere.com</p>
+    <p>{zwsp}</p>
+    <p>Deere Reports Third Quarter Net Income of $1.379 Billion</p>
+    <p>● Disciplined execution drives stronger-than-expected results across the enterprise, with net sales and revenues of $12.018 billion for the quarter.</p>
+    <p>● Net income guidance improved to $4.75 billion to $5.00 billion for fiscal 2026, reflecting resilient demand in production agriculture.</p>
+    <p>MOLINE, Illinois (August 20, 2026) – Deere &amp; Company reported net income of $1.379 billion for the third quarter ended July 26, 2026.</p>
+    <p>● Production and precision agriculture net sales rose 12 percent on strong order books and improved factory efficiency across all major product lines.</p>
+    <p>● Small agriculture and turf net sales increased 4 percent as retail demand stabilized and dealer inventories reached healthier levels entering the season.</p>
+    <p>● Construction and forestry net sales grew 7 percent, supported by infrastructure spending and a recovering North American rental channel.</p>
+    <h2>About Deere</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "Deere Reports Third Quarter Net Income" in hl
+    assert "$4.75 billion to $5.00 billion" in hl
+    assert "Furnished herewith" not in hl
+    assert "Media Inquiries" not in hl
+    assert zwsp not in hl
+
+
+def test_extract_risk_factors_matches_legacy_parenthesized_item_1a() -> None:
+    # Halliburton style: legacy "Item 1(a)" numbering as a full heading line,
+    # closed below by "Item 1(b)". The doc also carries two traps that must not
+    # match: a TOC entry with "Item 1(a)." and "Risk Factors" on separate lines,
+    # and a mid-sentence cross-reference ("see Part I, Item 1(a). Risk Factors").
+    html = f"""
+    <html><body>
+      <p>Item 1(a).</p><p>Risk Factors</p><p>9</p>
+      <p>Item 1. Business. We provide services worldwide.</p>
+      <p>For information related to environmental matters, see Notes to Consolidated
+      Financial Statements, Note 11 and Part I, Item 1(a). Risk Factors.</p>
+      <p>Item 1(a). Risk Factors.</p>
+      <p>{_REAL_BODY}</p>
+      <p>Item 1(b). Unresolved Staff Comments.</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    # Bounded below by the legacy 1(b) end marker.
+    assert "None." not in result
+    # The TOC split-lines entry and the mid-sentence cross-reference must not
+    # win longest-section-wins: no Business or cross-ref text may bleed in.
+    assert "provide services worldwide" not in result
+    assert "environmental matters" not in result
+
+
+def test_extract_risk_factors_matches_legacy_item_1a_spaced_parens() -> None:
+    # ICE style: all-caps legacy numbering, with a space inside the parens of
+    # the closing marker ("ITEM 1 (B). UNRESOLVED STAFF COMMENTS").
+    html = f"""
+    <html><body>
+      <p>ITEM 1(A). RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 1 (B). UNRESOLVED STAFF COMMENTS</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert "None." not in result
+
+
+def test_extract_risk_factors_matches_runin_heading() -> None:
+    # GE Aerospace style: "RISK FACTORS." directly followed by prose on the
+    # same line — no standalone heading line, no "Item 1A" prefix.
+    intro = "The following discussion of the material factors that may make an investment speculative or risky. "
+    html = f"""
+    <html><body>
+      <p>RISK FACTORS. {intro}{_REAL_BODY}</p>
+      <p>STRATEGIC RISKS. Strategic risk relates to business plans. {_REAL_BODY}</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    # The section starts after the run-in heading, with the heading consumed.
+    assert result.startswith("The following discussion")
+    assert "material factors that may make an investment" in result
+
+
+def test_extract_risk_factors_falls_back_to_title_case_heading() -> None:
+    # Intel / Morgan Stanley style: title-case "Risk Factors" with no item
+    # prefix. The TOC entry (followed by a page number) and the running page
+    # headers (also followed by page numbers) must be excluded; only the real
+    # heading — followed by prose — is viable.
+    html = f"""
+    <html><body>
+      <p>Risk Factors</p><p>37</p>
+      <p>MD&amp;A. Results of operations.</p>
+      <p>Risk Factors</p>
+      <p>{_REAL_BODY}</p>
+      <p>Risk Factors</p><p>38</p>
+      <p>We are in a highly competitive and rapidly changing industry. {_REAL_BODY}</p>
+      <p>Item 1B. Unresolved Staff Comments</p><p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    assert "None." not in result
+    # The TOC page number must not leak into the extracted section.
+    assert "Results of operations" not in result
+
+
+def test_extract_risk_factors_longest_caps_section_beats_running_headers() -> None:
+    # Honeywell style: the real all-caps heading plus identical running page
+    # headers later in the section — all followed by prose. Longest-section-wins
+    # picks the real (earliest) heading, not a mid-section fragment.
+    html = f"""
+    <html><body>
+      <p>TABLE OF CONTENTS</p>
+      <p>RISK FACTORS</p>
+      <p>Our business results are subject to many risks. {_REAL_BODY}</p>
+      <p>30 Honeywell International Inc.</p>
+      <p>TABLE OF CONTENTS</p>
+      <p>RISK FACTORS</p>
+      <p>Regulatory and economic changes may affect our flexibility. {_REAL_BODY}</p>
+      <p>ITEM 1B. Unresolved Staff Comments</p><p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "Our business results are subject to many risks" in result
+    assert "Regulatory and economic changes" in result
+    assert "None." not in result
+
+
+def test_extract_risk_factors_ignores_title_case_toc_entry() -> None:
+    # A title-case "Risk Factors" TOC entry followed by a page number is not a
+    # viable fallback candidate — with no real heading, the answer stays None.
+    html = "<html><body><p>Risk Factors</p><p>37</p><p>Item 1. Business. We make things.</p></body></html>"
+    assert extract_risk_factors(html) is None
+
+
+def test_extract_risk_factors_matches_dotted_item_1a() -> None:
+    # Clorox style: dotted "ITEM 1.A. RISK FACTORS" standalone heading line,
+    # closed below by dotted "ITEM 1.B. UNRESOLVED STAFF COMMENTS". The dotted
+    # alternative is full-line anchored like the legacy parenthesized one, so
+    # a mid-sentence "see Item 1.A. Risk Factors" cross-reference cannot match
+    # and steal longest-section-wins.
+    html = f"""
+    <html><body>
+      <p>For more information on risks from cybersecurity threats, see
+      &ldquo;Risk Factors&rdquo; in Item 1.A. of this Annual Report on Form 10-K.</p>
+      <p>ITEM 1.A. RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 1.B. UNRESOLVED STAFF COMMENTS</p>
+      <p>None.</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
+    # Bounded below by the dotted 1.B end marker.
+    assert "None." not in result
+    # The mid-sentence cross-reference must not win longest-section-wins.
+    assert "cybersecurity threats" not in result
+
+
+def test_extract_risk_factors_dotted_heading_requires_standalone_line() -> None:
+    # The dotted form must not match when "ITEM 1.A." and "RISK FACTORS" are
+    # split across TOC lines — only the standalone heading line qualifies.
+    html = f"""
+    <html><body>
+      <p>ITEM 1.A.</p><p>RISK FACTORS</p><p>9</p>
+      <p>ITEM 1.A. RISK FACTORS</p>
+      <p>{_REAL_BODY}</p>
+      <p>ITEM 2. PROPERTIES</p>
+    </body></html>
+    """
+    result = extract_risk_factors(html)
+    assert result is not None
+    assert "prolonged economic downturn" in result
