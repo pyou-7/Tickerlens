@@ -470,6 +470,84 @@ def test_extract_press_release_highlights_skips_leading_contact_block() -> None:
     assert "About Johnson" not in hl
 
 
+def test_extract_press_release_highlights_skips_bare_contact_block() -> None:
+    # Batch-90: CHD's ex-99 opens with a company masthead, a bare "Contact:"
+    # header, and name/title/phone detail lines before the headline. The old
+    # code picked the masthead as the headline and let "Contact:" terminate the
+    # lede fallback via the boilerplate regex, yielding None for the release.
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>chd-ex99_1.htm</p><p>EX-99.1</p>
+    <p>Church &amp; Dwight Co., Inc.</p>
+    <p>News Release</p>
+    <p>Contact:</p><p>Lee McChesney</p><p>Chief Financial Officer</p><p>609-806-1200</p>
+    <p>CHURCH &amp; DWIGHT DELIVERS STRONG SECOND QUARTER RESULTS</p>
+    <p>Q2 NET SALES, ORGANIC SALES AND ADJUSTED EPS EXCEED OUTLOOK</p>
+    <p>RAISES FULL-YEAR 2026 SALES, EPS, AND CASH FLOW OUTLOOK</p>
+    <p>EWING, NJ, July 31, 2026 \u2013 Church &amp; Dwight Co., Inc. (NYSE: CHD) today announced
+    that the Company exceeded its second quarter outlook with stronger than expected
+    sales and earnings growth across all three divisions, driven primarily by volume
+    growth of 4.3% and positive price and product mix of 1.5%. Net sales increased
+    1.6% to $1,530.0 million in the second quarter, exceeding the Company\u2019s outlook
+    of a 1% decline and reflecting the benefits of its successful 2025 strategic
+    portfolio actions across the household and personal care businesses.</p>
+    <h2>About Church &amp; Dwight</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "CHURCH & DWIGHT DELIVERS STRONG SECOND QUARTER RESULTS" in hl
+    assert "Q2 NET SALES" in hl
+    assert "exceeded its second quarter outlook" in hl
+    assert "Lee McChesney" not in hl
+    assert "Chief Financial Officer" not in hl
+    assert "609-806-1200" not in hl
+    assert "Contact:" not in hl
+    # The masthead must not become the headline.
+    assert not hl.startswith("Church & Dwight Co., Inc.")
+
+
+def test_extract_press_release_highlights_skips_trailing_contacts_section() -> None:
+    # Batch-90: Oracle-style bare "Contact:" block with name/department/phone/
+    # email detail lines before a title-case headline, plus a trailing
+    # "Contacts:" section whose detail lines must not pollute the lede.
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>d20034dex991.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>Contact:</p><p>Ken Bond</p><p>Oracle Investor Relations</p><p>1.650.607.0349</p>
+    <p>ken.bond@oracle.com</p>
+    <p>Oracle Reports Fiscal 2026 Second Quarter Results</p>
+    <p>AUSTIN, Texas, December 10, 2026 \u2013 Oracle Corporation (NYSE: ORCL) today announced
+    fiscal 2026 second quarter results with total revenue of $16.0 billion, up 8% in
+    USD, driven by continued strength in cloud services and license support. Cloud
+    revenue was up 24% as demand for Oracle Cloud Infrastructure continued to exceed
+    available supply, and the Company signed several large multi-year agreements with
+    enterprise customers across healthcare, financial services, and manufacturing.</p>
+    <p>Contacts:</p><p>Deborah Hellinger</p><p>Oracle Corporate Communications</p>
+    <p>1.212.508.7935</p><p>deborah.hellinger@oracle.com</p>
+    <h2>About Oracle</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "Oracle Reports Fiscal 2026 Second Quarter Results" in hl
+    assert "$16.0 billion" in hl
+    assert "Ken Bond" not in hl
+    assert "Deborah Hellinger" not in hl
+    assert "1.650.607.0349" not in hl
+    assert "oracle.com" not in hl
+    assert "About Oracle" not in hl
+
+
+def test_skip_contact_block_is_bounded() -> None:
+    # Batch-90: a misfired contact header must not swallow the release body —
+    # at most 8 detail lines are skipped.
+    from src.tickerlens.data.filings import _skip_contact_block
+
+    lines = ["Contact:"] + [f"detail fragment {n}" for n in range(12)] + [
+        "The real headline finally appears here with enough words"
+    ]
+    assert _skip_contact_block(lines, 0) == 9  # header + 8 details
+
+
 def test_extract_highlights_ignores_zwsp_and_furnished_parenthetical() -> None:
     # Batch-50: Deere's ex-99 pads sections with zero-width-space lines and
     # opens with "(Furnished herewith)". The zwsp lines filled the 6-line lede

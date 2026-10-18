@@ -143,6 +143,59 @@ _CONTACT_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A bare "Contact:" / "Contacts:" header starts a contact *block* whose detail
+# lines follow on their own lines (CHD, Oracle style):
+#   Contact:
+#   Lee McChesney
+#   Chief Financial Officer
+#   609-806-1200
+# Matched separately from _CONTACT_LINE_RE because the block's detail lines are
+# not emails / media-labeled lines, and because here we want to *skip* the whole
+# block (see _skip_contact_block), whereas the boilerplate regex below uses
+# "contacts?(\s|:)" to *terminate* the lede when a contacts section appears at
+# the end of a release.
+_CONTACT_HEADER_RE = re.compile(r"^contacts?\s*:", re.IGNORECASE)
+
+# Phone numbers inside contact blocks (609-806-1200, 1.650.607.0349, ...).
+_PHONE_RE = re.compile(r"\+?\d[\d.\-\s()]{7,}\d")
+
+# Company-name masthead lines some filers (CHD) place before the release
+# headline: "Church & Dwight Co., Inc.". Skipping them in the headline pass
+# keeps the company name from becoming the headline. Anchored at line end and
+# length-guarded at the call site so a real headline that happens to mention a
+# company is never swallowed.
+_COMPANY_NAME_LINE_RE = re.compile(
+    r",?\s*\b(Inc\.?|Incorporated|Corporation|Corp\.?|Co\.?|Company|Ltd\.?|Limited|"
+    r"LLC|PLC|Holdings|Group)\s*\.?$",
+    re.IGNORECASE,
+)
+
+
+def _skip_contact_block(lines: list[str], i: int) -> int:
+    """Return the index of the first line after the contact block whose header
+    is at index *i*.
+
+    Contact detail lines are emails, phone numbers, or short fragments (names,
+    titles, departments — "Lee McChesney", "Chief Financial Officer", "Oracle
+    Investor Relations"). The block ends at the first line that looks like real
+    content: 4+ words, 40+ characters, or an all-caps line of 15+ characters
+    (the usual shapes of a release headline). Bounded at 8 detail lines so a
+    misfired header can never swallow the release body.
+    """
+    j = i + 1
+    while j < len(lines) and j - i <= 8:
+        ln = lines[j]
+        words = ln.split()
+        looks_like_content = (
+            len(words) >= 4
+            or len(ln) >= 40
+            or (len(ln) >= 15 and ln.upper() == ln and any(c.isalpha() for c in ln))
+        )
+        if looks_like_content and not _PHONE_RE.search(ln):
+            break
+        j += 1
+    return j
+
 # Guidance and Outlook section headings in earnings releases
 _GUIDANCE_HEADING_RE = re.compile(
     r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
@@ -295,9 +348,20 @@ def extract_press_release_highlights(
 
     headline: str | None = None
     body_start = 0
-    for i, ln in enumerate(lines):
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
+            i += 1
             continue
+        if _CONTACT_HEADER_RE.match(ln):
+            # Bare "Contact:" header (CHD, Oracle): skip the header plus its
+            # name/title/phone detail lines so the real headline is found.
+            i = _skip_contact_block(lines, i)
+            continue
+        if len(ln) <= 80 and _COMPANY_NAME_LINE_RE.search(ln):
+            i += 1
+            continue  # company masthead (CHD) is not the headline
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline = ln
             body_start = i + 1
@@ -311,16 +375,27 @@ def extract_press_release_highlights(
     else:
         # Fallback: the lede — opening paragraphs before boilerplate begins.
         lede: list[str] = []
-        for ln in body_lines:
+        i = 0
+        while i < len(body_lines):
+            ln = body_lines[i]
             if _ADMIN_LINE_RE.match(ln):
+                i += 1
                 continue  # stray exhibit headers / page numbers mid-document
             if _CONTACT_LINE_RE.search(ln):
+                i += 1
                 continue  # contact blocks some filers put before the headline
+            if _CONTACT_HEADER_RE.match(ln):
+                # Trailing "Contacts:" section: skip the whole block rather
+                # than letting its detail lines pollute the lede; the "About"
+                # boilerplate below still terminates collection.
+                i = _skip_contact_block(body_lines, i)
+                continue
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)
             if len(lede) >= 6:
                 break
+            i += 1
         body = "\n\n".join(lede)
 
     result = f"{headline}\n\n{body}".strip() if headline else body.strip()
