@@ -51,6 +51,23 @@ def _zero_highlight_tickers(session) -> list[tuple[str, str]]:
     return out
 
 
+def _partial_highlight_tickers(session) -> list[tuple[str, str]]:
+    """(ticker, cik) for companies with some — but not all — quarters carrying highlights."""
+    out = []
+    for company in session.query(Company).order_by(Company.ticker).all():
+        rows = (
+            session.query(QuarterlyFinancial)
+            .filter(QuarterlyFinancial.cik == company.cik)
+            .all()
+        )
+        if not rows:
+            continue
+        filled = sum(1 for r in rows if (r.press_release_highlights or "").strip() not in ("", "[]"))
+        if 0 < filled < len(rows):
+            out.append((company.ticker, company.cik))
+    return out
+
+
 def _filled_count(session, cik: str) -> int:
     return (
         session.query(QuarterlyFinancial)
@@ -66,17 +83,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="backfill at most N companies")
     parser.add_argument("--ticker", default="", help="backfill a single ticker")
+    parser.add_argument(
+        "--cohort",
+        default="zero",
+        choices=("zero", "partial"),
+        help="zero: companies with no highlights at all (default); "
+        "partial: companies with some but not all quarters highlighted",
+    )
     args = parser.parse_args()
 
     svc = FinancialsService()
     session = get_session()
     try:
-        targets = _zero_highlight_tickers(session)
+        targets = (
+            _partial_highlight_tickers(session)
+            if args.cohort == "partial"
+            else _zero_highlight_tickers(session)
+        )
         if args.ticker:
             targets = [t for t in targets if t[0] == args.ticker.upper()]
         if args.limit:
             targets = targets[: args.limit]
-        print(f"{len(targets)} zero-highlight companies")
+        print(f"{len(targets)} {args.cohort}-highlight companies")
 
         rescued = 0
         failed: list[str] = []
@@ -98,10 +126,10 @@ def main() -> int:
                 print(f"[{i}/{len(targets)}] {ticker}: +{gained} quarters with highlights")
             else:
                 failed.append(f"{ticker} (no exhibit discovered/extracted)")
-                print(f"[{i}/{len(targets)}] {ticker}: still zero")
+                print(f"[{i}/{len(targets)}] {ticker}: no new highlights")
             time.sleep(SLEEP_SECONDS)
 
-        print(f"\nrescued={rescued} still_zero={len(failed)}")
+        print(f"\nrescued={rescued} unchanged={len(failed)}")
         for f in failed:
             print("  -", f)
         return 0
