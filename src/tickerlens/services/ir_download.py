@@ -209,12 +209,20 @@ def _pick_release_doc(links: list[str]) -> str | None:
     """Pick the earnings-release exhibit filename from 8-K filing-index links.
 
     Pure (no network) so it can be unit-tested. Priority order:
-      1. ex99-style names (ex99, ex-99, ex991, EX-99.1, exx99) —
-         AAPL/MSFT/PLUG style, plus Mastercard's doubled-x
-         "ma06302026-exx991xearnings.htm" convention.
+      1. ex99-style names (ex99, ex-99, ex991, EX-99.1, exx99, exh99) —
+         AAPL/MSFT/PLUG style, Mastercard's doubled-x
+         "ma06302026-exx991xearnings.htm", EOG's "exh99-1" convention.
       2. Press-release naming: *pressrelease*, *earningsrelease* (or the
-         truncated *earningsrele* Starbucks uses), *-pr/_pr suffixes, or a
-         quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
+         truncated *earningsrele* Starbucks uses), digit/separator-suffixed
+         forms (Carnival, Travelers), explicit "earnings 8-K exhibit"
+         (Accenture), "earnings news release" (Corteva), shareholder-letter
+         releases (Affirm/Coinbase/Duolingo), "sales and earnings" (Lilly),
+         "financial highlights" (PNC), headline-style "X reports ..."
+         (McCormick), "er doc" (Southwest), bare "er"+quarter (ServiceNow),
+         *-pr/_pr suffixes, or a quarter-style stem ending in "pr"
+         (NVDA's q2fy27pr.htm).
+      3. Weaker signals: "earnings" adjacent to a quarter/fy marker
+         (Snowflake's fy2027q2earnings.htm).
     Within a tier, a "supplement" exhibit (tables/appendix material, e.g.
     JPMorgan's *erfex992supplement.htm) loses to the narrative release
     (e.g. *exhibit991narrative.htm) — the supplement has no guidance section
@@ -233,26 +241,68 @@ def _pick_release_doc(links: list[str]) -> str | None:
     def _rank(name: str) -> tuple[int, int] | None:
         stem = re.sub(r"\.html?$", "", name, flags=re.IGNORECASE)
         base: int | None = None
-        # ex99 / ex-99 / ex991 / EX-99.1 / exx99 (Mastercard's doubled-x
-        # "exx991xearnings" convention, e.g. ma06302026-exx991xearnings.htm),
-        # a bare "991" exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1),
-        # or "991" as an infix before a quarter marker or separator
-        # (Realty Income's o-991q22026.htm = 99.1, Q2 2026).
-        if re.search(r"ex(?:hibit)?x?[^a-z0-9]?99", name, re.IGNORECASE) or re.search(
+        # ex99 / ex-99 / ex991 / EX-99.1 / exx99 / exh99 (Mastercard's
+        # doubled-x "exx991xearnings" convention, e.g.
+        # ma06302026-exx991xearnings.htm; EOG's exh99-1...htm), a bare "991"
+        # exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1), or "991" as an
+        # infix before a quarter marker or separator (Realty Income's
+        # o-991q22026.htm = 99.1, Q2 2026).
+        if re.search(r"ex(?:hibit|h)?x?[^a-z0-9]?99", name, re.IGNORECASE) or re.search(
             r"991(?=q\d|[-_]|$)", stem, re.IGNORECASE
         ):
             base = 0
-        # Press-release naming: *pressrelease*, *earningsrelease* (or the
-        # truncated *earningsrele* / *earningsrelea* Starbucks and Amgen use,
-        # e.g. sbux-06282026xearningsrele.htm), *-pr/_pr suffixes, or a
-        # quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
-        elif re.search(r"(press|earnings)[-_ ]?rele[a-z]*\b", stem, re.IGNORECASE):
+        # Press-release naming (tier 1):
+        # *pressrelease* / *earningsrelease* (or the truncated *earningsrele* /
+        # *earningsrelea* Starbucks and Amgen use), including digit- or
+        # separator-suffixed forms (Carnival's a20263qearningsrelease8-k.htm,
+        # Travelers' a991pressrelease93026.htm); explicit "earnings 8-K
+        # exhibit" naming (Accenture's q4fy26earnings8-kexhibit.htm); "earnings
+        # news release" (Corteva's a2q_2026xearningsxnewsxr.htm); shareholder
+        # letters that ARE the release (Affirm's affirmfq426shareholderle.htm,
+        # Coinbase's q425shareholderletter.htm, Duolingo's
+        # q2fy26duolingo6-30x26share.htm — beats the ...xpres.htm deck);
+        # "sales and earnings" (Lilly's q226lillysalesandearningsp.htm);
+        # "financial highlights" (PNC's q32026financialhighlightsa.htm —
+        # beats the ...financialsupplement.htm tables); headline-style "X
+        # reports ..." (McCormick's mkcreportssolidthirdquar.htm); "er doc"
+        # (Southwest's er-6302026xerdoc.htm); bare "er"+quarter (ServiceNow's
+        # erq2fy26.htm).
+        elif (
+            re.search(r"(press|earnings)[-_ ]?rele[a-z]*(?=$|[-_.\d])", stem, re.IGNORECASE)
+            or re.search(r"(press|earnings)[-_ ]?8[-_ ]?k", stem, re.IGNORECASE)
+            or re.search(r"earnings[-_x]?news", stem, re.IGNORECASE)
+            or re.search(r"shareholder(?:le(?:t(?:ter)?)?)?(?=$|[-_.])", stem, re.IGNORECASE)
+            or (
+                re.search(r"share$", stem, re.IGNORECASE)
+                and re.search(r"(q[1-4]|fy\d)", stem, re.IGNORECASE)
+            )
+            or re.search(r"sales[-_ ]?and[-_ ]?earnings", stem, re.IGNORECASE)
+            or re.search(r"financial[-_ ]?highlights", stem, re.IGNORECASE)
+            or (
+                re.search(r"reports", stem, re.IGNORECASE)
+                and re.search(
+                    r"(quarter|first|second|third|fourth|fiscal|q[1-4])",
+                    stem,
+                    re.IGNORECASE,
+                )
+            )
+            or re.search(r"(^|[-_x.])erdoc(ument)?($|[-_.])", stem, re.IGNORECASE)
+            or re.search(r"(^|[-_])erq[1-4]", stem, re.IGNORECASE)
+        ):
             base = 1
         elif re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
             base = 1
         # Quarter-style stem ending in "pr" with a digit (year/fy marker),
         # e.g. q2fy27pr — excludes lookalikes like proper.htm / super.htm.
         elif re.search(r"pr$", stem, re.IGNORECASE) and re.search(r"\d", stem):
+            base = 2
+        # "earnings" adjacent to a quarter/fy marker (Snowflake's
+        # fy2027q2earnings.htm, Newmont's newmontq42025earningsand20.htm).
+        elif re.search(
+            r"(q[1-4]|fy\d).{0,12}earnings|earnings.{0,12}(q[1-4]|fy\d)",
+            stem,
+            re.IGNORECASE,
+        ):
             base = 2
         if base is None:
             return None

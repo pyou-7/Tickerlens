@@ -126,7 +126,9 @@ _ADMIN_LINE_RE = re.compile(
     r"|^exhibit\s+99\b"  # Exhibit 99.1
     r"|^\d{1,3}$"  # page numbers
     r"|^\S+\.html?$"  # exhibit filename lines
-    r"|^\(furnished herewith\)$",  # SEC exhibit parenthetical (Deere-style)
+    r"|^\(furnished herewith\)$"  # SEC exhibit parenthetical (Deere-style)
+    r"|^n\s*e\s*w\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter kicker (Humana)
+    r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$",  # spaced-letter "press release"
     re.IGNORECASE,
 )
 
@@ -137,9 +139,12 @@ _HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
 # (e.g. JNJ, Deere) place *before* the release headline. They are neither headline nor
 # lede content: skipping them keeps "Media contact:" / "Media Inquiries:" from
 # becoming the headline and keeps a leading "Investor contact:" from terminating
-# the lede fallback before any real content is collected.
+# the lede fallback before any real content is collected. Corporate URLs and
+# social handles (Chubb's "www.chubb.com" / "@Chubb" masthead lines) are contact
+# info too — never headline or lede material.
 _CONTACT_LINE_RE = re.compile(
-    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)|[\w.\-+]+@[\w.\-]+\.\w+",
+    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)|[\w.\-+]+@[\w.\-]+\.\w+"
+    r"|www\.|@\w",
     re.IGNORECASE,
 )
 
@@ -149,12 +154,21 @@ _CONTACT_LINE_RE = re.compile(
 #   Lee McChesney
 #   Chief Financial Officer
 #   609-806-1200
+# Role-prefixed variants head the same shape of block (Humana's "FOR MORE
+# INFORMATION CONTACT:", GCE's "Investor Relations Contact:", Synopsys'
+# "INVESTOR CONTACT:" / "EDITORIAL CONTACT:") — without the prefix only the
+# header line was skipped and the name/title/phone detail lines polluted the
+# headline and lede.
 # Matched separately from _CONTACT_LINE_RE because the block's detail lines are
 # not emails / media-labeled lines, and because here we want to *skip* the whole
 # block (see _skip_contact_block), whereas the boilerplate regex below uses
 # "contacts?(\s|:)" to *terminate* the lede when a contacts section appears at
 # the end of a release.
-_CONTACT_HEADER_RE = re.compile(r"^contacts?\s*:", re.IGNORECASE)
+_CONTACT_HEADER_RE = re.compile(
+    r"^((for more information|investor(\s+relations)?|media|press|editorial)\s+)?"
+    r"contacts?\s*:",
+    re.IGNORECASE,
+)
 
 # Phone numbers inside contact blocks (609-806-1200, 1.650.607.0349, ...).
 _PHONE_RE = re.compile(r"\+?\d[\d.\-\s()]{7,}\d")
@@ -169,6 +183,44 @@ _COMPANY_NAME_LINE_RE = re.compile(
     r"LLC|PLC|Holdings|Group)\s*\.?$",
     re.IGNORECASE,
 )
+
+
+def _looks_like_masthead_residue(ln: str) -> bool:
+    """True for head-office address-block lines that follow a company-name
+    masthead (Chubb: "Bärengasse 32", "CH-8001 Zurich", "Switzerland",
+    "www.chubb.com", "@Chubb"; Humana: "101 East Main Street",
+    "Louisville, KY 40202", "http://www.humana.com").
+
+    A real headline is never shaped like this: residue lines are short
+    (<=48 chars) and are a corporate URL/handle, a single word (country), or
+    a short digit-bearing line (street / city-postal). The digit rule is
+    word-count-guarded (<=4 words) so a digit-bearing headline is never
+    swallowed.
+    """
+    if len(ln) > 48:
+        return False
+    if _CONTACT_LINE_RE.search(ln):
+        return True
+    words = ln.split()
+    if len(words) == 1:
+        return True  # country line ("Switzerland")
+    if len(words) <= 4 and any(c.isdigit() for c in ln):
+        return True  # street / city-postal line ("Bärengasse 32")
+    return False
+
+
+def _skip_masthead_block(lines: list[str], i: int) -> int:
+    """Return the index of the first line after a company-masthead address
+    block starting at *i*.
+
+    Bounded at 6 residue lines so a misfire can never swallow the release
+    body; stops at the first non-residue line, which the headline pass then
+    evaluates normally.
+    """
+    j = i
+    while j < len(lines) and j - i < 6 and _looks_like_masthead_residue(lines[j]):
+        j += 1
+    return j
 
 
 def _skip_contact_block(lines: list[str], i: int) -> int:
@@ -455,13 +507,17 @@ def extract_press_release_highlights(
     i = 0
     while i < len(lines):
         ln = lines[i]
+        if _CONTACT_HEADER_RE.match(ln):
+            # Contact block header (bare "Contact:" as well as role-prefixed
+            # "Investor Relations Contact:" / "INVESTOR CONTACT:" / "FOR MORE
+            # INFORMATION CONTACT:"): skip the header plus its name/title/phone
+            # detail lines so the real headline is found. Checked before the
+            # single-line contact skip — a prefixed header matches both, and
+            # the block skip is the one that consumes the detail lines.
+            i = _skip_contact_block(lines, i)
+            continue
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             i += 1
-            continue
-        if _CONTACT_HEADER_RE.match(ln):
-            # Bare "Contact:" header (CHD, Oracle): skip the header plus its
-            # name/title/phone detail lines so the real headline is found.
-            i = _skip_contact_block(lines, i)
             continue
         if _TOC_HEADING_RE.match(ln):
             # Combined release+supplement packet (SPG): skip the table of
@@ -471,8 +527,11 @@ def extract_press_release_highlights(
                 i = j
                 continue
         if len(ln) <= 80 and _COMPANY_NAME_LINE_RE.search(ln):
-            i += 1
-            continue  # company masthead (CHD) is not the headline
+            # Company masthead (CHD): skip the name plus a following
+            # head-office address block (Chubb, Humana) so a street or
+            # city line never becomes the headline.
+            i = _skip_masthead_block(lines, i + 1)
+            continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i
@@ -492,15 +551,17 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
+            if _CONTACT_HEADER_RE.match(ln):
+                # Trailing "Contacts:" section (bare or role-prefixed): skip
+                # the whole block rather than letting its detail lines pollute
+                # the lede; the "About" boilerplate below still terminates
+                # collection. Checked before the single-line contact skip —
+                # a prefixed header matches both.
+                i = _skip_contact_block(body_lines, i)
+                continue
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
                 continue  # contact blocks some filers put before the headline
-            if _CONTACT_HEADER_RE.match(ln):
-                # Trailing "Contacts:" section: skip the whole block rather
-                # than letting its detail lines pollute the lede; the "About"
-                # boilerplate below still terminates collection.
-                i = _skip_contact_block(body_lines, i)
-                continue
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)

@@ -867,3 +867,129 @@ def test_extract_risk_factors_dotted_heading_requires_standalone_line() -> None:
     result = extract_risk_factors(html)
     assert result is not None
     assert "prolonged economic downturn" in result
+
+
+# Batch-93 press-release extraction fixtures: each body carries enough real
+# release prose to clear _MIN_RELEASE_CHARS (800), like a genuine exhibit.
+_BATCH93_BODY = """
+    <p>ZURICH, July 21, 2026 – The company today announced financial results for the second
+    quarter ended June 30, 2026, delivering another quarter of strong underwriting performance
+    across its global property and casualty businesses, with disciplined expense management
+    and favorable prior-period reserve development contributing to the combined ratio.</p>
+    <p>"We had an excellent quarter by every measure," said the Chairman and Chief Executive
+    Officer. "Our diversified global platform, superior underwriting talent, and consistent
+    execution produced double-digit growth in operating income and strong premium growth
+    in the quarter, positioning us well for the remainder of the year."</p>
+    <p>Net premiums written increased 3.6% in the quarter, or 5.1% in constant dollars,
+    reflecting rate increases, exposure growth, and strong customer retention across
+    commercial and consumer lines in North America, Europe, and Asia Pacific.</p>
+    """
+
+
+def test_extract_pr_highlights_skips_masthead_address_block() -> None:
+    # Batch-93: Chubb's ex-99 opens with a company-name masthead followed by a
+    # head-office address block (street, city/postal, country, URL, handle).
+    # The old code picked the street line ("Bärengasse 32") as the headline and
+    # burned the 6-line lede budget on address residue, yielding None.
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>2</p><p>d78544dex991.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>Chubb Limited</p>
+    <p>Bärengasse 32</p><p>CH-8001 Zurich</p><p>Switzerland</p>
+    <p>www.chubb.com</p><p>@Chubb</p>
+    <p>News Release</p>
+    <p>Chubb Reports Second Quarter Per Share Net Income of $7.30 and</p>
+    <p>Per Share Core Operating Income of $7.26, Up 18.2%</p>
+    <p>Net income was $2.85 billion versus $2.97 billion prior year, and core operating income was $2.84 billion, up 14.6%.</p>
+    {_BATCH93_BODY}
+    <h2>About Chubb</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.startswith("Chubb Reports Second Quarter")
+    assert "Bärengasse 32" not in hl
+    assert "CH-8001 Zurich" not in hl
+    assert "Switzerland" not in hl
+    assert "www.chubb.com" not in hl
+    assert "$2.85 billion" in hl
+
+
+def test_extract_pr_highlights_skips_prefixed_contact_block() -> None:
+    # Batch-93: Synopsys' ex-99 heads contact blocks with role prefixes
+    # ("INVESTOR CONTACT:", "EDITORIAL CONTACT:"). The old header regex only
+    # matched bare "Contact:", and the single-line contact skip fired first on
+    # the prefixed header — so "Tushar Jain" became the headline.
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>2</p><p>d157153dex991.htm</p><p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>PRESS RELEASE</p>
+    <p>INVESTOR CONTACT:</p><p>Tushar Jain</p><p>Synopsys, Inc.</p>
+    <p>650-584-4289</p><p>Synopsys-ir@synopsys.com</p>
+    <p>EDITORIAL CONTACT:</p><p>Cara Walker</p><p>Synopsys, Inc.</p>
+    <p>650-584-5000</p><p>corp-pr@synopsys.com</p>
+    <p>Synopsys Posts Financial Results for Third Quarter Fiscal Year 2026</p>
+    <p>Quarterly revenue of $2.477 billion, reflecting broad-based strength across the business segments.</p>
+    {_BATCH93_BODY}
+    <h2>About Synopsys</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.startswith("Synopsys Posts Financial Results")
+    assert "Tushar Jain" not in hl
+    assert "Cara Walker" not in hl
+    assert "650-584-4289" not in hl
+    assert "corp-pr@synopsys.com" not in hl
+    assert "$2.477 billion" in hl
+
+
+def test_extract_pr_highlights_skips_spaced_letter_kicker() -> None:
+    # Batch-93: Humana's ex-99 uses a spaced-letter "n e w s r e l e a s e"
+    # kicker that the admin-line regex did not recognize, so it became the
+    # headline.
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>2</p><p>hum-2026q2xex99x1briefxjul.htm</p><p>EX-99.1</p>
+    <p>n e w s r e l e a s e</p>
+    <p>Exhibit 99.1</p>
+    <p>Humana Inc.</p>
+    <p>101 East Main Street</p><p>P.O. Box 1438</p><p>Louisville, KY 40202</p>
+    <p>http://www.humana.com</p>
+    <p>FOR MORE INFORMATION CONTACT:</p><p>Lisa Stoner</p>
+    <p>Humana Investor Relations</p><p>Telephone: (502) 580-3680</p>
+    <p>Humana Reports Second Quarter 2026 Financial Results;</p>
+    <p>Reaffirms Full Year 2026 Adjusted EPS Guidance</p>
+    <p>Second quarter 2026 GAAP earnings per share of $4.10 and adjusted earnings per share of $6.25, both ahead of expectations.</p>
+    {_BATCH93_BODY}
+    <h2>About Humana</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.startswith("Humana Reports Second Quarter 2026")
+    assert "n e w s r e l e a s e" not in hl
+    assert "101 East Main Street" not in hl
+    assert "Lisa Stoner" not in hl
+    assert "$4.10" in hl
+
+
+def test_extract_pr_highlights_prefixed_header_ordering() -> None:
+    # The contact-block header check must run before the single-line contact
+    # skip: "Investor Relations Contact:" matches both regexes, and only the
+    # block skip consumes the detail lines (name/title/phone/email).
+    html = f"""<html><body>
+    <p>EX-99.1</p><p>Exhibit 99.1</p>
+    <p>Investor Relations Contact:</p><p>Daniel E. Bachus</p>
+    <p>Chief Financial Officer</p><p>Grand Canyon Education, Inc.</p>
+    <p>602-639-6648</p><p>Dan.bachus@gce.com</p>
+    <p>GRAND CANYON EDUCATION, INC. REPORTS SECOND QUARTER 2026 RESULTS</p>
+    <p>Net revenue increased 7.2% to $258.4 million for the second quarter of 2026 compared to the second quarter of 2025.</p>
+    {_BATCH93_BODY}
+    <h2>About Grand Canyon Education</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert "GRAND CANYON EDUCATION, INC. REPORTS" in hl
+    assert "Daniel E. Bachus" not in hl
+    assert "Chief Financial Officer" not in hl
+    assert "602-639-6648" not in hl
+    assert "$258.4 million" in hl

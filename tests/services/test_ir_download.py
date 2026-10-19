@@ -240,3 +240,133 @@ def test_amgen_truncated_earningsrelea():
         "/Archives/edgar/data/318154/000031815426000000/R1.htm",
     ]
     assert _pick_release_doc(links) == "amgn-20260630earningsrelea.htm"
+
+
+def test_accenture_earnings_8k_exhibit():
+    # Accenture names the exhibit q4fy26earnings8-kexhibit.htm — "earnings"
+    # directly joined to "8-k", no "release" word.
+    links = [
+        "/Archives/edgar/data/1467373/000146737326000037/acn-20261001.htm",
+        "/Archives/edgar/data/1467373/000146737326000037/q4fy26earnings8-kexhibit.htm",
+        "/Archives/edgar/data/1467373/000146737326000037/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "q4fy26earnings8-kexhibit.htm"
+
+
+def test_eog_exh99_prefix():
+    # EOG abbreviates "exhibit" as "exh": exh99-1080426.htm (exhibit 99.1).
+    links = ["eog-20260804.htm", "exh99-1080426.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "exh99-1080426.htm"
+
+
+def test_carnival_earningsrelease_8k_suffix():
+    # Carnival: a20263qearningsrelease8-k.htm — "earningsrelease" followed by
+    # a digit (no word boundary) must still match.
+    links = ["ccl-20260929.htm", "a20263qearningsrelease8-k.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "a20263qearningsrelease8-k.htm"
+
+
+def test_travelers_pressrelease_date_suffix():
+    # Travelers: a991pressrelease93026.htm — "pressrelease" followed by a
+    # date; the a992finsupp93026.htm supplement must lose.
+    links = ["trv-20261016.htm", "a991pressrelease93026.htm", "a992finsupp93026.htm"]
+    assert _pick_release_doc(links) == "a991pressrelease93026.htm"
+
+
+def test_affirm_truncated_shareholderle():
+    # Affirm's earnings release IS the shareholder letter, truncated to
+    # affirmfq426shareholderle.htm.
+    links = [
+        "/Archives/edgar/data/1820953/000162828026059271/afrm-20260825.htm",
+        "/Archives/edgar/data/1820953/000162828026059271/affirmfq426shareholderle.htm",
+        "/Archives/edgar/data/1820953/000162828026059271/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "affirmfq426shareholderle.htm"
+
+
+def test_coinbase_shareholderletter():
+    links = ["coin-20260212.htm", "q425shareholderletter.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "q425shareholderletter.htm"
+
+
+def test_duolingo_truncated_share_beats_presentation():
+    # Duolingo: the ...share.htm doc is the shareholder-letter release; the
+    # ...xpres.htm doc is the earnings deck and must lose.
+    links = [
+        "duol-20260805.htm",
+        "q2fy26duolingo6-30x26share.htm",
+        "q2fy26duolingo6-30x26xpres.htm",
+    ]
+    assert _pick_release_doc(links) == "q2fy26duolingo6-30x26share.htm"
+
+
+def test_shareholder_meeting_not_a_release():
+    # "shareholder" must be followed by end/separator or letter-truncation —
+    # a shareholder-meeting doc is not the earnings release.
+    links = ["shareholdermeeting.htm", "jnj-20260715.htm"]
+    assert _pick_release_doc(links) is None
+
+
+def test_corteva_earnings_news_release():
+    # Corteva: a2q_2026xearningsxnewsxr.htm ("earnings news release");
+    # the a6302026enrschedules.htm tables must lose.
+    links = [
+        "ctva-20260730.htm",
+        "a2q_2026xearningsxnewsxr.htm",
+        "a6302026enrschedules.htm",
+        "R1.htm",
+    ]
+    assert _pick_release_doc(links) == "a2q_2026xearningsxnewsxr.htm"
+
+
+def test_lilly_sales_and_earnings():
+    links = ["lly-20260805.htm", "q226lillysalesandearningsp.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "q226lillysalesandearningsp.htm"
+
+
+def test_southwest_er_doc():
+    # Southwest: er-6302026xerdoc.htm ("ER doc" = earnings release document).
+    links = ["luv-20260722.htm", "er-6302026xerdoc.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "er-6302026xerdoc.htm"
+
+
+def test_superdocuments_not_an_er_doc():
+    # The "erdoc" signal must not fire inside a longer word.
+    links = ["superdocuments.htm", "jnj-20260715.htm"]
+    assert _pick_release_doc(links) is None
+
+
+def test_mccormick_headline_style_reports():
+    # McCormick names the exhibit after the release headline:
+    # mkcreportssolidthirdquar.htm.
+    links = ["mkc-20261001.htm", "mkcreportssolidthirdquar.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "mkcreportssolidthirdquar.htm"
+
+
+def test_servicenow_bare_er_quarter():
+    # ServiceNow: erq2fy26.htm — bare "er" + quarter marker.
+    links = ["now-20260722.htm", "erq2fy26.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "erq2fy26.htm"
+
+
+def test_pnc_financial_highlights_beats_supplement():
+    # PNC's "financial highlights" doc is the release; the
+    # "financialsupplement" tables must lose.
+    links = [
+        "pnc-20261015.htm",
+        "q32026financialhighlightsa.htm",
+        "q32026financialsupplement.htm",
+    ]
+    assert _pick_release_doc(links) == "q32026financialhighlightsa.htm"
+
+
+def test_snowflake_quarter_adjacent_earnings():
+    # Snowflake: fy2027q2earnings.htm — "earnings" with a quarter marker.
+    links = ["snow-20260902.htm", "fy2027q2earnings.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "fy2027q2earnings.htm"
+
+
+def test_newmont_earnings_and_year():
+    # Newmont: newmontq42025earningsand20.htm.
+    links = ["nem-20260219.htm", "newmontq42025earningsand20.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "newmontq42025earningsand20.htm"
