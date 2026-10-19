@@ -1823,3 +1823,23 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Live:** dev server restarted for the new code (kill by explicit PID). DUOL backfill: 8/8 quarters filled (was 0/8), all values spot-checked against real reported figures (Q3-2024 37.2M DAU +54%, Q4-2024 $748M FY revenue, Q2-2026 58.7M DAU +23%). 4/4 routes 200 (home, `/company/DUOL`, `/company/DUOL/detail`, `/calendar`); the detail page renders "Shareholder Letter Q2 2026" with real metric bullets. No template change (backend-only); screenshot gate N/A. DB at 246 companies. **Zero-highlight cohort: 0 companies.**
 
 **Carried follow-ups rechecked:** REGN/EOG/WDAY embedded-release quarters remain by-design unhandled; 71 partial-highlight companies self-heal via the lazy page-view trigger; XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging still unfixable from the feed; pending-filing cohort at 16; HUM/ORCL self-heal on next detail visit via the any-None lazy trigger.
+
+## Batch 95 (2026-10-19) — pending-filing cohort forced recheck (verification, no code change)
+
+**Context:** 17 companies carried amber "filed but EDGAR hasn't ingested" notes (batch 53 mechanism): V, PYPL, DUK, CB, PLD, C, SPGI, HUM, WELL, HCA, CDNS, GD, CLX, AEP, ABT, EIX, VMC — 10-Qs filed Jul 28–Aug 6 2026 (C also a May 7 Q1 10-Q), still absent from companyfacts ~2.5–5.5 months later. This batch forced the full refresh path with fresh (TTL-bypassed) submissions + companyfacts for each, to test whether the lag had cleared or the notes/extraction were hiding a defect.
+
+**Method:** per ticker — fresh `submissions(cik, fresh=True)` + `companyfacts(cik, fresh=True)`, then `refresh_financials_if_stale` (fresh process → 6h check TTL empty → real check), then `_pending_filing_note` recompute plus an extraction-gap probe (pending candidates whose revenue-duration facts ARE now ingested would mean the note is masking an extractor defect, not lag).
+
+**Findings (all verified against live EDGAR):**
+1. **All 17 still genuinely lagged.** Every note persisted word-for-word; `ingested_but_missing` probe empty for all 17 — no pending candidate has revenue facts in companyfacts. The lag is real, not a stale-note or extraction bug.
+2. **The retry loop is armed correctly.** All 17 refires returned True (latest quarterly filing postdates the `xbrl_filings_processed` marker), re-ran `extract_recent_quarterly_financials` against fresh companyfacts, stored zero new quarters, and — critically — markers did NOT advance (V still 2026-04-29, C still 2026-02-20, etc.): `_processed_filing_marker` tracks the latest *incorporated* filing, not merely seen, so the 6h retry keeps firing until the facts actually land. Quarter counts unchanged (8 each), newest labels unchanged.
+3. **Lag severity is filer-uniform, not company-specific.** Revenue-fact tails confirm: C stops at 2025-12-31 (two quarters missing — Q1 filed May 7 + Q2 filed Aug 6), PYPL at 2026-03-31, V at 2026-03-31 (Sep-FY: Q2 FY2026). This is EDGAR companyfacts feed behavior, not per-filer XBRL problems.
+4. **Incidental:** each refire also ran the batch-89 time-budgeted disclosure backfill; highlights coverage across the cohort is healthy (most 7/8; AEP 4/8, C 2/8 — pre-existing states).
+
+**Blast radius:** none — read-mostly audit; the forced refires wrote nothing new (no quarter changes, no marker moves, notes byte-identical). No code change; full suite 795 green unchanged (docs-only batch).
+
+**Live:** dev server up (200 on `/`) after a cold start at batch start. No routes affected; no template change; screenshot gate N/A. DB at 246 companies. Pending-filing cohort remains at 17 — all notes accurate, self-clearing when EDGAR ingests.
+
+**Alternatives considered:** forcing quarter extraction from the 10-Q HTML via the IR downloader for the lagged quarters (rejected — the whole point of the batch-53 note is honesty about the feed lag; synthesizing quarters from non-companyfacts sources would break the single-source-of-truth extraction contract and the batch-48 futility accounting).
+
+**Carried follow-ups rechecked:** REGN/EOG/WDAY embedded-release quarters remain by-design unhandled; 71 partial-highlight companies self-heal via the lazy page-view trigger; XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging still unfixable from the feed; HUM/ORCL self-heal on next detail visit via the any-None lazy trigger.
