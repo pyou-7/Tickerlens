@@ -993,3 +993,145 @@ def test_extract_pr_highlights_prefixed_header_ordering() -> None:
     assert "Chief Financial Officer" not in hl
     assert "602-639-6648" not in hl
     assert "$258.4 million" in hl
+
+
+# ── batch 94: shareholder-letter metric-table extraction ────────────────────
+# Duolingo (and Affirm, Coinbase) publish quarterly results as a shareholder
+# letter rather than a press release. The "Q2 Highlights" section is a metric
+# table flattened by text extraction into label / value / change line triples;
+# the old code terminated section collection at the first value line
+# ("58.7M".isupper() is True) and the mission-statement cover starved the lede
+# fallback, so every quarter yielded None. The metric-table mode renders the
+# table as honest prior → current bullets.
+#
+# Padding body (letters run long; the extractor needs 800+ text chars).
+_BATCH94_LETTER_BODY = """
+<p>We believe our user growth acceleration is due to three factors: product
+changes, marketing impact, and a one-time event. We continually improve the
+app using a process we call The Green Machine, testing hundreds of
+experiments each week to optimize retention, learning outcomes, and
+monetization. The main metric we use to evaluate stickiness is the current
+user retention rate, which we track across cohorts and platforms.</p>
+<p>We have evolved our brand reach beyond our own social media accounts,
+and the vast majority of our user growth continues to be organic. We
+remain focused on building a larger and more durable business while
+reinvesting in product, engineering, and content for the long term.</p>
+"""
+_DUOL_LETTER_HTML = f"""<html><body>
+<p>EX-99.2</p><p>3</p><p>q2fy26duolingo6-30x26share.htm</p><p>EX-99.2</p>
+<p>shareholder</p><p>letter</p><p>Q2 2026</p>
+<p>our mission is</p><p>to develop the</p><p>best education</p>
+<p>in the world</p><p>and make it universally available.</p>
+<p>DUOLINGO Q2 2026 2</p>
+<p>Q2 Highlights</p>
+<p>User Metrics Q2 2025 Q2 2026</p>
+<p>Daily Active Users 47.7M</p><p>58.7M</p><p>23% YoY</p>
+<p>Paid Subscribers 10.9M</p><p>12.7M</p><p>at period end 17% YoY</p>
+<p>Financial Metrics Q2 2025 Q2 2026</p>
+<p>Revenue $252.3M</p><p>$298.5M</p><p>18% YoY</p>
+<p>Net Cash Provided by Operating Activities</p><p>$90.7M</p><p>$88.3M</p>
+<p>35.9% margin</p><p>29.6% margin</p>
+<p>DUOLINGO Q2 2026 3</p>
+<p>Dear shareholders,</p>
+<p>Q2 was a strong quarter.</p>
+{_BATCH94_LETTER_BODY}
+</body></html>"""
+
+
+def test_extract_pr_highlights_shareholder_letter_metric_table() -> None:
+    # Batch-94: the last zero-highlight company (DUOL). The Highlights metric
+    # table must render as prior → current bullets under their group headers,
+    # with the letter title as headline — not the mission-statement cover.
+    hl = extract_press_release_highlights(_DUOL_LETTER_HTML)
+    assert hl is not None
+    assert hl.startswith("Shareholder Letter Q2 2026")
+    assert "User Metrics" in hl
+    assert "Financial Metrics" in hl
+    assert "- Daily Active Users: (47.7M → 58.7M 23% YoY)" in hl
+    assert "- Paid Subscribers: (10.9M → 12.7M at period end 17% YoY)" in hl
+    assert "- Revenue: ($252.3M → $298.5M 18% YoY)" in hl
+    # Margin-pair change lines read as prior → current.
+    assert "- Net Cash Provided by Operating Activities: ($90.7M → $88.3M 35.9% margin → 29.6% margin)" in hl
+    # The batch-93 failure signature: the all-caps value line that used to
+    # terminate collection must now be content, not a terminator.
+    assert "58.7M" in hl
+    # No cover/running-header/letter-body pollution.
+    assert "our mission is" not in hl
+    assert "DUOLINGO Q2 2026 3" not in hl
+    assert "Dear shareholders," not in hl
+
+
+def test_extract_pr_highlights_shareholder_detection_requires_title_shape() -> None:
+    # "Dear shareholders" prose in a CEO quote must not trigger the letter
+    # mode — detection requires the cover-title shape in the document head.
+    html = f"""<html><body>
+    <p>EX-99.1</p>
+    <p>Acme Reports Second Quarter 2026 Results</p>
+    <p>"Dear shareholders, Q2 was a strong quarter," said the CEO.</p>
+    <p>Revenue grew 18% to $298.5 million compared with the prior year quarter.</p>
+    <p>Daily active users rose 23% year over year to 58.7 million.</p>
+    <p>Adjusted EBITDA margin was 25.9% for the second quarter of 2026.</p>
+    {_BATCH93_BODY}
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.startswith("Acme Reports Second Quarter 2026 Results")
+    assert "Shareholder Letter" not in hl
+    assert "→" not in hl  # no metric bullets in a narrative release
+
+
+def test_extract_pr_highlights_shareholder_letter_thin_table_falls_back() -> None:
+    # A shareholder letter whose Highlights section is not a metric table
+    # does not fabricate metric bullets — the standard press-release path
+    # handles it exactly as before (narrative content, no "→" bullets).
+    html = f"""<html><body>
+    <p>EX-99.2</p><p>shareholder</p><p>letter</p><p>Q2 2026</p>
+    <p>Q2 Highlights</p>
+    <p>We had a great quarter across every measure of the business.</p>
+    <p>Dear shareholders,</p>
+    {_BATCH94_LETTER_BODY}
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    if hl is not None:
+        assert "→" not in hl
+        assert "Shareholder Letter" not in hl
+
+
+def test_extract_pr_highlights_shareholder_letter_q4_fy_mixed_columns() -> None:
+    # Batch-94: Duolingo's Q4/FY letter mixes column layouts. The cover uses
+    # the slash form ("Q4 / FY 2025"); the "Financial Metrics" group header is
+    # wrapped across two lines ("Financial Metrics Q4 2025" / "FY 2025"); its
+    # columns are different periods (Q4 vs FY), so values must NOT read as
+    # prior → current — they join with "; ". Footnote lines terminate the
+    # table instead of becoming junk bullets.
+    html = f"""<html><body>
+    <p>EX-99.2</p><p>3</p><p>q4fy25duolingo12-31x25shar.htm</p><p>EX-99.2</p>
+    <p>shareholder</p><p>letter</p><p>Q4 / FY 2025</p>
+    <p>our mission is</p><p>to develop the</p><p>best education</p>
+    <p>in the world</p><p>and make it universally available.</p>
+    <p>DUOLINGO Q4 / FY 2025 2</p>
+    <p>Q4 and FY25 Highlights</p>
+    <p>User Metrics Q4 2024 Q4 2025</p>
+    <p>Daily Active Users 40.5M</p><p>52.7M</p><p>30% YoY</p>
+    <p>Financial Metrics Q4 2025</p><p>FY 2025</p>
+    <p>Revenue $282.9M</p><p>$1,037.6M</p><p>35% YoY</p><p>39% YoY</p>
+    <p>Net Income (1) $42.0M</p><p>$414.1M</p>
+    <p>(1) During the year ended December 31, 2025, the Company released the valuation allowance previously recorded against deferred tax assets.</p>
+    <p>DUOLINGO Q4 / FY 2025 3</p>
+    <p>Dear shareholders,</p>
+    {_BATCH94_LETTER_BODY}
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    # Slash-form cover quarter, not the table's prior-year column.
+    assert hl.startswith("Shareholder Letter Q4 2025")
+    # YoY group keeps the prior → current reading.
+    assert "- Daily Active Users: (40.5M → 52.7M 30% YoY)" in hl
+    # Wrapped group header joined; cross-period columns joined with "; ".
+    assert "Financial Metrics" in hl
+    assert "- Revenue: ($282.9M; $1,037.6M 35% YoY; 39% YoY)" in hl
+    assert "- Net Income (1): ($42.0M; $414.1M)" in hl
+    # Footnote and running header never become content.
+    assert "(1) During the year" not in hl
+    assert "DUOLINGO Q4 / FY 2025 3" not in hl
+    assert "Dear shareholders," not in hl

@@ -260,7 +260,8 @@ def _pick_release_doc(links: list[str]) -> str | None:
         # news release" (Corteva's a2q_2026xearningsxnewsxr.htm); shareholder
         # letters that ARE the release (Affirm's affirmfq426shareholderle.htm,
         # Coinbase's q425shareholderletter.htm, Duolingo's
-        # q2fy26duolingo6-30x26share.htm — beats the ...xpres.htm deck);
+        # q2fy26duolingo6-30x26share.htm and q4fy25duolingo12-31x25shar.htm —
+        # beats the ...xpres.htm deck);
         # "sales and earnings" (Lilly's q226lillysalesandearningsp.htm);
         # "financial highlights" (PNC's q32026financialhighlightsa.htm —
         # beats the ...financialsupplement.htm tables); headline-style "X
@@ -273,7 +274,9 @@ def _pick_release_doc(links: list[str]) -> str | None:
             or re.search(r"earnings[-_x]?news", stem, re.IGNORECASE)
             or re.search(r"shareholder(?:le(?:t(?:ter)?)?)?(?=$|[-_.])", stem, re.IGNORECASE)
             or (
-                re.search(r"share$", stem, re.IGNORECASE)
+                # "share"/"shar" truncations (Duolingo's ...x26share.htm and
+                # ...x25shar.htm) — the quarter/fy guard keeps lookalikes out.
+                re.search(r"share?$", stem, re.IGNORECASE)
                 and re.search(r"(q[1-4]|fy\d)", stem, re.IGNORECASE)
             )
             or re.search(r"sales[-_ ]?and[-_ ]?earnings", stem, re.IGNORECASE)

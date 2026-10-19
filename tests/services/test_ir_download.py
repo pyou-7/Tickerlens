@@ -300,6 +300,25 @@ def test_duolingo_truncated_share_beats_presentation():
     assert _pick_release_doc(links) == "q2fy26duolingo6-30x26share.htm"
 
 
+def test_duolingo_shar_truncation_beats_press_release():
+    # Batch-94: Duolingo's Q4/FY letter is truncated one step further —
+    # q4fy25duolingo12-31x25shar.htm ("shar", no "e"). The EX-99.1
+    # ...x25pres.htm is a stub pointing at the IR website and must lose.
+    links = [
+        "duol-20260226.htm",
+        "q4fy25duolingo12-31x25pres.htm",
+        "q4fy25duolingo12-31x25shar.htm",
+    ]
+    assert _pick_release_doc(links) == "q4fy25duolingo12-31x25shar.htm"
+
+
+def test_shar_truncation_requires_quarter_marker():
+    # The "shar" truncation needs the quarter/fy guard: bare "shar" or a
+    # lookalike like "shark" must not match.
+    assert _pick_release_doc(["shar.htm", "duol-20260226.htm"]) is None
+    assert _pick_release_doc(["sharkweekq1.htm", "duol-20260226.htm"]) is None
+
+
 def test_shareholder_meeting_not_a_release():
     # "shareholder" must be followed by end/separator or letter-truncation —
     # a shareholder-meeting doc is not the earnings release.

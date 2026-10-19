@@ -502,6 +502,15 @@ def extract_press_release_highlights(
     if not lines:
         return None
 
+    if _is_shareholder_letter(lines):
+        # Shareholder-letter mode (batch 94): metric-table "Highlights"
+        # sections (Duolingo/Affirm/Coinbase style) parse as bullets.
+        # Falls back to the standard path when no metric table parses, so
+        # letters without one keep the pre-existing behavior exactly.
+        metric = _extract_shareholder_letter_highlights(lines, max_chars)
+        if metric is not None:
+            return metric
+
     headline: str | None = None
     body_start = 0
     i = 0
@@ -604,6 +613,273 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
             return collected
         return None  # heading found but section too thin — don't try later headings
     return None
+
+
+# --- Shareholder-letter extraction mode (batch 94) ---------------------------
+#
+# Some filers (Duolingo, Affirm, Coinbase) publish quarterly results as a
+# shareholder letter rather than a press release. Their "Q# Highlights"
+# section is a metric table, not narrative prose: text extraction flattens
+# each metric into a label line ("Daily Active Users 47.7M"), a current-
+# value line ("58.7M"), and change lines ("23% YoY"). The standard path
+# above terminates section collection at the first value line — "58.7M" is
+# all-caps, so `follow.isupper()` fires — and the lede fallback then starves
+# on the mission-statement cover, yielding None for every quarter.
+#
+# The metric-table mode renders the table as honest bullet lines:
+#   User Metrics
+#   - Daily Active Users: 47.7M → 58.7M (23% YoY)
+# Gated on shareholder-letter detection so press-release behavior is
+# untouched; falls back to the standard path when no metric table parses.
+
+# Only the document head is checked — "dear shareholders" prose later in
+# the document must not trigger this.
+_SHAREHOLDER_TITLE_LINES = 30
+
+# "Q2 2026"-style quarter labels on the letter's cover, including Duolingo's
+# slash form "Q4 / FY 2025". Groups: (quarter number, year).
+_QUARTER_LABEL_RE = re.compile(r"\bQ([1-4])\s*(?:/\s*(?:FY\s*)?)?(\d{4})\b")
+
+# Table group headers with two or more quarter columns:
+# "User Metrics Q2 2025 Q2 2026", "Financial Metrics Q4 2025 FY 2025".
+# Groups: (name, columns string). A single-quarter line
+# ("Financial Metrics Q4 2025") is handled by _METRIC_GROUP_SINGLE_RE plus
+# the wrapped-header join below — never as a metric label.
+_METRIC_GROUP_RE = re.compile(r"^([A-Za-z].*?)\s+((?:(?:Q[1-4]|FY)\s*\d{4}\s*){2,})$")
+_METRIC_GROUP_SINGLE_RE = re.compile(r"^([A-Za-z].*?)\s+(Q[1-4]\s+\d{4})$")
+_METRIC_BARE_COL_RE = re.compile(r"^(?:Q[1-4]|FY)\s+\d{4}$")
+
+# A metric value line: "58.7M", "$298.5M". Bare page numbers match too, but
+# _ADMIN_LINE_RE skips those before this check runs inside the table.
+_METRIC_VALUE_RE = re.compile(r"^\$?[\d,]+(\.\d+)? ?[MBK]?$")
+
+# A metric change line: "23% YoY", "at period end 17% YoY", "(26)%",
+# "17.8% margin", "20 bps", "(530) bps". Anchored on a leading digit so a
+# prose label can never match.
+_METRIC_CHANGE_RE = re.compile(r"^(?:at period end )?\(?\d[\d.,]*\)?\s*(?:%|bps)(?=\s|$).*$", re.IGNORECASE)
+
+# Table footnotes ("(1) During the year ended ...") terminate the table.
+_FOOTNOTE_LINE_RE = re.compile(r"^\(\d+\)[\s.]")
+
+# All-caps running headers with a quarter + page number ("DUOLINGO Q2 2026 3",
+# "DUOLINGO Q4 / FY 2025 3") terminate the metric table.
+_RUNNING_HEADER_RE = re.compile(r"^[A-Z][A-Z .,&'/\-]*\s+Q[1-4]\s*(?:/\s*(?:FY\s*)?)?\d{4}\s+\d{1,3}$")
+
+
+def _is_shareholder_letter(lines: list[str]) -> bool:
+    """True when the document head reads as a shareholder-letter cover.
+
+    Duolingo renders its cover title word-per-line ("shareholder" /
+    "letter" / "Q2 2026"); other filers use a single "Shareholder Letter"
+    line. The exact-line guard on "shareholder" keeps prose mentions like
+    "shareholder value" from triggering this.
+    """
+    for i, ln in enumerate(lines[:_SHAREHOLDER_TITLE_LINES]):
+        low = ln.strip().lower()
+        if "shareholder letter" in low:
+            return True
+        if low == "shareholder" and i + 1 < len(lines):
+            if lines[i + 1].strip().lower().startswith("letter"):
+                return True
+    return False
+
+
+def _shareholder_letter_headline(lines: list[str]) -> str:
+    """Synthesize a document-derived headline for a shareholder letter.
+
+    From the cover title lines near the "shareholder"/"letter" title —
+    "Shareholder Letter Q2 2026", "Shareholder Letter Q4 2025" (from Duolingo's
+    "Q4 / FY 2025" slash form). The proximity window keeps a quarter label
+    from the metric table (e.g. the table's prior-year column) from becoming
+    the headline; running headers are skipped. Never invents a company name.
+    """
+    title_idx: int | None = None
+    for i, ln in enumerate(lines[:_SHAREHOLDER_TITLE_LINES]):
+        low = ln.strip().lower()
+        if "shareholder letter" in low or low == "shareholder":
+            title_idx = i
+            break
+    if title_idx is None:
+        return "Shareholder Letter"
+    for ln in lines[max(0, title_idx - 2) : title_idx + 7]:
+        if _RUNNING_HEADER_RE.match(ln):
+            continue
+        m = _QUARTER_LABEL_RE.search(ln)
+        if m:
+            return f"Shareholder Letter Q{m.group(1)} {m.group(2)}"
+    return "Shareholder Letter"
+
+
+def _split_label_prior(ln: str) -> tuple[str, str | None]:
+    """Split a metric label line into (label, prior-quarter value).
+
+    "Daily Active Users 47.7M" -> ("Daily Active Users", "47.7M");
+    "Net Income $44.8M" -> ("Net Income", "$44.8M");
+    "Free Cash Flow" -> ("Free Cash Flow", None).
+    """
+    head, _, tail = ln.rpartition(" ")
+    if tail and _METRIC_VALUE_RE.match(tail) and any(c.isalpha() for c in head):
+        return head, tail
+    return ln, None
+
+
+def _is_metric_label(ln: str) -> bool:
+    """True for a metric-label line inside the highlights table.
+
+    Mixed-case lines (never all-caps running headers) carrying letters that
+    are not value, change, group-header, or boilerplate lines. A trailing
+    single quarter ("Revenue Q4 2025") is never a label — that shape is a
+    (possibly wrapped) group header, handled by the caller.
+    """
+    return (
+        len(ln) <= 90
+        and any(c.isalpha() for c in ln)
+        and not ln.isupper()
+        and not _METRIC_VALUE_RE.match(ln)
+        and not _METRIC_CHANGE_RE.match(ln)
+        and not _METRIC_GROUP_RE.match(ln)
+        and not _METRIC_GROUP_SINGLE_RE.match(ln)
+        and not _BOILERPLATE_RE.match(ln)
+    )
+
+
+def _render_metric(
+    label: str, prior: str | None, vals: list[str], changes: list[str], yoy: bool
+) -> str | None:
+    """Render one parsed metric as a bullet line, or None when valueless.
+
+    A label with no values at all (e.g. a stray prose line after the table)
+    renders nothing rather than a junk bullet.
+
+    ``yoy`` is True when the group's two columns are the same quarter a year
+    apart ("Q2 2025" vs "Q2 2026"): values read as prior → current. Otherwise
+    the columns are different periods ("Q4 2025" vs "FY 2025") and values are
+    joined with "; " — a "→" would falsely imply a same-period comparison.
+    """
+    seq = ([prior] if prior else []) + vals
+    if not seq and not changes:
+        return None
+    parts: list[str] = []
+    if yoy:
+        if seq:
+            parts.append(" → ".join(seq) if len(seq) > 1 else seq[0])
+        if changes:
+            if (
+                len(changes) == 2
+                and changes[0].rsplit(" ", 1)[-1].lower()
+                == changes[1].rsplit(" ", 1)[-1].lower()
+            ):
+                # "35.9% margin" / "29.6% margin" read as prior → current.
+                parts.append(f"{changes[0]} → {changes[1]}")
+            else:
+                parts.append("; ".join(changes))
+    else:
+        if seq:
+            parts.append("; ".join(seq))
+        if changes:
+            parts.append("; ".join(changes))
+    detail = f"({' '.join(parts)})" if parts else ""
+    if detail:
+        return f"- {label}: {detail}"
+    return f"- {label}"
+
+
+def _parse_metric_highlights(lines: list[str]) -> list[str] | None:
+    """Parse the "Highlights" metric table of a shareholder letter.
+
+    Returns rendered lines (group headers + bullets), or None when fewer
+    than two metric entries parse — too thin to trust.
+
+    Group headers carry the column layout ("User Metrics Q4 2024 Q4 2025"):
+    when the two columns are the same quarter a year apart the metrics read
+    as prior → current; otherwise (Duolingo's "Financial Metrics Q4 2025 /
+    FY 2025", sometimes wrapped across two lines) values are joined without
+    implying a same-period comparison. Table footnotes ("(1) ...") and
+    running headers terminate the table.
+    """
+    start: int | None = None
+    for i, ln in enumerate(lines):
+        if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
+            start = i + 1
+            break
+    if start is None:
+        return None
+    out: list[str] = []
+    yoy = True  # per-group; each group header sets it before its metrics
+    i = start
+    while i < len(lines):
+        ln = lines[i]
+        if _ADMIN_LINE_RE.match(ln):
+            i += 1
+            continue
+        if (
+            _BOILERPLATE_RE.match(ln)
+            or _RUNNING_HEADER_RE.match(ln)
+            or _FOOTNOTE_LINE_RE.match(ln)
+        ):
+            break
+        gm = _METRIC_GROUP_RE.match(ln)
+        if gm is None and _METRIC_GROUP_SINGLE_RE.match(ln):
+            # Wrapped group header: "Financial Metrics Q4 2025" / "FY 2025".
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if _METRIC_BARE_COL_RE.match(nxt):
+                ln = f"{ln} {nxt}"
+                gm = _METRIC_GROUP_RE.match(ln)
+                i += 1
+            else:
+                break  # not a group header we understand — table shape ended
+        if gm:
+            cols = re.findall(r"(Q[1-4]|FY)\s*(\d{4})", gm.group(2))
+            yoy = (
+                len(cols) == 2
+                and cols[0][0] == cols[1][0]
+                and int(cols[1][1]) == int(cols[0][1]) + 1
+            )
+            out.append(gm.group(1).strip())
+            i += 1
+            continue
+        if _is_metric_label(ln):
+            label, prior = _split_label_prior(ln)
+            vals: list[str] = []
+            changes: list[str] = []
+            j = i + 1
+            while j < len(lines):
+                f2 = lines[j]
+                if _ADMIN_LINE_RE.match(f2):
+                    j += 1
+                    continue
+                if _METRIC_VALUE_RE.match(f2):
+                    vals.append(f2)
+                elif _METRIC_CHANGE_RE.match(f2):
+                    changes.append(f2)
+                else:
+                    break
+                j += 1
+            bullet = _render_metric(label, prior, vals, changes, yoy)
+            if bullet is not None:
+                out.append(bullet)
+            i = j
+            continue
+        break  # table shape ended
+    entries = [ln for ln in out if ln.startswith("- ")]
+    return out if len(entries) >= 2 else None
+
+
+def _extract_shareholder_letter_highlights(lines: list[str], max_chars: int) -> str | None:
+    """Shareholder-letter extraction mode: metric-table highlights.
+
+    Returns None when no metric table parses, so the caller can fall back
+    to the standard press-release path.
+    """
+    entries = _parse_metric_highlights(lines)
+    if entries is None:
+        return None
+    headline = _shareholder_letter_headline(lines)
+    body = "\n".join(entries)
+    result = f"{headline}\n\n{body}".strip()
+    if len(result) > max_chars:
+        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return result
 
 
 def extract_management_guidance(
