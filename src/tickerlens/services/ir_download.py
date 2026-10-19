@@ -235,9 +235,11 @@ def _pick_release_doc(links: list[str]) -> str | None:
         base: int | None = None
         # ex99 / ex-99 / ex991 / EX-99.1 / exx99 (Mastercard's doubled-x
         # "exx991xearnings" convention, e.g. ma06302026-exx991xearnings.htm),
-        # or a bare "991" exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1).
+        # a bare "991" exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1),
+        # or "991" as an infix before a quarter marker or separator
+        # (Realty Income's o-991q22026.htm = 99.1, Q2 2026).
         if re.search(r"ex(?:hibit)?x?[^a-z0-9]?99", name, re.IGNORECASE) or re.search(
-            r"991$", stem, re.IGNORECASE
+            r"991(?=q\d|[-_]|$)", stem, re.IGNORECASE
         ):
             base = 0
         # Press-release naming: *pressrelease*, *earningsrelease* (or the

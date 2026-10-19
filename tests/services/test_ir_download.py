@@ -207,6 +207,31 @@ def test_amd_bare_991_suffix():
     assert _pick_release_doc(links) == "q22026991.htm"
 
 
+def test_realty_income_991_infix_before_quarter():
+    # Realty Income names the exhibit o-991q22026.htm (99.1 before the quarter
+    # marker); the supplement realtyincomeq22026supple.htm must still lose.
+    links = [
+        "/Archives/edgar/data/726728/000072672826000044/o-20260805.htm",
+        "/Archives/edgar/data/726728/000072672826000044/o-991q22026.htm",
+        "/Archives/edgar/data/726728/000072672826000044/realtyincomeq22026supple.htm",
+        "/Archives/edgar/data/726728/000072672826000044/R1.htm",
+    ]
+    assert _pick_release_doc(links) == "o-991q22026.htm"
+
+
+def test_991_infix_with_separator():
+    # A 99.1 exhibit followed by a separator (e.g. o-991-q2) also ranks tier 0.
+    links = ["o-20260805.htm", "o-991-q22026.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "o-991-q22026.htm"
+
+
+def test_991_inside_longer_number_not_matched():
+    # 991 embedded in a longer digit run (e.g. a doc id ...9912...) is not a
+    # 99.1 exhibit marker — falls through to None here.
+    links = ["doc9912final.htm", "R1.htm"]
+    assert _pick_release_doc(links) is None
+
+
 def test_amgen_truncated_earningsrelea():
     # Amgen truncates differently: amgn-20260630earningsrelea.htm.
     links = [
