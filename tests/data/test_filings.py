@@ -548,6 +548,137 @@ def test_skip_contact_block_is_bounded() -> None:
     assert _skip_contact_block(lines, 0) == 9  # header + 8 details
 
 
+def test_extract_press_release_highlights_skips_table_of_contents_packet() -> None:
+    # Batch-91: SPG's ex-99 is a combined earnings-release + supplemental packet
+    # that opens with a table of contents (cover block, section-title /
+    # page-number pairs, footnote, mini-TOC). The old code picked "TABLE OF
+    # CONTENTS" as the headline and filled the lede with TOC entries, yielding
+    # None for the whole release. SPG's release also starts with a "Contacts:"
+    # block (handled by batch-90's _skip_contact_block) and wraps its headline
+    # across two lines.
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>tm2620726d2_ex99-1.htm</p><p>EXHIBIT 99.1</p>
+    <p>TABLE OF CONTENTS</p>
+    <p>SIMON PROPERTY GROUP</p>
+    <p>EARNINGS RELEASE &amp;</p>
+    <p>SUPPLEMENTAL INFORMATION</p>
+    <p>UNAUDITED SECOND QUARTER</p>
+    <p>TABLE OF CONTENTS</p>
+    <p>Earnings Release(1)</p><p>2–11</p>
+    <p>Overview</p><p>12</p>
+    <p>Financial Data</p>
+    <p>Selected Financial and Equity Information</p><p>14</p>
+    <p>Guidance Reconciliation</p><p>43</p>
+    <p>(1)</p>
+    <p>Includes reconciliation of consolidated net income to FFO and Real Estate FFO.</p>
+    <p>2Q 2026 SUPPLEMENTAL</p><p>1</p>
+    <p>TABLE OF CONTENTS</p>
+    <p>EARNINGS RELEASE</p>
+    <p>Contacts:</p><p>Tom Ward</p><p>317-685-7330 Investors</p>
+    <p>Nicole Kennon</p><p>704-804-1960 Media</p>
+    <p>Simon\u00ae Reports Second Quarter 2026 Results and</p>
+    <p>Increases Guidance for Full Year 2026 Real Estate FFO Per Share</p>
+    <p>INDIANAPOLIS, August 10, 2026 \u2013 Simon\u00ae, a real estate investment trust engaged in the ownership of premier shopping, dining, entertainment and mixed-use destinations, today reported results for the quarter ended June 30, 2026, with Real Estate FFO per share growing 7.9% year-over-year on broad-based leasing demand and accelerated traffic.</p>
+    <h2>About Simon</h2>
+    <p>Boilerplate company description.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    # The wrapped headline is joined across its line break.
+    assert (
+        "Simon\u00ae Reports Second Quarter 2026 Results and "
+        "Increases Guidance for Full Year 2026 Real Estate FFO Per Share"
+    ) in hl
+    assert "today reported results for the quarter ended June 30, 2026" in hl
+    # No TOC residue: heading, entries, page numbers, footnote, mini-TOC.
+    assert "TABLE OF CONTENTS" not in hl
+    assert "Earnings Release(1)" not in hl
+    assert "2–11" not in hl
+    assert "SUPPLEMENTAL INFORMATION" not in hl
+    assert "Includes reconciliation of consolidated net income" not in hl
+    # No contact-block residue.
+    assert "Tom Ward" not in hl
+    assert "317-685-7330" not in hl
+    assert "Contacts:" not in hl
+    assert "About Simon" not in hl
+
+
+def test_skip_toc_requires_page_numbers() -> None:
+    # Batch-91: a stray "table of contents" mention in a normal release must
+    # not trigger the skip — at least 2 page-number lines are required.
+    from src.tickerlens.data.filings import _skip_toc
+
+    lines = [
+        "TABLE OF CONTENTS",
+        "The full report is available in the table of contents section",
+        "of our investor relations website for further reference today.",
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+    ]
+    assert _skip_toc(lines, 0) == 0
+
+
+def test_skip_toc_stops_at_release_banner() -> None:
+    # Batch-91: a TOC followed by a "For Immediate Release" banner stops the
+    # skip at the banner — the headline pass then finds the real headline.
+    from src.tickerlens.data.filings import _skip_toc
+
+    lines = [
+        "TABLE OF CONTENTS",
+        "Earnings Release",
+        "2–11",
+        "Overview",
+        "12",
+        "For Immediate Release",
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+    ]
+    assert _skip_toc(lines, 0) == 5
+
+
+def test_join_wrapped_headline_joins_conjunction_break() -> None:
+    # Batch-91: a headline broken after a conjunction joins its continuation.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Simon\u00ae Reports Second Quarter 2026 Results and",
+        "Increases Guidance for Full Year 2026 Real Estate FFO Per Share",
+        "INDIANAPOLIS, August 10, 2026 \u2013 the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Simon\u00ae Reports Second Quarter 2026 Results and "
+        "Increases Guidance for Full Year 2026 Real Estate FFO Per Share"
+    )
+    assert next_i == 2
+
+
+def test_join_wrapped_headline_ignores_sentence_lede() -> None:
+    # Batch-91: a headline ending in a wrap word is NOT joined to a
+    # sentence-terminated lede line — the guard keeps short headlines from
+    # swallowing the lede.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Acme Corp Reports Fourth Quarter 2025 Results and",
+        "Net income was 5.2 billion dollars, up 8 percent year over year.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Acme Corp Reports Fourth Quarter 2025 Results and"
+    assert next_i == 1
+
+
+def test_join_wrapped_headline_ignores_complete_headline() -> None:
+    # Batch-91: a headline that doesn't end on a wrap word is left alone.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+        "CUPERTINO, California \u2014 the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Acme Corp Reports Fourth Quarter 2025 Results"
+    assert next_i == 1
+
+
 def test_extract_highlights_ignores_zwsp_and_furnished_parenthetical() -> None:
     # Batch-50: Deere's ex-99 pads sections with zero-width-space lines and
     # opens with "(Furnished herewith)". The zwsp lines filled the 6-line lede

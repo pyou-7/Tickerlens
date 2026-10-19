@@ -196,6 +196,110 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
         j += 1
     return j
 
+# A "TABLE OF CONTENTS" heading opens a combined release+supplement packet
+# (SPG): cover lines, then section-title / page-number pairs, then the real
+# release narrative. TOCs are skipped so the heading and its entries never
+# become the headline or the lede.
+_TOC_HEADING_RE = re.compile(r"^table of contents:?$", re.IGNORECASE)
+
+# Page-number lines inside a TOC: "12", "2–11" (en dash), "30-38".
+_TOC_PAGE_RE = re.compile(r"^\d{1,3}\s*[–-]\s*\d{1,3}$|^\d{1,3}$")
+
+# TOC titles are section-name fragments; the (title*, page-number) pairing does
+# the real discrimination, so this bound only needs to exclude genuine prose.
+_TOC_TITLE_MAX_CHARS = 140
+
+
+def _skip_toc(lines: list[str], i: int) -> int:
+    """Return the index of the first narrative line after a table of contents.
+
+    *lines[i]* matches _TOC_HEADING_RE. Consumes (title*, page-number)+ runs —
+    SPG's packet lists section titles with page numbers ("Earnings
+    Release(1)" / "2–11", "Overview" / "12", ...); multiple titles may share
+    one page number. Stops at the first narrative marker (contacts block,
+    release banner) or at a line that is neither a title nor a page number.
+
+    After the runs, a trailing run of title-shaped lines is consumed only when
+    a narrative marker appears within the next few lines — this handles the
+    packet's mini-TOC ("TABLE OF CONTENTS" / "EARNINGS RELEASE" / "Contacts:")
+    without swallowing a real headline that directly follows the TOC.
+
+    Requires at least 2 page-number lines: a stray "table of contents" mention
+    in a normal release must never trigger the skip. Returns *i* unchanged when
+    the lines don't look like a TOC.
+    """
+    j = i + 1
+    pages = 0
+    while j < len(lines):
+        ln = lines[j]
+        if _TOC_PAGE_RE.match(ln):
+            pages += 1
+            j += 1
+            continue
+        if (
+            _CONTACT_HEADER_RE.match(ln)
+            or _CONTACT_LINE_RE.search(ln)
+            or _ADMIN_LINE_RE.match(ln)
+        ):
+            break  # narrative starts here — the headline pass handles it
+        if len(ln) <= _TOC_TITLE_MAX_CHARS:
+            j += 1
+            continue
+        break
+    if pages < 2:
+        return i
+    # Trailing mini-TOC: only skip ahead when a narrative marker is close.
+    k = j
+    while k < len(lines) and k - j <= 4:
+        ln = lines[k]
+        if (
+            _CONTACT_HEADER_RE.match(ln)
+            or _CONTACT_LINE_RE.search(ln)
+            or _ADMIN_LINE_RE.match(ln)
+        ):
+            return k
+        if _TOC_PAGE_RE.match(ln) or len(ln) <= _TOC_TITLE_MAX_CHARS:
+            k += 1
+            continue
+        break
+    return j
+
+# Headline continuations: some filers (SPG) wrap the release headline across
+# two lines, breaking after a conjunction or preposition ("...Results and" /
+# "Increases Guidance ..."). Joining the next line recovers the full headline.
+_HEADLINE_WRAP_TAIL_RE = re.compile(
+    r"\b(and|or|of|for|to|with|in|on|at|the|a|an|&|–|—)\s*$", re.IGNORECASE
+)
+
+# Lines that can never be a headline continuation: sentence-terminated prose,
+# bullets, datelines, quoted or numeric-led lines.
+_HEADLINE_CONT_BAD_START_RE = re.compile(r"^[•\-\d\"“]")
+
+
+def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
+    """Join a wrapped headline's continuation line; return (headline, next index).
+
+    Only fires when the picked headline ends on a conjunction/preposition and
+    the next line is short, fragment-shaped (no terminal sentence punctuation),
+    and carries none of the admin/boilerplate/contact markers — so a genuine
+    short headline never swallows the lede.
+    """
+    headline = lines[i]
+    j = i + 1
+    if (
+        _HEADLINE_WRAP_TAIL_RE.search(headline)
+        and j < len(lines)
+        and len(lines[j]) <= 100
+        and not lines[j].rstrip().endswith((".", "!", "?", ":"))
+        and not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
+        and not _ADMIN_LINE_RE.match(lines[j])
+        and not _BOILERPLATE_RE.match(lines[j])
+        and not _CONTACT_HEADER_RE.match(lines[j])
+        and not _CONTACT_LINE_RE.search(lines[j])
+    ):
+        return f"{headline} {lines[j]}", j + 1
+    return headline, i + 1
+
 # Guidance and Outlook section headings in earnings releases
 _GUIDANCE_HEADING_RE = re.compile(
     r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
@@ -359,12 +463,19 @@ def extract_press_release_highlights(
             # name/title/phone detail lines so the real headline is found.
             i = _skip_contact_block(lines, i)
             continue
+        if _TOC_HEADING_RE.match(ln):
+            # Combined release+supplement packet (SPG): skip the table of
+            # contents so its heading and entries never become the headline.
+            j = _skip_toc(lines, i)
+            if j > i:
+                i = j
+                continue
         if len(ln) <= 80 and _COMPANY_NAME_LINE_RE.search(ln):
             i += 1
             continue  # company masthead (CHD) is not the headline
         if len(ln) <= _MAX_HEADLINE_CHARS:
-            headline = ln
-            body_start = i + 1
+            headline, next_i = _join_wrapped_headline(lines, i)
+            body_start = next_i
         break
 
     body_lines = lines[body_start:]
