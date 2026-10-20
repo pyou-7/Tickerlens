@@ -1895,3 +1895,17 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Alternatives considered:** Deriving the CIK from the accession prefix (e.g. `0000034088-26-000101` → 34088) — rejected: accession prefixes also differ for filing agents (Donnelley's 0001193125), so a generic derivation would misroute agent-filed exhibits; the explicit `src_cik` tag is always the feed the filing was actually listed in. Within-source dedupe — rejected: a CIK's buckets are disjoint from its recent block, so the first dedupe form (which also deduped within a source) broke the batch-97 pagination test on fixture accession reuse; dedupe applies across sources only.
 
 **Related:** predecessor fetches are best-effort (log + skip) so a dead old feed never breaks the current CIK; each source pages its own bucket list independently.
+
+## 2026-10-20 — batch 100: cover-page title blocks need a skip, and headline joins need a section-heading stop
+
+**What:** Goldman Sachs' ex-99.1 opens with a cover page (period title + "Earnings Results" + inline contacts + masthead + repeated banner) before the real headline. The fix (`_cover_block_headline` in `data/filings.py`) triggers only on the full cover shape — period title, kind line, a Media/Investor-Relations contact line carrying a phone number, and a banner repeating the period words, all within 12 lines — then skips past the banner and joins the real (often mid-phrase-wrapped) headline with a section-heading stop.
+
+**Why this shape:** the trigger's narrowness is the safety. A period title alone ("Second Quarter 2026") also appears as a legit headline in other filers' docs; requiring the contact-with-phone + banner repeat keeps the fire rate at exactly the cover layout. Four title wraps observed across GS's Workiva/Donnelley vintages are all handled ("Second Quarter 2026"; "Full Year and"/"Fourth Quarter 2025"; "Full Year"/"and"/"Fourth Quarter 2024"; "Third Quarter"/"2024").
+
+**Two extraction principles:**
+- A headline continuation candidate that is itself a table fragment ("Financial Summary") is the metric-table heading, not headline — but $-/%-bearing fragments never stop the join, because real headline continuations carry figures ("Share of $20.98 ..."). This is deliberately narrower than the batch-91 wrap-tail rule and lives only in the cover path; `_join_wrapped_headline` is untouched.
+- A short table heading ("Book Value Per Share") directly above 2+ fragment rows is table residue: `_drop_table_fragment_runs` now folds it into the run so a heading + its last row drops as one 3-line run instead of leaking into the lede. 1–2 fragment runs with no heading are still kept (batch-97 behavior).
+
+**Alternatives considered:** extending `_join_wrapped_headline` to join mid-phrase wraps globally — rejected: the batch-91 design deliberately limits it to conjunction/preposition breaks so a genuine short headline never swallows the lede; the cover path is the only place we *know* the next lines are headline. Deriving the real headline from the banner text — rejected: the banner ("SECOND QUARTER 2026 EARNINGS RESULTS") is not the headline.
+
+**Related:** closes the batch-97 "GS cover-page extraction" follow-up; GS backfilled 6/8 → 8/8 (the 2 previously-None quarters rescued by current discovery). Still open: HAL business-vs-financial highlights priority; SHOP 6-K discovery (foreign filers).
