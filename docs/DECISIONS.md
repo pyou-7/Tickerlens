@@ -1885,3 +1885,13 @@ Two implementation lessons:
 - **Keep the merge a module-level function, not a client method.** The service tests stub the EDGAR client with a bare MagicMock configuring only `companyfacts`; a new client method auto-mocks to an empty payload and broke 14 tests. `companyfacts_with_predecessors(client, cik)` takes any client-like object and the mocks keep working unchanged.
 
 Related: the disclosure pipeline's `discover_earnings_filings` still reads only the current CIK's submissions — XOM's pre-Q2-2026 earnings 8-Ks live under the old CIK, so its older quarters' press-release highlights need a predecessor-submissions merge (carried follow-up, not this batch).
+
+## 2026-10-20 — batch 99: disclosure discovery merges predecessor-CIK submissions, and every filing carries its source CIK
+
+**What:** `discover_earnings_filings` now fetches the predecessor-CIK submissions feeds (from the batch-98 `_CIK_SUCCESSIONS` map) alongside the current CIK's; each extracted filing/8-K carries `src_cik`, accession collisions across feeds dedupe to the current CIK's copy, and `EarningsPeriod` carries `sec_cik`/`er_cik` so `_find_ex99_doc`, `sec_doc_url`, and `er_doc_url` build archives URLs under the filing's own source CIK.
+
+**Why:** The batch-98 companyfacts merge fixed XOM's quarterly figures (2 → 8 rows), but its pre-Q2-2026 earnings 8-Ks — and therefore 7 of 8 quarters' press-release highlights — live only under the predecessor CIK's submissions feed, invisible to discovery. The archives path is per-CIK (`/Archives/edgar/data/34088/...`); building it with the current CIK 404s, so the source CIK must travel with each filing.
+
+**Alternatives considered:** Deriving the CIK from the accession prefix (e.g. `0000034088-26-000101` → 34088) — rejected: accession prefixes also differ for filing agents (Donnelley's 0001193125), so a generic derivation would misroute agent-filed exhibits; the explicit `src_cik` tag is always the feed the filing was actually listed in. Within-source dedupe — rejected: a CIK's buckets are disjoint from its recent block, so the first dedupe form (which also deduped within a source) broke the batch-97 pagination test on fixture accession reuse; dedupe applies across sources only.
+
+**Related:** predecessor fetches are best-effort (log + skip) so a dead old feed never breaks the current CIK; each source pages its own bucket list independently.
