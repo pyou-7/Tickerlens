@@ -1875,3 +1875,13 @@ Matching a 10-Q/10-K to its earnings-release 8-K cannot be done on date proximit
 Final rule: candidates are 2.02 8-Ks filed 7–60 days after period end and not after the formal filing; nearest to the filing date wins. The audit (252 companies) confirmed only PNC and FDX had wrong content stored; both were cleared and re-filled.
 
 Related: EDGAR submissions bucket pagination is required for both 10-Q/10-K discovery (high-volume filers' "recent" bucket holds < n_quarters) and 8-K coverage (an 8-K can sit in an older bucket than its 10-Q); and discovery must extend to the oldest *stored* period, not just the latest N filings, because the stored window lags submissions when companyfacts is behind.
+
+## 2026-10-19 — batch 98: CIK successions need a curated map, and fact-merge dedupe must key on (start, end, accession)
+
+SEC moved XOM's ticker to a new CIK (0002115436, "ExxonMobil Holdings Corp") — the ticker map resolves there, and the new CIK's companyfacts starts at the succession. Proven the same economic entity (not a batch-47-class misattribution) by two independent facts: the Q2-2026 10-Q accession 0000034088-26-000093 is attributed to *both* CIKs in their submissions feeds, and the new CIK's Q2-2026 revenue ($116.0B) continues the old CIK's consolidated run rate. So the fix is a curated `_CIK_SUCCESSIONS` map (human-verified entries only, like the batch-58 DBA alias map), not auto-detection from accession prefixes — prefixes also differ for filing agents (Donnelley's 0001193125), so a generic detector would merge wrong entities.
+
+Two implementation lessons:
+- **Dedupe key needs the start leg.** One 10-Q files both the standalone-quarter fact and the YTD fact for the same period end (Q2 = 6M − Q1 derivation needs both). An (end, accession) key silently dropped the YTD leg and killed every Q2/Q3 derivation — the merged extraction returned Q1/Q4-only quarters. Caught by the live re-seed probe before commit; (start, end, accession) fixed it.
+- **Keep the merge a module-level function, not a client method.** The service tests stub the EDGAR client with a bare MagicMock configuring only `companyfacts`; a new client method auto-mocks to an empty payload and broke 14 tests. `companyfacts_with_predecessors(client, cik)` takes any client-like object and the mocks keep working unchanged.
+
+Related: the disclosure pipeline's `discover_earnings_filings` still reads only the current CIK's submissions — XOM's pre-Q2-2026 earnings 8-Ks live under the old CIK, so its older quarters' press-release highlights need a predecessor-submissions merge (carried follow-up, not this batch).
