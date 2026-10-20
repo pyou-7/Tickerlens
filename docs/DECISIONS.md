@@ -16,7 +16,21 @@ Format:
 
 ---
 
-## 2026-10-12 — Batch 55: pending-filing honesty note on the detail page
+## 2026-10-20 — Batch 101: separator-less endnote markers + non-2.02 earnings 8-K fallback
+
+**What:** Two disclosure-pipeline defect classes from the partial-cohort forensic round 2 (10 → 5). (1) `_LEDE_FOOTNOTE_RE` no longer requires `[\s.]` after the marker — EOG's supplement packet letters endnotes "(B)Production volumes ..." with no separator, and the old tail let 976 chars of footnote boilerplate get STORED as Q1 FY2026 highlights; the stored junk was cleared. (2) New `_extract_other_8ks` + `_match_8k_non202_fallback` in `services/ir_download.py`: earnings 8-Ks filed without Item 2.02 (Citi/MTD 9.01-only, Colgate 8.01+9.01, GE Vernova 2.01+9.01) now match when no 2.02 candidate exists — same 7–60d / ≤filing-date / nearest guards, plus a required `_pick_release_doc` hit (no lone-exhibit fallback) whose filename must reference the period (`_exhibit_matches_period`: filing-date YYYYMMDD, quarter token, or len≥2 ticker).
+
+**Why:** The forensic classified every missing quarter in the 10-company partial cohort instead of re-sweeping blindly. Class 1 was actively harmful (junk stored as signal); class 2 was pure loss (real releases existed on EDGAR, unreachable). The `_exhibit_matches_period` guard is load-bearing, not belt-and-braces: the naive fallback matched Citi's Trust Preferred Securities 8-K (`d240560dex991.htm`) — ex99-shaped, in-window, nearer the 10-Q — and would have stored offering boilerplate as Q2 2024 highlights; the live Citi probe caught it pre-commit.
+
+**Alternatives considered:** Extending `_extract_er_8ks` to include non-2.02 8-Ks directly (rejected — the 2.02 gate is the primary path's semantic signal; mixing the lists would let a 9.01-only 8-K outrank a real 2.02 match on the nearest-to-filing tiebreak); items-based exclusion of deal/governance 8-Ks (rejected — GE Vernova's real earnings 8-K carries 2.01, and AFRM's real one carries 5.02, so item exclusions are fragile; the exhibit-filename guard is the direct signal); clearing STZ's table-row highlights in the same pass (rejected — real headline + real figures, a separate quality wart, not junk); building the 6-K foreign-filer path for SHOP now (deferred — SHOP's Q3 2024 10-Q sits beyond EDGAR's recent-1000 window with no buckets to page, so 6-K matching needs its own design; stays a carried follow-up).
+
+**Blast radius:** `data/filings.py` (one regex); `services/ir_download.py` (two new functions + triple return from `extract_all` + fallback branch that only fires when `_match_8k` returns None — previously-unmatched quarters only). 9 new tests (2 footnote incl. EOG-shaped packet → None; 7 fallback incl. 2.02-priority, window guards, Trust-Preferred rejection). Suite 865 green (856 + 9). `git diff --check` clean.
+
+**Live:** Partial backfill sweep: C/CL/MTD/GEV each +1 → 8/8 with real releases (spot-checked headlines/figures); EOG Q1 junk cleared (honestly 0/8). LIN re-probed: Q3 2024 ex-99.1 is 14 JPG pages with no text layer — same image-only class as AFRM, structurally unextractable, stays 7/8. Honest residuals: AFRM (image-only letter), CCI (no Q4-2024 earnings 8-K filed at all), SHOP (10-Q unreachable), SKYD (pre-merger quarters). Server was restarted at batch start (was down); routes verified via the backfill's own fetches + existing live checks.
+
+**Follow-ups (not this batch):** HAL business-vs-financial highlights priority; SHOP 6-K discovery (foreign filers); GEV footnote-definition headline wart ("1 Defined as ..." picked as headline); STZ metric-table-as-highlights wart; pending-filing cohort at 17 (batch-95 verified).
+
+---
 
 **What:** `DetailContext` gains `pending_filing_note` (wired from `Company.pending_filing_note` in `get_detail`), and `partials/detail_data.html` renders the same amber honesty note as the overview, below the period label and above the hero KPI cards — for tickers whose latest 10-Q/10-K is filed but EDGAR's companyfacts feed hasn't ingested its figures yet.
 **Why:** Batch 53 put the note on the Overview page, but the Detail/Time Slicer page is where the user stares at the quarters and the YoY selectors — a stale latest quarter there had the same unexplained-silence defect. The partial is server-rendered on the initial page load too, so one block covers both the full detail page and every HTMX `/detail/data` swap; no route changes were needed.
