@@ -722,3 +722,163 @@ def test_pick_release_doc_undotted_9901():
     # 99.2/99.3 undotted forms are still excluded.
     assert _pick_release_doc(["/x/bac-09302026ex993.htm"]) is None
     assert _pick_release_doc(["/x/met-ex9902qfs.htm"]) is None
+
+
+# ── Batch 101: guarded fallback for earnings 8-Ks without Item 2.02 ───────────
+# Citi/MTD file 9.01-only earnings 8-Ks, Colgate 8.01+9.01, GE Vernova
+# 2.01+9.01 — the 2.02 gate missed all four quarters. The fallback only runs
+# when _match_8k finds nothing, keeps the 7–60d / ≤filing-date guards, and
+# requires a release-looking exhibit whose filename references the period
+# (filing date, quarter token, or ticker) — an unrelated ex99 (Citi's Trust
+# Preferred Securities 8-K) must never win.
+
+from tickerlens.services.ir_download import (  # noqa: E402
+    _exhibit_matches_period,
+    _extract_other_8ks,
+    _match_8k_non202_fallback,
+)
+
+
+def _other_8k_forms(*form_items):
+    n = len(form_items)
+    return {
+        "form": [fi[0] for fi in form_items],
+        "accessionNumber": [f"acc-{i}" for i in range(n)],
+        "reportDate": ["2024-06-30"] * n,
+        "filingDate": [fi[2] for fi in form_items],
+        "primaryDocument": [f"doc-{i}.htm" for i in range(n)],
+        "items": [fi[1] for fi in form_items],
+    }
+
+
+def test_extract_other_8ks_splits_on_202():
+    raw = _other_8k_forms(
+        ("8-K", "2.02,9.01", "2024-07-12"),   # primary path — excluded
+        ("8-K", "9.01", "2024-07-12"),        # Citi/MTD shape — included
+        ("8-K", "8.01,9.01", "2024-07-12"),   # Colgate shape — included
+        ("8-K", "2.01,9.01", "2024-07-12"),   # GEV shape — included
+        ("8-K", "8.01", "2024-07-12"),        # no exhibits — excluded
+        ("8-K", "", "2024-07-12"),            # no items — excluded
+        ("4", "9.01", "2024-07-12"),          # not an 8-K — excluded
+    )
+    others = _extract_other_8ks(raw, src_cik="0000001")
+    assert [e["items"] for e in others] == ["9.01", "8.01,9.01", "2.01,9.01"]
+    assert all(e["src_cik"] == "0000001" for e in others)
+
+
+def test_exhibit_matches_period_guards():
+    r = date(2024, 6, 30)
+    f = date(2024, 7, 12)
+    # Filing-date form (Citi).
+    assert _exhibit_matches_period("c-20240712xex99d1.htm", "C", r, f)
+    # Quarter-token forms (Colgate / MTD / GEV).
+    assert _exhibit_matches_period("q32024pressreleasetables.htm", "CL", date(2024, 9, 30), date(2024, 10, 25))
+    assert _exhibit_matches_period("ex-991mtd8xkq42024.htm", "MTD", date(2024, 12, 31), date(2025, 2, 6))
+    assert _exhibit_matches_period("gevpressrelease2q25.htm", "GEV", date(2025, 6, 30), date(2025, 7, 23))
+    # Ticker form.
+    assert _exhibit_matches_period("mtd-earnings-release.htm", "MTD", r, f)
+    # Unrelated ex99: no date, no quarter token, single-letter ticker is noise.
+    assert not _exhibit_matches_period("d240560dex991.htm", "C", r, f)
+    assert not _exhibit_matches_period("underwriting-ex99.htm", "MTD", date(2024, 12, 31), date(2025, 2, 6))
+
+
+def _discovery_client(recent, index_docs):
+    client = MagicMock()
+    client.cik_for_ticker.return_value = "0000831001"
+    client.submissions.return_value = {"filings": {"recent": recent, "files": []}}
+    client.filing_index_url.side_effect = lambda cik, acc: f"https://x/{acc}/"
+    def _fetch(url):
+        acc = url.rstrip("/").rsplit("/", 1)[-1]
+        docs = index_docs.get(acc)
+        if docs is None:
+            raise Exception("index unreadable")
+        links = "".join(f'<a href="/Archives/x/{d}">{d}</a>' for d in docs)
+        return f"<html><body>{links}</body></html>"
+    client.fetch_text.side_effect = _fetch
+    return client
+
+
+def _recent_with_fallback_shapes():
+    # One 10-Q (Q2 2024, filed 2024-08-02) + a 9.01-only 8-K (Citi shape).
+    return {
+        "form": ["10-Q", "8-K"],
+        "accessionNumber": ["acc-10q", "acc-8k"],
+        "reportDate": ["2024-06-30", "2024-06-30"],
+        "filingDate": ["2024-08-02", "2024-07-12"],
+        "primaryDocument": ["c-20240802.htm", "c-20240712x8k.htm"],
+        "items": ["", "9.01"],
+    }
+
+
+def test_fallback_rescues_901_only_earnings_8k():
+    client = _discovery_client(
+        _recent_with_fallback_shapes(),
+        {"acc-8k": ["c-20240712x8k.htm", "c-20240712xex99d1.htm", "R1.htm"]},
+    )
+    periods = discover_earnings_filings("C", client, n_quarters=1)
+    assert len(periods) == 1
+    assert periods[0].er_doc == "c-20240712xex99d1.htm"
+    assert periods[0].er_accession == "acc-8k"
+
+
+def test_fallback_prefers_202_match():
+    # A 2.02 8-K exists: the primary path wins even when the 9.01-only 8-K
+    # is nearer the formal filing date.
+    recent = {
+        "form": ["10-Q", "8-K", "8-K"],
+        "accessionNumber": ["acc-10q", "acc-202", "acc-901"],
+        "reportDate": ["2024-06-30"] * 3,
+        "filingDate": ["2024-08-02", "2024-07-15", "2024-07-25"],
+        "primaryDocument": ["c-20240802.htm", "c-20240715x8k.htm", "c-20240725x8k.htm"],
+        "items": ["", "2.02,9.01", "9.01"],
+    }
+    client = _discovery_client(
+        recent,
+        {
+            "acc-202": ["c-20240715x8k.htm", "ex991-earnings.htm"],
+            "acc-901": ["c-20240725x8k.htm", "c-20240725xex99d1.htm"],
+        },
+    )
+    periods = discover_earnings_filings("C", client, n_quarters=1)
+    assert periods[0].er_doc == "ex991-earnings.htm"
+    assert periods[0].er_accession == "acc-202"
+
+
+def test_fallback_skips_8k_without_release_exhibit():
+    client = _discovery_client(
+        _recent_with_fallback_shapes(),
+        {"acc-8k": ["c-20240712x8k.htm", "underwriting-agreement-ex99.htm", "R1.htm"]},
+    )
+    periods = discover_earnings_filings("C", client, n_quarters=1)
+    assert periods[0].er_doc is None
+
+
+def test_fallback_rejects_unrelated_ex99():
+    # Citi's Trust Preferred Securities 8-K: ex99-shaped name, but the
+    # filename references neither the period nor the filing date.
+    client = _discovery_client(
+        _recent_with_fallback_shapes(),
+        {"acc-8k": ["d240560x8k.htm", "d240560dex991.htm", "R1.htm"]},
+    )
+    periods = discover_earnings_filings("C", client, n_quarters=1)
+    assert periods[0].er_doc is None
+
+
+def test_fallback_keeps_window_guards():
+    filing = {"form": "10-Q", "report_date": date(2024, 6, 30), "filing_date": date(2024, 8, 2)}
+    good = {"accession": "a1", "filing_date": date(2024, 7, 12), "items": "9.01",
+            "primary_doc": "x.htm", "src_cik": "0000831001"}
+    too_soon = dict(good, accession="a2", filing_date=date(2024, 7, 2))   # 2 days after period end
+    too_late = dict(good, accession="a3", filing_date=date(2024, 9, 1))    # after the 10-Q
+    client = MagicMock()
+    client.filing_index_url.side_effect = lambda cik, acc: f"https://x/{acc}/"
+    client.fetch_text.return_value = (
+        '<html><body><a href="/Archives/x/c-20240712xex99d1.htm">x</a></body></html>'
+    )
+    # Too soon / too late never reach the index fetch.
+    assert _match_8k_non202_fallback(filing, [too_soon], "C", "0000831001", client) is None
+    assert _match_8k_non202_fallback(filing, [too_late], "C", "0000831001", client) is None
+    assert not client.fetch_text.called
+    # In-window candidate with a period-referencing exhibit matches.
+    m = _match_8k_non202_fallback(filing, [good], "C", "0000831001", client)
+    assert m is not None and m[0]["accession"] == "a1" and m[1] == "c-20240712xex99d1.htm"

@@ -195,8 +195,11 @@ def _looks_like_table_fragment(ln: str) -> bool:
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
 # are never narrative highlights. Distinct from _FOOTNOTE_LINE_RE (digits-only,
 # used by the shareholder-letter table parser) — exhibits also letter their
-# footnotes. Batch 97.
-_LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)[\s.]", re.IGNORECASE)
+# footnotes. Batch 97. Batch 101: no separator is required after the marker —
+# EOG's supplement packet letters its endnotes "(B)Production volumes ..."
+# with the marker running straight into the text, and the old [\s.] tail let
+# that endnote boilerplate fill the lede and get stored as highlights.
+_LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
 
 
 def _drop_table_fragment_runs(lines: list[str]) -> list[str]:

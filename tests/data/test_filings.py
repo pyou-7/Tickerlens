@@ -1498,3 +1498,54 @@ def test_table_heading_folds_into_fragment_run() -> None:
     result2 = extract_press_release_highlights(html2)
     assert result2 is not None
     assert "$50.2 billion" in result2
+
+
+# ── Batch 101: separator-less endnote markers are footnotes, not lede ─────────
+# EOG's ex-99.1 is a pure supplemental-financial packet (TOC + tables +
+# endnotes, no narrative). Its endnotes are lettered "(B)Production volumes
+# ..." with the marker running straight into the text — the old
+# _LEDE_FOOTNOTE_RE required [\s.] after the marker, so the endnote
+# boilerplate filled the 6-line lede budget and got STORED as the quarter's
+# highlights (EOG Q1 FY2026: 976 chars of footnote definitions). A
+# supplement-only packet must honestly yield None.
+
+
+def test_lede_footnote_re_matches_separator_less_markers():
+    from tickerlens.data.filings import _LEDE_FOOTNOTE_RE
+
+    assert _LEDE_FOOTNOTE_RE.match("(B)Production volumes from Bahrain operations")
+    assert _LEDE_FOOTNOTE_RE.match("(a) Represents the principal cash flow elements")
+    assert _LEDE_FOOTNOTE_RE.match("(1) During the year ended December 31")
+    assert _LEDE_FOOTNOTE_RE.match("(A)Effective January 1, 2026, EOG combined")
+    # Parenthetical asides are not footnote markers.
+    assert not _LEDE_FOOTNOTE_RE.match("(in millions)")
+    assert not _LEDE_FOOTNOTE_RE.match("Revenue (in millions) was up")
+    assert not _LEDE_FOOTNOTE_RE.match("Net income rose 5 percent")
+
+
+def test_supplement_packet_endnotes_not_stored_as_highlights():
+    # EOG shape: TOC, then tables, then lettered endnotes with no narrative.
+    html = """<html><body>
+<p>EX-99.1</p><p>2</p><p>exh99-1080426.htm</p>
+<p>PRESS RELEASE OF EOG RESOURCES, INC.</p><p>EXHIBIT 99.1</p>
+<p>Table of Contents</p>
+<p>Second Quarter 2026</p>
+<p>Supplemental Financial and Operating Data</p>
+<p>Income Statements 10</p><p>Volumes and Prices 11</p><p>Balance Sheets 12</p>
+<p>9</p><p>Income Statements</p>
+<p>In millions of USD, except share data (in millions) and per share data (Unaudited)</p>
+<p>Crude Oil and Condensate 3,293 2,974 3,243 2,991</p>
+<p>Natural Gas Liquids 572 534 604 666</p>
+<p>Net Income 1,463 1,345 1,471 701</p>
+<p>10</p><p>Volumes and Prices</p>
+<p>(Unaudited)</p>
+<p>Crude Oil and Condensate Volumes (MBbld) (A)</p>
+<p>United States 500.9 503.1 532.9 544.5</p>
+<p>Endnotes</p>
+<p>(B)Production volumes from Bahrain operations; natural gas realized price represents contract price less partner's processing and distribution costs.</p>
+<p>(C)Dollars per barrel or per thousand cubic feet, as applicable. Excludes the impact of financial commodity and other derivative instruments.</p>
+<p>(D)Thousand barrels of oil equivalent per day or million barrels of oil equivalent, as applicable; includes crude oil and condensate, NGLs and natural gas.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is None
+    assert "Bahrain operations" not in (result or "")

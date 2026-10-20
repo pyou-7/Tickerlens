@@ -136,7 +136,7 @@ def discover_earnings_filings(
     cik = edgar_client.cik_for_ticker(ticker)
     sources = _submissions_sources(ticker, edgar_client, cik)
 
-    def extract_all() -> tuple[list[dict], list[dict]]:
+    def extract_all() -> tuple[list[dict], list[dict], list[dict]]:
         """Merge per-CIK extractions.
 
         Within one source the merged recent+bucket arrays concatenate exactly
@@ -146,20 +146,24 @@ def discover_earnings_filings(
         both CIKs, e.g. XOM's Q2-2026 10-Q) the current CIK's copy wins and
         its src_cik points at the live archives path.
         """
-        sec, ers = [], []
-        seen_sec, seen_er = set(), set()  # accessions claimed by earlier sources
+        sec, ers, others = [], [], []
+        seen_sec, seen_er, seen_other = set(), set(), set()  # accessions claimed by earlier sources
         for src_cik, state in sources:
             src_sec = _extract_sec_filings(state["filings_raw"], src_cik=src_cik)
             src_er = _extract_er_8ks(state["filings_raw"], src_cik=src_cik)
+            src_other = _extract_other_8ks(state["filings_raw"], src_cik=src_cik)
             new_sec = [f for f in src_sec if f["accession"] not in seen_sec]
             new_er = [e for e in src_er if e["accession"] not in seen_er]
+            new_other = [e for e in src_other if e["accession"] not in seen_other]
             seen_sec.update(f["accession"] for f in new_sec)
             seen_er.update(e["accession"] for e in new_er)
+            seen_other.update(e["accession"] for e in new_other)
             sec.extend(new_sec)
             ers.extend(new_er)
-        return sec, ers
+            others.extend(new_other)
+        return sec, ers, others
 
-    sec_filings, er_8ks = extract_all()
+    sec_filings, er_8ks, other_8ks = extract_all()
     # Batch 97: the top-level "recent" bucket may cover fewer than n_quarters
     # of 10-Q/10-K for high-volume filers (BAC's recent holds 3 10-Q + 1
     # 10-K) — older quarters then never matched an earnings 8-K and their
@@ -199,7 +203,7 @@ def discover_earnings_filings(
                 src_cik, state["bucket_names"][state["bucket_i"]]
             )
             state["filings_raw"] = _merge_filings_recent(state["filings_raw"], older)
-            sec_filings, er_8ks = extract_all()
+            sec_filings, er_8ks, other_8ks = extract_all()
         except Exception:
             logger.warning(
                 "Older-submissions bucket %s unreadable for %s (%s)",
@@ -241,9 +245,22 @@ def discover_earnings_filings(
             # the ticker's current CIK.
             filing["er_src_cik"] = matched.get("src_cik")
         else:
-            filing["er_accession"] = None
-            filing["er_doc"] = None
-            filing["er_src_cik"] = None
+            # Batch 101: no 2.02 candidate — try the guarded non-2.02
+            # fallback (9.01-only / 8.01+9.01 / 2.01+9.01 earnings 8-Ks).
+            # A 2.02 match always wins; the fallback only fills quarters
+            # the primary path could never match.
+            fb = _match_8k_non202_fallback(
+                filing, other_8ks, ticker, cik, edgar_client
+            )
+            if fb is not None:
+                fb_match, fb_doc = fb
+                filing["er_accession"] = fb_match["accession"]
+                filing["er_doc"] = fb_doc
+                filing["er_src_cik"] = fb_match.get("src_cik")
+            else:
+                filing["er_accession"] = None
+                filing["er_doc"] = None
+                filing["er_src_cik"] = None
 
     # Build result objects, sorted oldest-first
     selected.sort(key=lambda x: x["report_date"])
@@ -305,6 +322,40 @@ def _extract_er_8ks(
                 # guard).
                 "primary_doc": primary_docs[i],
                 "items": items_list[i] or "",
+                "src_cik": src_cik,
+            })
+    return results
+
+
+def _extract_other_8ks(
+    filings_raw: dict[str, Any], src_cik: str | None = None
+) -> list[dict]:
+    """8-Ks that furnish exhibits (9.01) but do NOT carry Item 2.02.
+
+    Batch 101: some filers furnish the earnings release without Item 2.02 —
+    Citi and Mettler-Toledo file 9.01-only, Colgate files 8.01+9.01, GE
+    Vernova files 2.01+9.01. These are never preferred over a 2.02 match;
+    they feed only the guarded _match_8k_non202_fallback, which additionally
+    requires a release-looking exhibit in the filing index. The 9.01
+    requirement bounds the candidate set to 8-Ks that actually furnish
+    exhibits (an exhibit-less 8-K cannot carry the release; embedded-in-
+    primary-doc releases remain a documented limitation).
+    """
+    forms = filings_raw["form"]
+    accessions = filings_raw["accessionNumber"]
+    filing_dates = filings_raw["filingDate"]
+    items_list = filings_raw["items"]
+    primary_docs = filings_raw["primaryDocument"]
+
+    results = []
+    for i, form in enumerate(forms):
+        items = items_list[i] or ""
+        if form == "8-K" and "2.02" not in items and "9.01" in items:
+            results.append({
+                "accession": accessions[i],
+                "filing_date": date.fromisoformat(filing_dates[i]),
+                "primary_doc": primary_docs[i],
+                "items": items,
                 "src_cik": src_cik,
             })
     return results
@@ -397,6 +448,94 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
         candidates,
         key=lambda er: abs((filed - er["filing_date"]).days),
     )
+
+
+def _exhibit_matches_period(
+    doc: str, ticker: str, report: date, filing_date: date
+) -> bool:
+    """Does the exhibit filename look like it belongs to this quarter?
+
+    Batch 101: the non-2.02 fallback's only semantic signal is the exhibit
+    name, so a bare ex99-style hit is not enough — a 9.01 8-K furnishing an
+    unrelated ex99 (Citi's Trust Preferred Securities 8-K,
+    d240560dex991.htm) must not become the quarter's earnings release. The
+    filename must reference the period: the 8-K's filing date as YYYYMMDD
+    (Citi's c-20240712xex99d1.htm), a quarter token for the period's quarter
+    and year (Colgate's q32024pressreleasetables.htm, MTD's
+    ex-991mtd8xkq42024.htm, GEV's gevpressrelease2q25.htm), or the company
+    ticker (len >= 2 — a single letter like Citi's "c" is noise).
+    """
+    stem = doc.lower()
+    if filing_date.strftime("%Y%m%d") in stem:
+        return True
+    yy = report.strftime("%y")
+    yyyy = report.strftime("%Y")
+    q = (report.month - 1) // 3 + 1
+    for tok in (
+        f"q{q}{yyyy}", f"q{q}{yy}", f"q{q}-{yyyy}", f"q{q}-{yy}",
+        f"{q}q{yy}", f"{q}q{yyyy}", f"{yyyy}q{q}", f"fy{yy}q{q}",
+    ):
+        if tok in stem:
+            return True
+    t = ticker.lower()
+    if len(t) >= 2 and t in stem:
+        return True
+    return False
+
+
+def _match_8k_non202_fallback(
+    filing: dict,
+    other_8ks: list[dict],
+    ticker: str,
+    cik: str,
+    edgar_client: EdgarClient,
+) -> tuple[dict, str] | None:
+    """Guarded fallback for earnings 8-Ks filed without Item 2.02.
+
+    Batch 101: Citi/Mettler-Toledo file 9.01-only earnings 8-Ks, Colgate
+    files 8.01+9.01, GE Vernova files 2.01+9.01 — the 2.02 gate in
+    _extract_er_8ks misses all of them. Only runs when _match_8k found no
+    2.02 candidate. Candidates keep the batch-97 guards (filed 7–60 days
+    after period end, not after the formal filing; nearest to the filing
+    wins) and additionally must carry a release-looking exhibit in their
+    filing index — _pick_release_doc, deliberately WITHOUT the
+    _lone_exhibit_fallback, so a lone non-release exhibit (an underwriting
+    agreement, a segment recast) can never promote an arbitrary 9.01 8-K
+    into the earnings release — whose filename must also reference the
+    period (_exhibit_matches_period: filing date, quarter token, or ticker),
+    so an unrelated ex99 (Citi's Trust Preferred Securities 8-K) cannot win
+    on name shape alone. Best-effort: an unreadable filing index
+    skips that candidate; total failure returns None.
+
+    Returns (matched_8k, exhibit_filename), or None.
+    """
+    report = filing["report_date"]
+    filed = filing["filing_date"]
+    candidates = [
+        er for er in other_8ks
+        if 7 <= (er["filing_date"] - report).days <= 60
+        and er["filing_date"] <= filed
+    ]
+    candidates.sort(key=lambda er: abs((filed - er["filing_date"]).days))
+    for cand in candidates:
+        url = edgar_client.filing_index_url(cand.get("src_cik") or cik, cand["accession"])
+        try:
+            html = edgar_client.fetch_text(url)
+        except Exception:
+            continue
+        if not isinstance(html, str):
+            continue
+        links = re.findall(r'href="([^"]+\.htm[l]?)"', html, re.IGNORECASE)
+        doc = _pick_release_doc(links)
+        if doc is not None and _exhibit_matches_period(
+            doc, ticker, report, cand["filing_date"]
+        ):
+            logger.info(
+                "Non-2.02 earnings 8-K fallback matched %s (%s) for %s %s",
+                cand["accession"], cand["items"], cik, report,
+            )
+            return cand, doc
+    return None
 
 
 # ── ex-99 exhibit discovery ───────────────────────────────────────────────────
