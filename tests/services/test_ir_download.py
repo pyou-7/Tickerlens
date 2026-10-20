@@ -2,8 +2,15 @@
 and _assign_fy_and_quarter (pure FY/quarter labeling)."""
 
 from datetime import date
+from unittest.mock import MagicMock
 
-from tickerlens.services.ir_download import _assign_fy_and_quarter, _pick_release_doc
+from tickerlens.services.ir_download import (
+    _assign_fy_and_quarter,
+    _lone_exhibit_fallback,
+    _merge_filings_recent,
+    _pick_release_doc,
+    discover_earnings_filings,
+)
 
 
 def test_ex99_classic_wins():
@@ -389,3 +396,329 @@ def test_newmont_earnings_and_year():
     # Newmont: newmontq42025earningsand20.htm.
     links = ["nem-20260219.htm", "newmontq42025earningsand20.htm", "R1.htm"]
     assert _pick_release_doc(links) == "newmontq42025earningsand20.htm"
+
+
+# ── Batch 97: partial-highlight residual forensics ────────────────────────────
+
+def test_acn_bare_8k_exhibit():
+    # ACN's older convention: fy24q4plc8-kexhibit.htm — a bare "8-K exhibit"
+    # in an Item 2.02 filing is the furnished release.
+    links = ["acn-20240926.htm", "fy24q4plc8-kexhibit.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "fy24q4plc8-kexhibit.htm"
+
+
+def test_affirm_shareholderlett_truncation():
+    # Affirm truncates one letter further: afrm-q225shareholderlett.htm.
+    links = ["afrm-20250206.htm", "afrm-q225shareholderlett.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "afrm-q225shareholderlett.htm"
+
+
+def test_cart_sha_truncation_with_ordinal_guard():
+    # CART: cartfourthquarter2025sha.htm — "sha" truncation with a spelled-out
+    # ordinal quarter marker.
+    links = ["cart-20260212.htm", "cartfourthquarter2025sha.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "cartfourthquarter2025sha.htm"
+    links = ["cart-20251110.htm", "cartthirdquarter2025shar.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "cartthirdquarter2025shar.htm"
+
+
+def test_sha_truncation_requires_quarter_marker():
+    # "sha" without any quarter/fy/ordinal marker must not match.
+    assert _pick_release_doc(["sharkweek2026.htm"]) is None
+    assert _pick_release_doc(["nebraskashares.htm"]) is None
+
+
+def test_cci_month_year_release():
+    # Crown Castle: may2026release.htm — month+year+"release". The proforma
+    # doc in the same index must not match.
+    links = [
+        "/Archives/edgar/data/1051470/000105147026000052/cci-20260501.htm",
+        "/Archives/edgar/data/1051470/000105147026000052/crowncastleincproforma.htm",
+        "/Archives/edgar/data/1051470/000105147026000052/may2026release.htm",
+    ]
+    assert _pick_release_doc(links) == "may2026release.htm"
+    assert _pick_release_doc(["crowncastleincproforma.htm"]) is None
+
+
+def test_ctva_reversed_quarter_marker():
+    # Corteva: final_4qx2024xearningsxn.htm — "4q" reversed quarter marker.
+    links = ["ctva-20250205.htm", "final_4qx2024xearningsxn.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "final_4qx2024xearningsxn.htm"
+
+
+def test_ctva_narrative_beats_schedules():
+    # Corteva furnishes the narrative release plus an "enrschedules" tables
+    # doc — the schedules (like "supplement") must lose.
+    links = ["a123124enrschedules.htm", "final_4qx2024xearningsxn.htm"]
+    assert _pick_release_doc(links) == "final_4qx2024xearningsxn.htm"
+
+
+def test_delta_announces_month():
+    # Delta: deltaairlinesannouncessept.htm — "announces" + truncated month.
+    for name in [
+        "deltaairlinesannouncessept.htm",
+        "deltaairlinesannouncesjune.htm",
+        "deltaairlinesannouncesmarc.htm",
+        "deltaairlinesannouncesdece.htm",
+    ]:
+        assert _pick_release_doc(["dal-20261009.htm", name]) == name
+
+
+def test_eqix_pr_with_trailing_junk():
+    # EQIX: eqix-033125xpr8k.htm / eqix-093024xpruploadhyperl.htm — "pr" with
+    # trailing junk plus a date guard. The separator before "pr" keeps
+    # "express"/"improper" out.
+    links = ["eqix-20250430.htm", "eqix-033125xpr8k.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "eqix-033125xpr8k.htm"
+    links = ["eqix-20241030.htm", "eqix-093024xpruploadhyperl.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "eqix-093024xpruploadhyperl.htm"
+    assert _pick_release_doc(["expressdelivery2026.htm"]) is None
+
+
+def test_gpc_truncated_earn_quarter():
+    # GPC: gpc-earnq22026.htm — truncated "earn" + quarter. The left boundary
+    # keeps "learn..."/"earned..." out.
+    links = ["gpc-20260721.htm", "gpc-earnq22026.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "gpc-earnq22026.htm"
+    # The left boundary keeps "learn..."/"earned..." (no "earnings") out.
+    assert _pick_release_doc(["gpc-learnq22026.htm"]) is None
+
+
+def test_mkc_truncated_headline_reports():
+    # McCormick's truncated headline names: the quarter word didn't survive
+    # truncation (mccormickreportsstrongfi.htm). Bare "reports" matches;
+    # "annual" is excluded.
+    for name in [
+        "mccormickreportsstrongfi.htm",
+        "mccormickreportsstrong20.htm",
+        "mccormickreportsstrong2024.htm",
+    ]:
+        assert _pick_release_doc(["mkc-20260331.htm", name]) == name
+    assert _pick_release_doc(["annualreports2024.htm"]) is None
+
+
+def test_unh_991_prefix_beats_992_supplement():
+    # United Health: a991unherq42025.htm is the 99.1 release; q42025er992.htm
+    # is the 99.2 supplement and must never be picked as the release.
+    links = ["unh-20260127.htm", "a991unherq42025.htm", "q42025er992.htm", "R1.htm"]
+    assert _pick_release_doc(links) == "a991unherq42025.htm"
+    assert _pick_release_doc(["q42025er992.htm"]) is None
+
+
+def test_991_letter_suffix_still_excludes_longer_numbers():
+    # doc9912final.htm must stay unmatched even with the letter-run lookahead.
+    assert _pick_release_doc(["doc9912final.htm"]) is None
+
+
+# ── Batch 97: lone-exhibit fallback (2.02-only 8-Ks) ──────────────────────────
+
+_TSLA_LINKS = [
+    "/index.htm",
+    "/search/search.htm",
+    "/news/newsroom/howinvestigationswork.html",
+    "/Archives/edgar/data/1616707/000162828024043432/0001628280-24-043432-index.html",
+    "/Archives/edgar/data/1616707/000162828024043432/0001628280-24-043432-index-headers.html",
+    "/Archives/edgar/data/1616707/000162828024043432/exhibit.htm",
+    "/Archives/edgar/data/1616707/000162828024043432/R1.htm",
+    "/Archives/edgar/data/1616707/000162828024043432/tsla-20241023.htm",
+    "/eeoinfo/sec_access.htm",
+    "/privacy.htm",
+]
+
+
+def test_lone_exhibit_fallback_tsla():
+    # Tesla's bare "exhibit.htm": the only non-primary filing doc in a
+    # 2.02-only 8-K is the furnished release.
+    assert (
+        _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", "2.02")
+        == "exhibit.htm"
+    )
+
+
+def test_lone_exhibit_fallback_requires_single_exhibit():
+    links = _TSLA_LINKS + [
+        "/Archives/edgar/data/1616707/000162828024043432/exhibit2.htm"
+    ]
+    assert _lone_exhibit_fallback(links, "tsla-20241023.htm", "2.02") is None
+
+
+def test_lone_exhibit_fallback_requires_202_first():
+    # Most earnings 8-Ks carry 9.01/7.01 alongside 2.02 — those must fire.
+    # An 8-K led by another item (incidental 2.02) must never be guessed.
+    assert (
+        _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", "2.02, 9.01")
+        == "exhibit.htm"
+    )
+    assert (
+        _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", "2.02,7.01,9.01")
+        == "exhibit.htm"
+    )
+    assert _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", "5.02, 2.02") is None
+    assert _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", "1.01, 2.02") is None
+    assert _lone_exhibit_fallback(_TSLA_LINKS, "tsla-20241023.htm", None) is None
+
+
+def test_lone_exhibit_fallback_relative_hrefs():
+    # Older indexes use relative hrefs for filing docs.
+    links = ["exhibit.htm", "hal-20260421.htm", "R1.htm"]
+    assert _lone_exhibit_fallback(links, "hal-20260421.htm", "2.02") == "exhibit.htm"
+
+
+# ── Batch 97: paginated submissions buckets ───────────────────────────────────
+
+def _recent_forms(*forms):
+    n = len(forms)
+    return {
+        "form": list(forms),
+        "accessionNumber": [f"acc-{i}" for i in range(n)],
+        "reportDate": ["2026-06-30"] * n,
+        "filingDate": ["2026-07-30"] * n,
+        "primaryDocument": [f"doc-{i}.htm" for i in range(n)],
+        "items": ["" for _ in range(n)],
+    }
+
+
+def test_merge_filings_recent_concatenates_parallel_arrays():
+    base = _recent_forms("10-Q", "8-K")
+    extra = _recent_forms("10-K", "10-Q")
+    merged = _merge_filings_recent(base, extra)
+    assert merged["form"] == ["10-Q", "8-K", "10-K", "10-Q"]
+    assert merged["accessionNumber"] == ["acc-0", "acc-1", "acc-0", "acc-1"]
+    # Base dict is not mutated.
+    assert base["form"] == ["10-Q", "8-K"]
+
+
+def test_discover_paginates_when_recent_is_short():
+    # High-volume filer: recent holds 1 10-Q + 1 10-K; the older 10-Q lives in
+    # bucket 001. discover_earnings_filings must page to find it.
+    recent = _recent_forms("10-Q", "10-K", "8-K", "8-K", "4")
+    recent["items"][2] = "2.02"
+    recent["items"][3] = "2.02"
+    bucket = _recent_forms("10-Q", "8-K")
+    bucket["items"][1] = "2.02"
+    # Make the bucket 8-K fall in the older quarter's 60-day window.
+    bucket["filingDate"] = ["2026-04-15", "2026-04-16"]
+    bucket["reportDate"] = ["2026-03-31", "2026-04-16"]
+    client = MagicMock()
+    client.cik_for_ticker.return_value = "0000001"
+    client.submissions.return_value = {
+        "filings": {"recent": recent, "files": [{"name": "CIK0000001-submissions-001.json"}]}
+    }
+    client.submissions_bucket.return_value = bucket
+    client.filing_index_url.side_effect = lambda cik, acc: f"https://x/{acc}/"
+    client.fetch_text.return_value = "<html></html>"
+
+    periods = discover_earnings_filings("FAKE", client, n_quarters=3)
+    assert client.submissions_bucket.called  # had to paginate
+    assert len(periods) == 3
+    # The older quarter came from the bucket.
+    assert periods[0].period_end == date(2026, 3, 31)
+
+
+def test_discover_stops_paginating_when_enough():
+    recent = _recent_forms("10-Q", "10-K")
+    client = MagicMock()
+    client.cik_for_ticker.return_value = "0000001"
+    client.submissions.return_value = {"filings": {"recent": recent, "files": []}}
+    periods = discover_earnings_filings("FAKE", client, n_quarters=2)
+    assert not client.submissions_bucket.called
+    assert len(periods) == 2
+
+
+def test_992_993_supplements_excluded_from_tier0():
+    # BAC: bac-09302026ex993.htm is the 99.3 supplement — the 99.1 release
+    # must win. A 99.2-only index honestly yields None.
+    links = [
+        "bac-09302026ex993.htm",
+        "bac-20261014.htm",
+        "bac09302026ex991.htm",
+        "bac09302026ex992.htm",
+    ]
+    assert _pick_release_doc(links) == "bac09302026ex991.htm"
+    assert _pick_release_doc(["ex992qfsq325.htm"]) is None
+    assert _pick_release_doc(["ex993q32025totalaum.htm"]) is None
+    # 99.1 forms still match.
+    assert _pick_release_doc(["ex99-1.htm"]) == "ex99-1.htm"
+    assert _pick_release_doc(["exhibit991-8k_20250628.htm"]) == "exhibit991-8k_20250628.htm"
+
+
+def test_match_8k_excludes_8k_filed_after_10q():
+    # PNC: a 2.02 investor-conference 8-K (2025-11-07) filed AFTER the 10-Q
+    # (2025-11-03) cannot be the earnings release — the 10-15 earnings 8-K
+    # wins even though the conference is nearer the filing date.
+    from tickerlens.services.ir_download import _match_8k
+
+    filing = _sec_filing("10-Q", date(2025, 9, 30), date(2025, 11, 3))
+    earnings = _er(date(2025, 10, 15))
+    conference = _er(date(2025, 11, 7))
+    assert _match_8k(filing, [conference, earnings]) == earnings
+    assert _match_8k(filing, [earnings, conference]) == earnings
+
+
+def test_discover_extends_to_oldest_stored_period():
+    # Batch 97: the stored 8-quarter window can lag submissions (EDGAR
+    # companyfacts delay) — discovery must extend past n_quarters to cover
+    # the oldest stored period_end.
+    def filing(report, filed):
+        return {
+            "form": "10-Q", "accession": f"acc-{report}", "report_date": report,
+            "filing_date": filed, "primary_doc": "d.htm",
+        }
+
+    # 9 filings; n_quarters=8 but oldest stored needs the 9th.
+    sec = [filing(date(2026, 3, 31) , date(2026, 5, 1))]
+    sec += [filing(date(2025, 12, 31), date(2026, 2, 1))]
+    sec += [filing(date(2025, 9, 30), date(2025, 11, 1))]
+    sec += [filing(date(2025, 6, 30), date(2025, 8, 1))]
+    sec += [filing(date(2025, 3, 31), date(2025, 5, 1))]
+    sec += [filing(date(2024, 12, 31), date(2025, 2, 1))]
+    sec += [filing(date(2024, 9, 30), date(2024, 11, 1))]
+    sec += [filing(date(2024, 6, 30), date(2024, 8, 1))]
+    sec += [filing(date(2024, 3, 31), date(2024, 5, 1))]
+    recent = {
+        "form": ["10-Q"] * 9,
+        "accessionNumber": [f["accession"] for f in sec],
+        "reportDate": [f["report_date"].isoformat() for f in sec],
+        "filingDate": [f["filing_date"].isoformat() for f in sec],
+        "primaryDocument": ["d.htm"] * 9,
+        "items": [""] * 9,
+    }
+    client = MagicMock()
+    client.cik_for_ticker.return_value = "0000001"
+    client.submissions.return_value = {"filings": {"recent": recent, "files": []}}
+    client.filing_index_url.side_effect = lambda cik, acc: f"https://x/{acc}/"
+    client.fetch_text.return_value = "<html></html>"
+
+    periods = discover_earnings_filings(
+        "FAKE", client, n_quarters=8, oldest_period_end=date(2024, 3, 31)
+    )
+    assert len(periods) == 9
+    assert periods[0].period_end == date(2024, 3, 31)
+    # Without the hint, exactly n_quarters.
+    periods = discover_earnings_filings("FAKE", client, n_quarters=8)
+    assert len(periods) == 8
+
+
+def test_match_8k_ignores_8k_too_soon_after_period_end():
+    # Tesla: a 2.02 deliveries/production 8-K two days after quarter end is
+    # not the earnings release — the later earnings 8-K wins.
+    from tickerlens.services.ir_download import _match_8k
+
+    filing = _sec_filing("10-Q", date(2024, 9, 30), date(2024, 10, 24))
+    deliveries = _er(date(2024, 10, 2))
+    earnings = _er(date(2024, 10, 23))
+    assert _match_8k(filing, [deliveries, earnings]) == earnings
+
+
+def test_pick_release_doc_undotted_9901():
+    # Cadence's cdns07222024ex9901.htm is a 99.1 release ("ex99"+"01") — the
+    # 99.2/99.3 guard must not block the undotted 99.1 form, while ex992/ex993
+    # (and ex9902/ex9903) stay excluded.
+    links = [
+        "/Archives/edgar/data/813672/000081367224000150/cdns07222024ex9901.htm",
+        "/Archives/edgar/data/813672/000081367224000150/cfocommentary07222024ex9902.htm",
+    ]
+    assert _pick_release_doc(links) == "cdns07222024ex9901.htm"
+    # 99.2/99.3 undotted forms are still excluded.
+    assert _pick_release_doc(["/x/bac-09302026ex993.htm"]) is None
+    assert _pick_release_doc(["/x/met-ex9902qfs.htm"]) is None

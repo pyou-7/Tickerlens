@@ -1232,7 +1232,14 @@ class FinancialsService:
             return
 
         try:
-            periods = discover_earnings_filings(ticker, self.edgar_client, n_quarters=len(rows))
+            # Batch 97: pass the oldest stored period so discovery paginates
+            # far enough to cover it — the stored window can lag submissions
+            # when EDGAR companyfacts is behind (pending-filing cohort).
+            oldest = min(r.period_end for r in rows)
+            periods = discover_earnings_filings(
+                ticker, self.edgar_client, n_quarters=len(rows),
+                oldest_period_end=oldest,
+            )
         except Exception:
             logger.warning(
                 "Earnings-release discovery failed for %s", ticker, exc_info=True

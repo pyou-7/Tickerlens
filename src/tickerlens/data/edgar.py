@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+SEC_SUBMISSIONS_BUCKET_URL = "https://data.sec.gov/submissions/{bucket}"
 SEC_COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
 
@@ -178,6 +179,23 @@ class EdgarClient:
     def submissions(self, cik: str | int, *, fresh: bool = False) -> dict[str, Any]:
         return self.fetch_json(
             SEC_SUBMISSIONS_URL.format(cik=normalize_cik(cik)),
+            max_age_seconds=0 if fresh else None,
+        )
+
+    def submissions_bucket(
+        self, cik: str | int, bucket_name: str, *, fresh: bool = False
+    ) -> dict[str, Any]:
+        """Fetch one paginated older-submissions file for a CIK.
+
+        The top-level submissions JSON only covers the ``recent`` filings;
+        older filings live in ``filings.files`` buckets named like
+        ``CIK0000070858-submissions-001.json`` (001 = next-older after
+        recent). Batch 97: discover_earnings_filings only read ``recent``,
+        so high-volume filers (BAC/C/BLK — recent covers <4 quarters of
+        10-Q/10-K) could never match earnings 8-Ks for older quarters.
+        """
+        return self.fetch_json(
+            SEC_SUBMISSIONS_BUCKET_URL.format(bucket=bucket_name),
             max_age_seconds=0 if fresh else None,
         )
 

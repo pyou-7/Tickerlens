@@ -19,12 +19,15 @@ Fiscal-year label algorithm:
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from tickerlens.data.edgar import EdgarClient, normalize_cik
+
+logger = logging.getLogger(__name__)
 
 
 # ── public types ─────────────────────────────────────────────────────────────
@@ -45,13 +48,40 @@ class EarningsPeriod:
 
 # ── public API ────────────────────────────────────────────────────────────────
 
+def _merge_filings_recent(
+    base: dict[str, Any], extra: dict[str, Any]
+) -> dict[str, Any]:
+    """Concatenate a paginated older-submissions ``recent`` block onto the base.
+
+    The submissions buckets share the parallel-array schema (form,
+    accessionNumber, reportDate, filingDate, primaryDocument, items, ...);
+    concatenation preserves per-filing alignment. Batch 97: lets
+    discover_earnings_filings see 10-Q/10-Ks older than the top-level
+    ``recent`` bucket for high-volume filers.
+    """
+    merged = dict(base)
+    for key, value in extra.items():
+        if isinstance(value, list) and isinstance(merged.get(key), list):
+            merged[key] = merged[key] + value
+    return merged
+
+
 def discover_earnings_filings(
     ticker: str,
     edgar_client: EdgarClient,
     n_quarters: int = 4,
+    oldest_period_end: date | None = None,
 ) -> list[EarningsPeriod]:
     """
     Return the last n_quarters EarningsPeriod objects for a ticker, oldest first.
+
+    When ``oldest_period_end`` is given (the oldest stored quarter needing
+    enrichment), pagination continues past n_quarters until the filings cover
+    it, and the selection extends to include it. Batch 97: the stored 8-quarter
+    window can lag submissions (EDGAR companyfacts delay) — e.g. V's stored
+    rows end 2026-03-31 while submissions already have the 2026-06-30 10-Q,
+    so the latest-8 filings start at 2024-09-30 and the stored 2024-06-30
+    quarter (the 9th filing) would never match an 8-K.
 
     Raises KeyError if the ticker is not found in EDGAR.
     """
@@ -60,11 +90,65 @@ def discover_earnings_filings(
     filings_raw = subs["filings"]["recent"]
 
     sec_filings = _extract_sec_filings(filings_raw)
-    er_8ks = _extract_er_8ks(filings_raw)
+    # Batch 97: the top-level "recent" bucket may cover fewer than n_quarters
+    # of 10-Q/10-K for high-volume filers (BAC's recent holds 3 10-Q + 1
+    # 10-K) — older quarters then never matched an earnings 8-K and their
+    # highlights could never backfill. Page through the older-submissions
+    # buckets (001 = next-older after recent) until we have enough 10-Q/10-K.
+    # The 8-Ks contemporary with those older quarters ride along in the same
+    # buckets, so _extract_er_8ks sees them too. Cached by fetch_json, so the
+    # extra requests are one-time-ish per CIK.
+    bucket_names = [f["name"] for f in subs["filings"].get("files", [])]
+    bucket_i = 0
+    while True:
+        sec_ok = len(sec_filings) >= n_quarters
+        oldest_ok = (
+            oldest_period_end is None
+            or not sec_filings
+            or min(f["report_date"] for f in sec_filings) <= oldest_period_end
+        )
+        # Batch 97: the 8-K for the oldest needed quarter can sit in an older
+        # bucket than its 10-Q (MS's Oct-2024 8-K vs its Nov-2024 10-Q) —
+        # keep paging until the 8-Ks reach the oldest period's 8-K window.
+        er_8ks = _extract_er_8ks(filings_raw)
+        er_ok = (
+            oldest_period_end is None
+            or not er_8ks
+            or min(er["filing_date"] for er in er_8ks)
+            <= oldest_period_end + timedelta(days=7)
+        )
+        if (sec_ok and oldest_ok and er_ok) or bucket_i >= len(bucket_names):
+            break
+        try:
+            # NB: a bucket file's top level IS the "recent"-shaped block
+            # (no "filings" wrapper).
+            older = edgar_client.submissions_bucket(cik, bucket_names[bucket_i])
+            filings_raw = _merge_filings_recent(filings_raw, older)
+            sec_filings = _extract_sec_filings(filings_raw)
+        except Exception:
+            logger.warning(
+                "Older-submissions bucket %s unreadable for %s",
+                bucket_names[bucket_i],
+                ticker,
+                exc_info=True,
+            )
+            break
+        bucket_i += 1
 
-    # Take the most recent n_quarters 10-Q/10-K sorted by period end
+    # Take the most recent n_quarters 10-Q/10-K sorted by period end,
+    # extended down to oldest_period_end when the stored window lags
+    # submissions (batch 97).
     sec_filings.sort(key=lambda x: x["report_date"], reverse=True)
-    selected = sec_filings[:n_quarters]
+    if oldest_period_end is not None:
+        n_take = n_quarters
+        while (
+            n_take < len(sec_filings)
+            and sec_filings[n_take - 1]["report_date"] > oldest_period_end
+        ):
+            n_take += 1
+        selected = sec_filings[:n_take]
+    else:
+        selected = sec_filings[:n_quarters]
 
     # Assign FY and quarter labels using the anchor algorithm
     _assign_fy_and_quarter(selected)
@@ -73,7 +157,7 @@ def discover_earnings_filings(
     for filing in selected:
         matched = _match_8k(filing, er_8ks)
         if matched:
-            er_doc = _find_ex99_doc(cik, matched["accession"], edgar_client)
+            er_doc = _find_ex99_doc(cik, matched, edgar_client)
             filing["er_accession"] = matched["accession"]
             filing["er_doc"] = er_doc
         else:
@@ -113,6 +197,7 @@ def _extract_er_8ks(filings_raw: dict[str, Any]) -> list[dict]:
     accessions = filings_raw["accessionNumber"]
     filing_dates = filings_raw["filingDate"]
     items_list = filings_raw["items"]
+    primary_docs = filings_raw["primaryDocument"]
 
     results = []
     for i, form in enumerate(forms):
@@ -120,6 +205,11 @@ def _extract_er_8ks(filings_raw: dict[str, Any]) -> list[dict]:
             results.append({
                 "accession": accessions[i],
                 "filing_date": date.fromisoformat(filing_dates[i]),
+                # Batch 97: the lone-exhibit fallback needs the primary doc
+                # name (to exclude it) and the exact items string (2.02-only
+                # guard).
+                "primary_doc": primary_docs[i],
+                "items": items_list[i] or "",
             })
     return results
 
@@ -187,19 +277,29 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
     anchoring on the filing date with a tight window systematically missed
     annual periods. Anchor on the period end instead: candidates are Item
     2.02 8-Ks filed after the report date and within 60 days; the one nearest
-    the formal filing date wins (a quarter has exactly one earnings release,
-    so ties are pathological).
+    the formal filing date wins.
+
+    Two guards keep later/earlier 2.02 furnishings out (batch 97):
+    - Filed AFTER the 10-Q/10-K: not the earnings release (PNC furnished a
+      2.02 investor-conference 8-K on 2025-11-07, four days after its 11-03
+      10-Q — "nearest" picked the conference over the 10-15 earnings 8-K).
+    - Filed within 7 days of period end: too early for earnings (the books
+      aren't closed) — Tesla furnishes production/deliveries under 2.02 two
+      days after quarter end, ahead of the real earnings 8-K three weeks
+      later.
     """
     report = filing["report_date"]
+    filed = filing["filing_date"]
     candidates = [
         er for er in er_8ks
-        if 0 <= (er["filing_date"] - report).days <= 60
+        if 7 <= (er["filing_date"] - report).days <= 60
+        and er["filing_date"] <= filed
     ]
     if not candidates:
         return None
     return min(
         candidates,
-        key=lambda er: abs((filing["filing_date"] - er["filing_date"]).days),
+        key=lambda er: abs((filed - er["filing_date"]).days),
     )
 
 
@@ -211,21 +311,36 @@ def _pick_release_doc(links: list[str]) -> str | None:
     Pure (no network) so it can be unit-tested. Priority order:
       1. ex99-style names (ex99, ex-99, ex991, EX-99.1, exx99, exh99) —
          AAPL/MSFT/PLUG style, Mastercard's doubled-x
-         "ma06302026-exx991xearnings.htm", EOG's "exh99-1" convention.
+         "ma06302026-exx991xearnings.htm", EOG's "exh99-1" convention;
+         a bare "991" exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1),
+         "991" as an infix before a quarter marker or separator (Realty
+         Income's o-991q22026.htm), or "991" leading a letter run (United
+         Health's a991unherq42025.htm — the 99.1 release; its q42025er992.htm
+         99.2 supplement is deliberately NOT matched).
       2. Press-release naming: *pressrelease*, *earningsrelease* (or the
          truncated *earningsrele* Starbucks uses), digit/separator-suffixed
          forms (Carnival, Travelers), explicit "earnings 8-K exhibit"
-         (Accenture), "earnings news release" (Corteva), shareholder-letter
-         releases (Affirm/Coinbase/Duolingo), "sales and earnings" (Lilly),
+         (Accenture) or bare "8-K exhibit" (ACN's fy24q4plc8-kexhibit.htm),
+         "earnings news release" (Corteva), shareholder-letter releases
+         (Affirm/Coinbase/Duolingo, incl. "shareholderlett" truncation),
+         "share"/"shar"/"sha" truncations with a quarter/fy/ordinal guard
+         (CART's cartfourthquarter2025sha.htm), "sales and earnings" (Lilly),
          "financial highlights" (PNC), headline-style "X reports ..."
-         (McCormick), "er doc" (Southwest), bare "er"+quarter (ServiceNow),
-         *-pr/_pr suffixes, or a quarter-style stem ending in "pr"
-         (NVDA's q2fy27pr.htm).
+         (McCormick, incl. truncated mkcreportsstrongfi.htm), "er doc"
+         (Southwest), bare "er"+quarter (ServiceNow), *-pr/_pr suffixes,
+         "pr" with trailing junk plus a date/quarter guard (EQIX's
+         eqix-033125xpr8k.htm / eqix-093024xpruploadhyperl.htm), or a
+         quarter-style stem ending in "pr" (NVDA's q2fy27pr.htm).
       3. Weaker signals: "earnings" adjacent to a quarter/fy marker
-         (Snowflake's fy2027q2earnings.htm).
-    Within a tier, a "supplement" exhibit (tables/appendix material, e.g.
-    JPMorgan's *erfex992supplement.htm) loses to the narrative release
-    (e.g. *exhibit991narrative.htm) — the supplement has no guidance section
+         (Snowflake's fy2027q2earnings.htm; Corteva's reversed "4qx2024"
+         marker), truncated "earn"+quarter (GPC's gpc-earnq22026.htm),
+         month+year+"release" (Crown Castle's may2026release.htm),
+         "announces"+month (Delta's deltaairlinesannouncessept.htm), bare
+         "reports" (McCormick's truncated headline names — "annual" excluded).
+    Within a tier, a "supplement"/"schedules" exhibit (tables/appendix
+    material, e.g. JPMorgan's *erfex992supplement.htm, Corteva's
+    *enrschedules.htm) loses to the narrative release (e.g.
+    *exhibit991narrative.htm) — the supplement has no guidance section
     or executive quotes to extract.
     Returns the bare filename, or None when nothing looks like a release.
     """
@@ -244,11 +359,20 @@ def _pick_release_doc(links: list[str]) -> str | None:
         # ex99 / ex-99 / ex991 / EX-99.1 / exx99 / exh99 (Mastercard's
         # doubled-x "exx991xearnings" convention, e.g.
         # ma06302026-exx991xearnings.htm; EOG's exh99-1...htm), a bare "991"
-        # exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1), or "991" as an
+        # exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1), "991" as an
         # infix before a quarter marker or separator (Realty Income's
-        # o-991q22026.htm = 99.1, Q2 2026).
-        if re.search(r"ex(?:hibit|h)?x?[^a-z0-9]?99", name, re.IGNORECASE) or re.search(
-            r"991(?=q\d|[-_]|$)", stem, re.IGNORECASE
+        # o-991q22026.htm = 99.1, Q2 2026), or "991" leading a letter run
+        # (United Health's a991unherq42025.htm — the 99.1 release; the
+        # lookahead's digit exclusion keeps doc9912final.htm unmatched, and
+        # 99.2 supplements like q42025er992.htm deliberately never match).
+        # The (?!\d|\.\d) guard keeps 99.2/99.3+ supplements (BAC's
+        # bac-09302026ex993.htm, MET's ex992qfsq325.htm) out of tier 0 — the
+        # 99.1 release is the press release; higher numbers are supplements.
+        # The "01" alternative covers the undotted 99.1 form (Cadence's
+        # cdns07222024ex9901.htm); "02"/"03" still fail the guard. The guard
+        # allows the "." of the file extension (".htm") but not ".2"/".3".
+        if re.search(r"ex(?:hibit|h)?x?[^a-z0-9]?99(\.1|1|01)?(?!\d|\.\d)", name, re.IGNORECASE) or re.search(
+            r"991(?=q\d|[-_]|$|[a-z])", stem, re.IGNORECASE
         ):
             base = 0
         # Press-release naming (tier 1):
@@ -256,28 +380,36 @@ def _pick_release_doc(links: list[str]) -> str | None:
         # *earningsrelea* Starbucks and Amgen use), including digit- or
         # separator-suffixed forms (Carnival's a20263qearningsrelease8-k.htm,
         # Travelers' a991pressrelease93026.htm); explicit "earnings 8-K
-        # exhibit" naming (Accenture's q4fy26earnings8-kexhibit.htm); "earnings
+        # exhibit" naming (Accenture's q4fy26earnings8-kexhibit.htm) or a bare
+        # "8-K exhibit" (ACN's older fy24q4plc8-kexhibit.htm — an 8-K exhibit
+        # in an Item 2.02 filing is the furnished release); "earnings
         # news release" (Corteva's a2q_2026xearningsxnewsxr.htm); shareholder
-        # letters that ARE the release (Affirm's affirmfq426shareholderle.htm,
-        # Coinbase's q425shareholderletter.htm, Duolingo's
-        # q2fy26duolingo6-30x26share.htm and q4fy25duolingo12-31x25shar.htm —
-        # beats the ...xpres.htm deck);
+        # letters that ARE the release (Affirm's affirmfq426shareholderle.htm
+        # and afrm-q225shareholderlett.htm, Coinbase's
+        # q425shareholderletter.htm, Duolingo's q2fy26duolingo6-30x26share.htm
+        # and q4fy25duolingo12-31x25shar.htm — beats the ...xpres.htm deck);
+        # "share"/"shar"/"sha" truncations (CART's cartfourthquarter2025sha.htm
+        # — the quarter/fy/ordinal guard keeps lookalikes out);
         # "sales and earnings" (Lilly's q226lillysalesandearningsp.htm);
         # "financial highlights" (PNC's q32026financialhighlightsa.htm —
         # beats the ...financialsupplement.htm tables); headline-style "X
         # reports ..." (McCormick's mkcreportssolidthirdquar.htm); "er doc"
         # (Southwest's er-6302026xerdoc.htm); bare "er"+quarter (ServiceNow's
-        # erq2fy26.htm).
+        # erq2fy26.htm); "pr" with trailing junk plus a date/quarter guard
+        # (EQIX's eqix-033125xpr8k.htm / eqix-093024xpruploadhyperl.htm — the
+        # separator before "pr" keeps "express"/"improper" out).
         elif (
             re.search(r"(press|earnings)[-_ ]?rele[a-z]*(?=$|[-_.\d])", stem, re.IGNORECASE)
             or re.search(r"(press|earnings)[-_ ]?8[-_ ]?k", stem, re.IGNORECASE)
+            or re.search(r"8[-_ ]?k[-_ ]?exhibit", stem, re.IGNORECASE)
             or re.search(r"earnings[-_x]?news", stem, re.IGNORECASE)
-            or re.search(r"shareholder(?:le(?:t(?:ter)?)?)?(?=$|[-_.])", stem, re.IGNORECASE)
+            or re.search(r"shareholder(?:le(?:t(?:t(?:er?)?)?)?)?(?=$|[-_.])", stem, re.IGNORECASE)
             or (
-                # "share"/"shar" truncations (Duolingo's ...x26share.htm and
-                # ...x25shar.htm) — the quarter/fy guard keeps lookalikes out.
-                re.search(r"share?$", stem, re.IGNORECASE)
-                and re.search(r"(q[1-4]|fy\d)", stem, re.IGNORECASE)
+                # "share"/"shar"/"sha" truncations (CART's
+                # cartfourthquarter2025sha.htm) — the quarter/fy/ordinal guard
+                # keeps lookalikes like "sharkweek" out.
+                re.search(r"sha(?:re?)?$", stem, re.IGNORECASE)
+                and re.search(r"(q[1-4]|fy\d|first|second|third|fourth)", stem, re.IGNORECASE)
             )
             or re.search(r"sales[-_ ]?and[-_ ]?earnings", stem, re.IGNORECASE)
             or re.search(r"financial[-_ ]?highlights", stem, re.IGNORECASE)
@@ -291,25 +423,61 @@ def _pick_release_doc(links: list[str]) -> str | None:
             )
             or re.search(r"(^|[-_x.])erdoc(ument)?($|[-_.])", stem, re.IGNORECASE)
             or re.search(r"(^|[-_])erq[1-4]", stem, re.IGNORECASE)
+            or re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE)
+            or (
+                re.search(r"(^|[-_x.])pr", stem, re.IGNORECASE)
+                and re.search(r"(q[1-4]|fy\d|\d{6})", stem, re.IGNORECASE)
+            )
         ):
-            base = 1
-        elif re.search(r"(^|[-_])pr([-_.]|$)", stem, re.IGNORECASE):
             base = 1
         # Quarter-style stem ending in "pr" with a digit (year/fy marker),
         # e.g. q2fy27pr — excludes lookalikes like proper.htm / super.htm.
         elif re.search(r"pr$", stem, re.IGNORECASE) and re.search(r"\d", stem):
             base = 2
         # "earnings" adjacent to a quarter/fy marker (Snowflake's
-        # fy2027q2earnings.htm, Newmont's newmontq42025earningsand20.htm).
+        # fy2027q2earnings.htm, Newmont's newmontq42025earningsand20.htm;
+        # Corteva's reversed "4qx2024" marker in final_4qx2024xearningsxn.htm).
         elif re.search(
-            r"(q[1-4]|fy\d).{0,12}earnings|earnings.{0,12}(q[1-4]|fy\d)",
+            r"(q[1-4]|[1-4]q|fy\d).{0,12}earnings|earnings.{0,12}(q[1-4]|[1-4]q|fy\d)",
             stem,
             re.IGNORECASE,
         ):
             base = 2
+        # Truncated "earn"+quarter (GPC's gpc-earnq22026.htm — the left
+        # boundary keeps "learn..."/"earned..." out).
+        elif re.search(r"(^|[-_x.])earn[-_x]?(q[1-4]|fy\d)", stem, re.IGNORECASE):
+            base = 2
+        # Month+year+"release" (Crown Castle's may2026release.htm — the
+        # proforma doc in the same index carries no "release").
+        elif re.search(
+            r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{4}rele[a-z]*(?=$|[-_.])",
+            stem,
+            re.IGNORECASE,
+        ):
+            base = 2
+        # "announces"+month (Delta's deltaairlinesannouncessept.htm /
+        # ...announcesjune.htm / ...announcesmarc.htm / ...announcesdece.htm).
+        elif re.search(
+            r"announces(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+            stem,
+            re.IGNORECASE,
+        ):
+            base = 2
+        # Bare headline-style "reports" (McCormick's truncated
+        # mccormickreportsstrongfi.htm / ...strong20.htm / ...strong2024.htm —
+        # the quarter word didn't survive truncation; "annual" excluded so
+        # annual-report exhibits can never match).
+        elif re.search(r"reports", stem, re.IGNORECASE) and not re.search(
+            r"annual", stem, re.IGNORECASE
+        ):
+            base = 2
         if base is None:
             return None
-        penalty = 1 if "supplement" in stem.lower() else 0
+        penalty = (
+            1
+            if re.search(r"supplement|schedules", stem, re.IGNORECASE)
+            else 0
+        )
         return (base, penalty)
 
     ranked = [(rank, name) for name in candidates if (rank := _rank(name)) is not None]
@@ -318,13 +486,70 @@ def _pick_release_doc(links: list[str]) -> str | None:
     return min(ranked, key=lambda item: item[0])[1]
 
 
-def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str | None:
+def _is_filing_doc_href(href: str) -> bool:
+    """True for hrefs pointing at actual filing documents (not SEC chrome).
+
+    Filing docs live under /Archives/edgar/data/ (absolute hrefs) or are
+    relative (older indexes); the nav chrome (search, about, eeoinfo,
+    privacy, index.htm) always uses absolute non-/Archives/ paths.
+    """
+    return "/Archives/edgar/data/" in href or (
+        not href.startswith(("/", "http")) and "://" not in href
+    )
+
+
+def _lone_exhibit_fallback(
+    links: list[str], primary_doc: str | None, items: str | None
+) -> str | None:
+    """Last-resort exhibit pick for earnings 8-Ks (batch 97).
+
+    Some filers name the furnished release with no recognizable convention:
+    Tesla's bare "exhibit.htm", PNC's "a2025_11x07xbaabxvf.htm", Halliburton's
+    Workiva-default "livemastererdocument.htm", Union Pacific's
+    "ex_713315.htm". In an 8-K led by Item 2.02, a single non-primary exhibit
+    IS the furnished release — 2.02 exists to furnish it — so when
+    _pick_release_doc finds nothing and exactly one filing document (besides
+    the primary 8-K doc) is present, return it.
+
+    The 2.02-first guard is the safety: most earnings 8-Ks carry 9.01 (and
+    often 7.01) alongside 2.02, so "exactly 2.02" would almost never fire;
+    but an 8-K led by another item (e.g. 5.02 with an employment-agreement
+    exhibit and an incidental embedded 2.02 release) must never be guessed.
+    Pure (no network) for unit tests.
+    """
+    first_item = (items or "").split(",")[0].strip()
+    if first_item != "2.02":
+        return None
+    docs = []
+    for href in links:
+        if not _is_filing_doc_href(href):
+            continue
+        name = href.split("/")[-1]
+        low = name.lower()
+        if low == "index.htm":
+            continue
+        if low.endswith("-index.html") or low.endswith("-index-headers.html"):
+            continue
+        if re.match(r"^R\d+\.htm[l]?$", name, re.IGNORECASE):
+            continue
+        if primary_doc and low == primary_doc.lower():
+            continue
+        docs.append(name)
+    if len(docs) == 1:
+        return docs[0]
+    return None
+
+
+def _find_ex99_doc(
+    cik: str, matched_8k: dict, edgar_client: EdgarClient
+) -> str | None:
     """
     Fetch the 8-K filing index and return the earnings-release exhibit filename.
 
     Returns None if no release-looking file is found (some companies embed the
     press release directly in the primary 8-K document).
     """
+    accession = matched_8k["accession"]
     url = edgar_client.filing_index_url(cik, accession)
     try:
         html = edgar_client.fetch_text(url)
@@ -333,7 +558,12 @@ def _find_ex99_doc(cik: str, accession: str, edgar_client: EdgarClient) -> str |
 
     # Look for links that indicate an exhibit 99 file or press-release doc.
     links = re.findall(r'href="([^"]+\.htm[l]?)"', html, re.IGNORECASE)
-    return _pick_release_doc(links)
+    doc = _pick_release_doc(links)
+    if doc is None:
+        doc = _lone_exhibit_fallback(
+            links, matched_8k.get("primary_doc"), matched_8k.get("items")
+        )
+    return doc
 
 
 # ── result builder ────────────────────────────────────────────────────────────
