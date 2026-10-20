@@ -140,6 +140,21 @@ _ADMIN_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A highlights line that carries reported financial figures rather than
+# business narrative: a dollar amount, a percent, or a financial keyword
+# ("revenue", "net income", "per share", "margin", "cash flow", ...).
+# Used to rank candidate highlights sections so the financial one wins for
+# this financials app (Halliburton's Q2 2026 release puts "Net income of
+# $0.64 per diluted share" bullets right after the headline and buries them
+# under a later "Selective Technology & Highlights" business section).
+_FINANCIAL_LINE_RE = re.compile(
+    r"\$[\d,]|\d\s*%|%|\b(?:revenue|net income|net loss|earnings? per share|"
+    r"per diluted share|per basic share|per share|operating margin|"
+    r"gross margin|adjusted margin|ebitda|cash flow|operating income|"
+    r"operating loss|diluted share|dividend|repurchas|buyback)\b",
+    re.IGNORECASE,
+)
+
 # An explicit "Highlights" / "Financial Highlights" section heading.
 # "Highlights" must head the line ("HIGHLIGHTS FOR ...") or close it
 # ("Selected Revenue Highlights") — a bare \bhighlights?\b also matched the
@@ -856,13 +871,59 @@ def extract_press_release_highlights(
     return result
 
 
-def _extract_highlights_section(lines: list[str]) -> list[str] | None:
-    """Return the content lines of an explicit "Highlights" section, or None.
+def _financial_line_count(lines: list[str]) -> int:
+    """Count lines carrying reported financial figures (see _FINANCIAL_LINE_RE)."""
+    return sum(1 for ln in lines if _FINANCIAL_LINE_RE.search(ln))
 
-    Collects lines after a highlights heading until boilerplate or what looks
-    like the next section heading (a short ALL-CAPS line). Requires a minimum
-    amount of content — a heading with nothing under it falls back to the lede.
+
+def _leading_bullet_block(lines: list[str]) -> list[str] | None:
+    """Consecutive bullet lines immediately after the headline.
+
+    Some filers (Halliburton) open the release with the financial bullets
+    ("Net income of $0.64 per diluted share ...") before any "Highlights"
+    heading, which may later introduce a purely business section. Bullet
+    items may wrap across lines ("... free cash flow1 of / approximately
+    $582 million."): a non-bullet line following a bullet start is a
+    continuation unless it closes the item (terminal punctuation) and the
+    next line isn't a new bullet — that's the dateline paragraph starting.
+    Returns the block only when substantial — otherwise None.
     """
+    bullets: list[str] = []
+    in_item = False  # previous line was a bullet start or continuation
+    n = len(lines)
+    for idx, ln in enumerate(lines):
+        if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
+            continue
+        if _BOILERPLATE_RE.match(ln):
+            break
+        if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
+            break  # a headed section follows; it competes on its own
+        if ln.startswith(("•", "-", "*")):
+            bullets.append(ln)
+            in_item = True
+        elif in_item:
+            nxt = lines[idx + 1] if idx + 1 < n else ""
+            bullets.append(ln)
+            if re.search(r"[.!?;]\s*$", ln) and not nxt.startswith(("•", "-", "*")):
+                break  # item closed and prose follows (dateline)
+        else:
+            break  # first line isn't a bullet — no leading block
+        if len(bullets) >= 14:
+            break
+    if len("\n".join(bullets)) >= 150:
+        return bullets
+    return None
+
+
+def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
+    """Return the content lines of every explicit "Highlights" section.
+
+    Previously only the first match was returned; Halliburton's releases
+    pair leading financial bullets with a later business "Highlights"
+    section, so all candidates are collected and ranked by financial
+    density by the caller (batch 102).
+    """
+    sections: list[list[str]] = []
     for i, ln in enumerate(lines):
         if not _HIGHLIGHTS_HEADING_RE.search(ln) or len(ln) > 120:
             continue
@@ -880,9 +941,39 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         if len("\n".join(collected)) >= 150:
             if _looks_like_financial_table(collected):
                 continue  # table, not narrative highlights — try later headings
-            return collected
-        return None  # heading found but section too thin — don't try later headings
-    return None
+            sections.append(collected)
+            continue
+        break  # heading found but section too thin — don't try later headings
+    return sections
+
+
+def _extract_highlights_section(lines: list[str]) -> list[str] | None:
+    """Return the content lines of an explicit "Highlights" section, or None.
+
+    Financial priority (batch 102): the leading bullet block right after
+    the headline and every "Highlights" section compete; the one densest
+    with reported financial figures wins (earlier wins ties). When nothing
+    is financial, the earliest candidate is kept — the pre-batch-102
+    behavior.
+    """
+    candidates: list[list[str]] = []
+    leading = _leading_bullet_block(lines)
+    if leading is not None:
+        candidates.append(leading)
+    candidates.extend(_extract_highlights_sections(lines))
+    if not candidates:
+        return None
+
+    def _score(lines: list[str]) -> tuple[int, int]:
+        count = _financial_line_count(lines)
+        density = count / max(len(lines), 1)
+        # A "financial" candidate needs a real signal: at least 2 figure
+        # lines and at least 40% of lines financial. Pure narrative gets
+        # score 0 and only wins when nothing financial exists.
+        return (1, count) if (count >= 2 and density >= 0.4) else (0, 0)
+
+    best = max(candidates, key=_score)
+    return best if _score(best)[0] > 0 else candidates[0]
 
 
 # --- Shareholder-letter extraction mode (batch 94) ---------------------------

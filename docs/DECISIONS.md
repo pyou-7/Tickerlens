@@ -1923,3 +1923,11 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Alternatives considered:** extending `_join_wrapped_headline` to join mid-phrase wraps globally — rejected: the batch-91 design deliberately limits it to conjunction/preposition breaks so a genuine short headline never swallows the lede; the cover path is the only place we *know* the next lines are headline. Deriving the real headline from the banner text — rejected: the banner ("SECOND QUARTER 2026 EARNINGS RESULTS") is not the headline.
 
 **Related:** closes the batch-97 "GS cover-page extraction" follow-up; GS backfilled 6/8 → 8/8 (the 2 previously-None quarters rescued by current discovery). Still open: HAL business-vs-financial highlights priority; SHOP 6-K discovery (foreign filers).
+
+## Batch 102 — financial-density ranking of highlights candidates
+- The leading bullet block and every "Highlights" section compete on financial density rather than position: score (1, count) when ≥2 figure lines and ≥40% of lines carry financial markers (`_FINANCIAL_LINE_RE`: $/% amounts or revenue/EPS/margin/cash-flow/dividend/repurchase keywords), else (0,0); earliest candidate wins ties. Preserves the old first-match behavior exactly when nothing is financial.
+- A wrapped bullet continuation is part of the item unless it closes with terminal punctuation and the next line isn't a bullet — that shape is the dateline paragraph. This is deliberately narrow: it only affects the leading-bullet block, not the lede fallback.
+
+**Alternatives considered:** preferring the *headed* "Financial Highlights" section by name match over the leading block — rejected: Halliburton never heads its financial bullets; position + density generalizes to any filer that front-loads figures. Penalizing guidance-forward lines ("expect", "outlook") — deferred: no live case needs it yet.
+
+**Related:** closes the carried "HAL business-vs-financial highlights priority" follow-up; HAL backfilled 8/8 financial-led.

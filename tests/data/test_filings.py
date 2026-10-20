@@ -1549,3 +1549,170 @@ def test_supplement_packet_endnotes_not_stored_as_highlights():
     result = extract_press_release_highlights(html)
     assert result is None
     assert "Bahrain operations" not in (result or "")
+
+
+# ── Batch 102: financial bullets beat business "Highlights" section ─────────
+_PAD_PARAGRAPH = ("Acme Corp is a leading global provider of widgets and enterprise "
+    "solutions serving customers in more than forty countries worldwide with "
+    "innovative products, reliable service, and a steadfast commitment to quality. ")
+
+# Halliburton's Q2 2026 earnings release opens with financial bullets right
+# after the headline ("Net income of $0.64 per diluted share ...") and only
+# much later carries a "Selective Technology & Highlights" section of
+# business-PR bullets (product launches, partnerships). The extractor used
+# to return the first "Highlights" heading match, so the financial figures
+# were buried for a financials app. Candidate sections (the leading bullet
+# block plus every "Highlights" section) now compete on financial density;
+# ties break to the earliest candidate (the pre-batch-102 behavior).
+
+_HAL_FINANCIAL_BULLETS = """
+<p>HALLIBURTON ANNOUNCES SECOND QUARTER 2026 RESULTS</p>
+<p>\u2022Net income of $0.64 per diluted share.</p>
+<p>\u2022Adjusted net income per diluted share of $0.55.</p>
+<p>\u2022Revenue of $5.7 billion and operating margin of 14%.</p>
+<p>\u2022Cash flow from operations of $824 million and free cash flow of $668 million.</p>
+<p>HOUSTON \u2013 July 21, 2026 \u2013 Halliburton Company (NYSE: HAL) announced today net
+income of $534 million, or $0.64 per diluted share, for the second quarter of 2026.</p>
+"""
+
+
+def test_financial_leading_bullets_beat_later_business_highlights():
+    html = f"""<html><body>
+<p>EX-99.1</p><p>2</p><p>livemastererdocument.htm</p><p>EX-99.1</p>
+<p>Exhibit 99.1</p>
+{_HAL_FINANCIAL_BULLETS}
+<p>Selective Technology &amp; Highlights</p>
+<p>\u2022Halliburton and Shape Digital entered a strategic collaboration to advance digital
+asset performance management through a unified asset view.</p>
+<p>\u2022Halliburton launched the Xaminer Deep Testing logging service, the newest addition
+to its wireline portfolio.</p>
+<p>About Halliburton</p>
+<p>Halliburton is one of the world's largest providers of products and services to the
+energy industry.</p>
+<p>Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. </p></body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Net income of $0.64 per diluted share" in result
+    assert "Revenue of $5.7 billion" in result
+    # The business-PR bullets must not displace the financial figures.
+    assert "Shape Digital" not in result
+    assert "Xaminer" not in result
+
+
+def test_business_only_highlights_section_kept_when_nothing_financial():
+    # No leading bullets and a narrative-only "Highlights" section: the
+    # pre-batch-102 behavior (return it) is preserved.
+    html = """<html><body>
+<p>ACME CORP ANNOUNCES FOURTH QUARTER 2025 RESULTS</p>
+<p>CUPERTINO, California \u2013 Acme Corp today announced results for its fourth quarter.</p>
+<p>Financial Highlights</p>
+<p>\u2022Acme completed the strategic acquisition of Widgets GmbH, expanding its
+European footprint.</p>
+<p>\u2022The board approved a new research campus in Austin, Texas.</p>
+<p>\u2022Acme was named a top employer by a national survey.</p>
+<p>About Acme Corp</p>
+<p>Acme Corp makes widgets.</p>
+<p>Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. </p></body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Widgets GmbH" in result
+
+
+def test_later_financial_section_beats_earlier_business_section():
+    # Two "Highlights" sections: the earlier one is business narrative, the
+    # later one carries figures — the financial one wins.
+    html = """<html><body>
+<p>ACME CORP ANNOUNCES FOURTH QUARTER 2025 RESULTS</p>
+<p>CUPERTINO, California \u2013 Acme Corp today announced results for its fourth quarter.</p>
+<p>Business Highlights</p>
+<p>\u2022Acme completed the strategic acquisition of Widgets GmbH, expanding its
+European footprint.</p>
+<p>\u2022The board approved a new research campus in Austin, Texas.</p>
+<p>\u2022Acme was named a top employer by a national survey.</p>
+<p>\u2022New widget line shipped to fifty enterprise customers this quarter.</p>
+<p>FINANCIAL HIGHLIGHTS</p>
+<p>\u2022Revenue of $50.2 billion, up 8 percent year over year.</p>
+<p>\u2022Diluted earnings per share of $2.10, up 12 percent.</p>
+<p>\u2022Gross margin of 44 percent.</p>
+<p>\u2022Returned $24 billion to shareholders via dividends and repurchases.</p>
+<p>About Acme Corp</p>
+<p>Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. </p></body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Revenue of $50.2 billion" in result
+    assert "Widgets GmbH" not in result
+
+
+def test_leading_block_without_highlights_heading_serves_as_section():
+    # A release with leading financial bullets and NO highlights heading:
+    # the bullets are the highlights (previously the 6-line lede, now the
+    # full block — same content family).
+    html = f"""<html><body>
+<p>EX-99.1</p>
+{_HAL_FINANCIAL_BULLETS}
+<p>About Halliburton</p>
+<p>Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. </p></body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Revenue of $5.7 billion" in result
+    assert "free cash flow of $668 million" in result
+
+
+def test_financial_density_threshold_rejects_mixed_prose_section():
+    # A highlights section with only one $-line among prose is narrative,
+    # not financial: earliest candidate (the section) still wins — no
+    # reordering on a thin signal.
+    html = """<html><body>
+<p>ACME CORP ANNOUNCES FOURTH QUARTER 2025 RESULTS</p>
+<p>CUPERTINO, California \u2013 Acme Corp today announced results for its fourth quarter.</p>
+<p>Highlights</p>
+<p>\u2022Acme completed the strategic acquisition of Widgets GmbH, expanding its
+European footprint.</p>
+<p>\u2022The board approved a new research campus in Austin, Texas, a $500 million
+investment over five years.</p>
+<p>\u2022Acme was named a top employer by a national survey.</p>
+<p>\u2022New widget line shipped to fifty enterprise customers this quarter.</p>
+<p>\u2022Chief executive Jane Doe commented on a strong quarter of execution.</p>
+<p>\u2022The company expects continued momentum into next year.</p>
+<p>About Acme Corp</p>
+<p>Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. Acme Corp pad. </p></body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Widgets GmbH" in result
+
+
+def test_wrapped_financial_bullets_still_win_over_business_section():
+    # HAL Q2 2025 shape: a financial bullet wraps across two lines
+    # ("... free cash flow1 of / approximately $582 million."). The wrapped
+    # continuation must not end the leading block, and the later business
+    # "Selective Technology & Highlights" section must not displace it.
+    html = """<html><body>
+<p>EX-99.1</p><p>2</p><p>livemastererdocument.htm</p><p>EX-99.1</p>
+<p>Exhibit 99.1</p>
+<p>HALLIBURTON ANNOUNCES SECOND QUARTER 2025 RESULTS</p>
+<p>\u2022Net income of $0.55 per diluted share.</p>
+<p>\u2022Cash flow from operations of $896 million and free cash flow1 of</p>
+<p>approximately $582 million.</p>
+<p>\u2022Revenue of $5.5 billion and operating margin of 13%.</p>
+<p>\u2022Approximately $250 million of share repurchases.</p>
+<p>HOUSTON \u2013 July 22, 2025 \u2013 Halliburton Company (NYSE: HAL) announced today net
+income of $472 million, or $0.55 per diluted share, for the second quarter of 2025.</p>
+<p>This compares to net income for the first quarter of 2025 of $204 million, or $0.24 per
+diluted share.</p>
+<p>Selective Technology &amp; Highlights</p>
+<p>\u2022Halliburton jointly developed a new process with Chevron U.S.A. Inc., enabling
+closed-loop, feedback-driven completions in Colorado.</p>
+<p>\u2022Halliburton and Nabors Industries achieved the first fully automated surface and
+subsurface execution of rotary and slide drilling operations in Oman.</p>
+<p>About Halliburton</p>
+<p>Halliburton is one of the world's largest providers of products and services to the
+energy industry, serving customers in more than eighty countries with innovative
+technologies and dependable execution across the full well lifecycle.</p>
+<p>""" + ("Halliburton pad. " * 60) + """</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Net income of $0.55 per diluted share" in result
+    assert "Revenue of $5.5 billion" in result
+    assert "approximately $582 million" in result
+    assert "Chevron" not in result

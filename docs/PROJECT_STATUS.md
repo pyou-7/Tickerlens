@@ -248,3 +248,10 @@ Each phase has explicit "done" criteria — don't jump ahead.
 **Tests:** 31 new (26 discovery/extraction + 5 matcher/pagination). Full suite 829 green, `git diff --check` clean.
 
 **Carried follow-ups:** HAL business-vs-financial highlights section priority; GS cover-page extraction; XOM CIK re-seed; SHOP 6-K discovery (foreign filers).
+
+### Batch 102 — financial bullets win over business "Highlights" sections (2026-10-20)
+Halliburton's releases open with financial bullets ("Net income of $0.64 per diluted share") right after the headline, then carry a later "Selective Technology & Highlights" section of business-PR bullets (product launches, partnerships). The extractor used to return the first "Highlights" heading match, burying the figures. `_extract_highlights_section` now collects ALL candidates (leading bullet block + every "Highlights" section) and picks the one densest with reported financial figures (≥2 figure lines, ≥40% of lines financial); ties keep the earliest — the pre-batch-102 behavior when nothing is financial. `_leading_bullet_block` handles wrapped bullet continuations (HAL Q2 2025's "... free cash flow1 of / approximately $582 million."), stopping at the dateline paragraph (item closed + non-bullet next line). Live backfill: HAL 8/8 quarters now lead with financial bullets (Q2 2025 rescued from business-only by the wrap fix).
+
+**Tests:** 6 new (financial priority, wrapped bullets, threshold, fallbacks). Full suite 871 green, `git diff --check` clean. Live: /company/HAL, /detail, /tearsheet, / all 200; detail renders the rescued financial bullets.
+
+**Carried follow-ups:** SHOP 6-K discovery (foreign filers); GEV footnote-definition headline wart; STZ table-row wart; pending-filing cohort at 17; partial residuals at 5 (AFRM, LIN image-only; CCI no Q4-2024 8-K; SHOP foreign; SKYD pre-merger).
