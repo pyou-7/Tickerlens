@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import logging
@@ -223,6 +224,92 @@ class EdgarClient:
 
 def normalize_cik(cik: str | int) -> str:
     return str(cik).strip().zfill(10)
+
+
+# Curated CIK successions (batch 98): new CIK -> predecessor CIK(s) whose
+# companyfacts history continues under the new CIK. Entries are
+# human-verified, never guessed (cf. the batch-58 DBA alias map): the XOM
+# entry is proven by accession 0000034088-26-000093 (the Q2-2026 10-Q) being
+# attributed to BOTH CIKs in their submissions feeds, and by the new CIK's
+# Q2-2026 revenue ($116.0B) continuing the old CIK's consolidated run rate.
+# Without the merge, XOM seeded only 2 quarters (the new CIK's facts hold
+# just the latest 10-Q plus its comparative column).
+_CIK_SUCCESSIONS: dict[str, tuple[str, ...]] = {
+    "0002115436": ("0000034088",),  # XOM: EXXON MOBIL CORP -> ExxonMobil Holdings Corp
+}
+
+
+def predecessor_ciks(cik: str | int) -> tuple[str, ...]:
+    """Predecessor CIKs whose companyfacts history continues under ``cik``."""
+    return _CIK_SUCCESSIONS.get(normalize_cik(cik), ())
+
+
+def companyfacts_with_predecessors(
+    edgar_client: EdgarClient, cik: str | int, *, fresh: bool = False
+) -> dict[str, Any]:
+    """companyfacts for ``cik`` merged with predecessor-CIK histories.
+
+    Module-level (not a client method) so callers can pass any client-like
+    object — tests stub ``companyfacts`` on a MagicMock. SEC occasionally
+    moves a ticker to a new CIK on a reorganization or rename (the ticker
+    map then resolves to the new CIK), and the new CIK's companyfacts
+    history starts at the succession — older quarters live only under the
+    predecessor CIK. Merging the predecessor facts in lets the XBRL
+    extractor see the full window; on a (start, end, accession) collision
+    the two copies are the same filing's facts, so dedupe is value-neutral.
+    Latest-filed-wins (per metric, already in xbrl.py) resolves same-period
+    facts from different filings, so the merge is no different from an
+    amended filing for the extractor.
+    """
+    cik = normalize_cik(cik)
+    merged = edgar_client.companyfacts(cik, fresh=fresh)
+    for pred in predecessor_ciks(cik):
+        try:
+            pred_facts = edgar_client.companyfacts(pred, fresh=fresh)
+        except Exception:
+            logger.warning(
+                "predecessor companyfacts fetch failed for %s", pred, exc_info=True
+            )
+            continue
+        merged = _merge_companyfacts(pred_facts, merged)
+    return merged
+
+
+def _merge_companyfacts(
+    pred_facts: dict[str, Any], cur_facts: dict[str, Any]
+) -> dict[str, Any]:
+    """Union two companyfacts payloads, keeping ``cur_facts`` metadata.
+
+    Facts merge at (namespace, concept, unit), deduped by (start, end,
+    accession): the same filing's facts under both CIKs collapse to one
+    copy, and facts unique to either CIK survive. The ``start`` leg of the
+    key is load-bearing — one 10-Q files both the standalone-quarter fact
+    and the YTD fact for the same period end (Q2 = 6M − Q1 derivation needs
+    both), so an (end, accession) key would silently drop the YTD leg and
+    kill every Q2/Q3 derivation. ``cur_facts``' top-level metadata (cik,
+    entityName) is authoritative — it is the current filer. Neither input
+    is mutated.
+    """
+    merged_facts: dict[str, Any] = copy.deepcopy(cur_facts.get("facts") or {})
+    for ns, concepts in (pred_facts.get("facts") or {}).items():
+        target_ns = merged_facts.setdefault(ns, {})
+        for concept, payload in (concepts or {}).items():
+            target = target_ns.setdefault(concept, {"units": {}})
+            target_units = target.setdefault("units", {})
+            for unit, facts in ((payload or {}).get("units") or {}).items():
+                existing = target_units.setdefault(unit, [])
+                seen = {
+                    (f.get("start"), f.get("end"), f.get("accn")) for f in existing
+                }
+                for fact in facts or []:
+                    key = (fact.get("start"), fact.get("end"), fact.get("accn"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    existing.append(copy.deepcopy(fact))
+    out = dict(cur_facts)
+    out["facts"] = merged_facts
+    return out
 
 
 def most_recent_10q(submissions: dict[str, Any]) -> tuple[str, str]:

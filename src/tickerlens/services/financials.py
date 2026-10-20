@@ -11,7 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from tickerlens.data.edgar import EdgarClient, normalize_cik
+from tickerlens.data.edgar import (
+    EdgarClient,
+    companyfacts_with_predecessors,
+    normalize_cik,
+)
 from tickerlens.data.filings import (
     extract_management_guidance,
     extract_press_release_highlights,
@@ -799,7 +803,7 @@ class FinancialsService:
     ) -> list[QuarterlyFinancials]:
         normalized_cik = normalize_cik(cik)
         submissions = self.edgar_client.submissions(normalized_cik)
-        companyfacts = self.edgar_client.companyfacts(normalized_cik)
+        companyfacts = companyfacts_with_predecessors(self.edgar_client, normalized_cik)
         return extract_recent_quarterly_financials(
             companyfacts,
             fiscal_year_end=submissions.get("fiscalYearEnd"),
@@ -832,7 +836,7 @@ class FinancialsService:
         # The disk cache has a TTL, but the pull only happens when the
         # freshness check suspects new data, so it must see the current feed.
         submissions = self.edgar_client.submissions(cik, fresh=True)
-        companyfacts = self.edgar_client.companyfacts(cik, fresh=True)
+        companyfacts = companyfacts_with_predecessors(self.edgar_client, cik, fresh=True)
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
@@ -1009,7 +1013,7 @@ class FinancialsService:
         changed. Never raises.
         """
         try:
-            companyfacts = self.edgar_client.companyfacts(cik)
+            companyfacts = companyfacts_with_predecessors(self.edgar_client, cik)
             db = self._session or get_session()
             try:
                 company = db.get(Company, cik)
@@ -1088,7 +1092,7 @@ class FinancialsService:
             )
             if not missing:
                 return
-            companyfacts = self.edgar_client.companyfacts(cik)
+            companyfacts = companyfacts_with_predecessors(self.edgar_client, cik)
             revenue_facts = _revenue_duration_facts(companyfacts)
             new = sorted(
                 {m for m in missing if _is_structural_gap(revenue_facts, submissions, m)}
