@@ -121,19 +121,105 @@ _BOILERPLATE_RE = re.compile(
 # "For Immediate Release" banners plus the SEC exhibit headers EDGAR renders
 # at the top of ex-99 docs (EX-99.1 labels, page numbers, exhibit filenames).
 _ADMIN_LINE_RE = re.compile(
-    r"^(for immediate release|news release|press release)\b"
-    r"|^ex-?99\.1\b"  # EX-99.1
+    r"^(for\s+(immediate\s+)?release|news release|press release)\b"
+    r"|^ex-?99(\.1)?\b"  # EX-99.1 / bare EX-99 (NextEra renders the exhibit
+    # header without ".1" — without this the "EX-99" line became the headline
+    # and the real headline was never reached, batch 97)
     r"|^exhibit\s+99\b"  # Exhibit 99.1
+    r"|^page\s+\d+\s+of\s+\d+$"  # "Page 1 of 24" exhibit headers (MetLife)
     r"|^\d{1,3}$"  # page numbers
     r"|^\S+\.html?$"  # exhibit filename lines
     r"|^\(furnished herewith\)$"  # SEC exhibit parenthetical (Deere-style)
+    # Release date lines some filers put before the headline ("August 7,
+    # 2025" — Lilly): never headline or lede material.
+    r"|^(january|february|march|april|may|june|july|august|september|october|"
+    r"november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
+    r"\.?\s+\d{1,2},?\s+\d{4}$"
     r"|^n\s*e\s*w\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter kicker (Humana)
     r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$",  # spaced-letter "press release"
     re.IGNORECASE,
 )
 
 # An explicit "Highlights" / "Financial Highlights" section heading.
-_HIGHLIGHTS_HEADING_RE = re.compile(r"\bhighlights?\b", re.IGNORECASE)
+# "Highlights" must head the line ("HIGHLIGHTS FOR ...") or close it
+# ("Selected Revenue Highlights") — a bare \bhighlights?\b also matched the
+# *verb* mid-sentence in footnotes ("...prepared to highlight and facilitate
+# ...", batch 97), hijacking the section with footnote prose.
+_HIGHLIGHTS_HEADING_RE = re.compile(
+    r"^highlights?\b|\bhighlights?\b[\s:–—-]*$", re.IGNORECASE
+)
+
+# A "Highlights" section that is really a financial data table (Lilly's
+# "Selected Revenue Highlights" product table, Waste Management's "HIGHLIGHTS
+# FOR the fourth quarter" EBITDA table): units parentheticals ("(Dollars in
+# millions)"), "% Change" column headers, or data rows dense with $ and %.
+# Such a section is not narrative highlights — rejecting it lets the lede
+# fallback (the real opening bullets) serve instead. Batch 97.
+_TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
+
+
+def _looks_like_financial_table(lines: list[str]) -> bool:
+    """True when a collected "Highlights" section is a data table, not prose."""
+    strong = False
+    data_rows = 0
+    for ln in lines:
+        if _TABLE_UNITS_RE.search(ln) or re.search(r"% change", ln, re.IGNORECASE):
+            strong = True
+        elif "$" in ln and "%" in ln:
+            data_rows += 1
+    return strong or data_rows >= 4
+
+
+def _looks_like_table_fragment(ln: str) -> bool:
+    """True for financial-table cell fragments MetLife-style exhibits put
+    before the narrative bullets ("Earnings", "Per Share", "Net",
+    "Income $1.22", "on Equity (ROE)", "3Q 2025").
+
+    Bullets (•) are always content, and substantial lines (>=40 chars) are
+    never fragments — only short, cell-shaped lines qualify. Batch 97.
+    """
+    if len(ln) >= 40 or ln.startswith("•"):
+        return False
+    if _TABLE_UNITS_RE.match(ln):
+        return True
+    if "$" in ln or "%" in ln:
+        return True
+    words = ln.split()
+    if len(words) <= 2:
+        return True
+    if len(words) <= 4 and "(" in ln:
+        return True
+    return False
+
+
+# Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
+# are never narrative highlights. Distinct from _FOOTNOTE_LINE_RE (digits-only,
+# used by the shareholder-letter table parser) — exhibits also letter their
+# footnotes. Batch 97.
+_LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)[\s.]", re.IGNORECASE)
+
+
+def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
+    """Drop runs of 3+ consecutive table fragments (see above).
+
+    Used by the lede fallback: a metric table sitting between the headline
+    and the narrative bullets (MetLife's "Earnings / Per Share / 3Q 2025 /
+    Net / Income $1.22 / ..." block) would otherwise fill the 6-line lede
+    budget with cell fragments and starve the real bullets. Shorter runs
+    (1-2 lines) are kept — they may be legit mini-headings. Batch 97.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        j = i
+        while j < len(lines) and _looks_like_table_fragment(lines[j]):
+            j += 1
+        if j - i >= 3:
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
 
 # Contact lines (media/investor contacts + email addresses) that some filers
 # (e.g. JNJ, Deere) place *before* the release headline. They are neither headline nor
@@ -553,20 +639,27 @@ def extract_press_release_highlights(
         body = "\n".join(section)
     else:
         # Fallback: the lede — opening paragraphs before boilerplate begins.
+        # Table-fragment runs (MetLife's metric table between the headline and
+        # the bullets) are dropped first so they can't fill the 6-line lede
+        # budget with cell fragments and starve the real bullets (batch 97).
+        lede_lines = _drop_table_fragment_runs(body_lines)
         lede: list[str] = []
         i = 0
-        while i < len(body_lines):
-            ln = body_lines[i]
+        while i < len(lede_lines):
+            ln = lede_lines[i]
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
+            if _LEDE_FOOTNOTE_RE.match(ln):
+                i += 1
+                continue  # table footnotes ("(a) ...", "(1) ...") are never lede
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
                 # the lede; the "About" boilerplate below still terminates
                 # collection. Checked before the single-line contact skip —
                 # a prefixed header matches both.
-                i = _skip_contact_block(body_lines, i)
+                i = _skip_contact_block(lede_lines, i)
                 continue
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
@@ -610,6 +703,8 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
             if len(collected) >= 12:
                 break
         if len("\n".join(collected)) >= 150:
+            if _looks_like_financial_table(collected):
+                continue  # table, not narrative highlights — try later headings
             return collected
         return None  # heading found but section too thin — don't try later headings
     return None

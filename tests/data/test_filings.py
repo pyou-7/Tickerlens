@@ -1135,3 +1135,163 @@ def test_extract_pr_highlights_shareholder_letter_q4_fy_mixed_columns() -> None:
     assert "(1) During the year" not in hl
     assert "DUOLINGO Q4 / FY 2025 3" not in hl
     assert "Dear shareholders," not in hl
+
+
+# ── Batch 97: partial-highlight residual forensics ────────────────────────────
+
+def _nee_style_html() -> str:
+    # NextEra: the exhibit header renders bare "EX-99" (no ".1"). Without the
+    # batch-97 admin fix, "EX-99" became the headline and extraction failed.
+    return """<html><body>
+<p>EX-99</p><p>2</p><p>neeq12026exhibit99.htm</p><p>EX-99</p>
+<p>Exhibit 99</p>
+<p>NextEra Energy, Inc.</p>
+<p>Media Line: 561-694-4442</p>
+<p>April 23, 2026</p>
+<p>FOR IMMEDIATE RELEASE</p>
+<h1>NextEra Energy reports first-quarter 2026 financial results</h1>
+<p>&#8226; NextEra Energy delivers strong first-quarter results.</p>
+<p>&#8226; FPL grows regulatory capital employed by approximately 8.8 percent.</p>
+<p>JUNO BEACH, Fla. - NextEra Energy, Inc. (NYSE: NEE) today reported 2026
+first-quarter net income attributable to NextEra Energy of 1.8 billion dollars,
+up 10 percent year over year, driven by continued growth at FPL and record
+origination at NextEra Energy Resources. Adjusted earnings were 2.1 billion dollars,
+up 12 percent, reflecting strong operational performance across both segments and
+continued customer growth in Florida. The company also announced a quarterly dividend
+increase and reaffirmed its long-term growth expectations through 2028.</p>
+</body></html>"""
+
+
+def test_bare_ex99_header_is_admin():
+    result = extract_press_release_highlights(_nee_style_html())
+    assert result is not None
+    assert result.startswith("NextEra Energy reports first-quarter 2026")
+    assert "EX-99" not in result.split("\n")[0]
+
+
+def test_page_x_of_y_header_is_admin():
+    html = """<html><body>
+<p>EX-99.1</p><p>Page 1 of 24</p><p>Exhibit 99.1</p>
+<h1>MetLife Announces 3Q 2025 Results</h1>
+<p>&#8226; Net income was 818 million dollars, or 1.22 per share.</p>
+<p>&#8226; Adjusted earnings increased 15 percent to 1.6 billion dollars.</p>
+<p>NEW YORK - MetLife, Inc. today announced third quarter 2025 results with
+net income of 818 million dollars and adjusted earnings of 1.6 billion dollars,
+reflecting higher variable investment income and volume growth. Book value per share
+was 39.52 dollars, up 1 percent, while adjusted book value per share increased 3 percent
+to 56.57 dollars. The company returned approximately 875 million dollars to shareholders
+via share repurchases and common stock dividends during the quarter. Total assets under
+management grew to 852 billion dollars, and the company maintained a strong risk-based
+capital ratio well above regulatory requirements.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("MetLife Announces 3Q 2025 Results")
+
+
+def test_release_date_line_is_admin():
+    # Lilly puts "August 7, 2025" before the headline — it must not become it.
+    html = """<html><body>
+<p>EX-99.1</p><p>2</p><p>q225lillysalesandearningsp.htm</p><p>EX-99.1</p>
+<p>August 7, 2025</p>
+<p>For release: Immediately</p>
+<h1>Lilly reports second-quarter 2025 financial results and raises guidance</h1>
+<p>&#8226; Revenue in Q2 2025 increased 38 percent to 15.56 billion dollars.</p>
+<p>&#8226; EPS increased 92 percent to 6.29 on a reported basis.</p>
+<p>INDIANAPOLIS, August 7, 2025 - Eli Lilly and Company today announced its
+financial results for the second quarter of 2025, with revenue growth driven
+by volume from Zepbound and Mounjaro. The company also completed strategic acquisitions
+to strengthen its pipeline in cardiometabolic health and genetic medicines, positioning
+for sustained growth into 2026 and beyond with a robust late-stage pipeline. Research
+and development expenses were 3.1 billion dollars, up 8 percent, reflecting continued
+investment in the company's priority therapeutic areas.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("Lilly reports second-quarter 2025")
+    assert "August 7, 2025" not in result.split("\n")[0]
+
+
+def test_table_shaped_highlights_section_rejected():
+    # Lilly's "Selected Revenue Highlights" is a product-revenue table, not
+    # narrative bullets — it must not hijack the section; the lede serves.
+    html = """<html><body>
+<p>EX-99.1</p>
+<h1>Lilly reports second-quarter 2025 financial results</h1>
+<p>&#8226; Revenue in Q2 2025 increased 38 percent to 15.56 billion dollars
+driven by volume growth from Zepbound and Mounjaro.</p>
+<p>&#8226; EPS increased 92 percent to 6.29 on a reported basis and 61 percent
+to 6.31 on a non-GAAP basis.</p>
+<p>INDIANAPOLIS - Eli Lilly and Company today announced financial results for
+the second quarter of 2025, delivering strong performance across the
+portfolio with continued momentum in obesity and diabetes medicines. The quarter also
+saw the initiation of three new Phase 3 programs and positive readouts across the
+oncology portfolio, supporting the company's raised full-year outlook.</p>
+<h2>Selected Revenue Highlights</h2>
+<p>(Dollars in millions)</p>
+<p>Second-Quarter</p><p>Year-to-Date</p>
+<p>Selected Products 2025 2024 % Change 2025 2024 % Change</p>
+<p>Mounjaro $ 5,198.9 $ 3,090.8 68% $ 9,040.7 $ 4,897.4 85%</p>
+<p>Zepbound $ 3,383.8 $ 1,243.6 172% $ 6,523.8 $ 2,100.4 211%</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Lilly reports second-quarter 2025" in result
+    assert "Mounjaro $ 5,198.9" not in result
+    assert "Revenue in Q2 2025 increased 38 percent" in result
+
+
+def test_footnote_verb_highlight_not_a_heading():
+    # WM footnote prose "...prepared to highlight and facilitate..." contains
+    # the verb "highlight" — it is not a section heading.
+    html = """<html><body>
+<p>EX-99.1</p>
+<h1>WM Announces Fourth Quarter and Full-Year 2025 Earnings</h1>
+<p>Focus on operational excellence drives the company's best-ever operating
+expenses as a percentage of revenue for the fourth quarter and full year,
+with robust operational performance and strong growth expected to continue.</p>
+<p>Houston - WM today announced financial results for the fourth quarter and
+full year 2025, reporting revenue growth and margin expansion across the
+solid waste network and sustainability investments.</p>
+<h2>HIGHLIGHTS FOR the fourth quarter and FULL YEAR 2025</h2>
+<p>($ in millions)</p>
+<p>Operating EBITDA</p>
+<p>$ 1,925</p>
+<p>(a) The summary of free cash flow has been prepared to highlight and
+facilitate understanding of the principal cash flow elements.</p>
+<p>Free cash flow is not a measure of financial performance under generally
+accepted accounting principles and is not intended to replace the
+consolidated statement of cash flows.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "WM Announces Fourth Quarter" in result
+    assert "prepared to highlight and facilitate" not in result
+
+
+def test_lede_drops_table_fragment_runs():
+    # MetLife's metric table sits between the headline and the bullets — the
+    # fragment run must not fill the lede budget.
+    html = """<html><body>
+<p>EX-99.1</p><p>Page 1 of 24</p><p>Exhibit 99.1</p>
+<h1>MetLife Announces 3Q 2025 Results</h1>
+<p>Earnings</p><p>Per Share</p><p>3Q 2025</p><p>Net</p>
+<p>Income $1.22</p><p>Adjusted</p><p>Earnings $2.37</p>
+<p>Return</p><p>on Equity (ROE)</p><p>3Q 2025</p><p>ROE 13.1%</p>
+<p>&#8226; Net income was 818 million dollars, or 1.22 per share, reflecting
+strong underwriting results across the business segments.</p>
+<p>&#8226; Adjusted earnings increased 15 percent to 1.6 billion dollars,
+primarily driven by higher variable investment income and volume growth.</p>
+<p>&#8226; Premiums, fees and other revenues were 12.5 billion dollars, with
+growth in all segments except MetLife Holdings. Net investment income rose 16 percent
+to 6.1 billion dollars on higher private equity returns, and the company expanded its
+MetLife Xcelerator partnership in Latin America during the quarter. The board declared a quarterly dividend
+of 0.63 per share, payable in the fourth quarter, consistent with the company's
+long-standing commitment to returning capital to shareholders.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("MetLife Announces 3Q 2025 Results")
+    assert "Net income was 818 million dollars" in result
+    # Table fragments must not consume the lede.
+    assert "Income $1.22" not in result
