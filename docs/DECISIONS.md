@@ -1863,3 +1863,15 @@ risk-factor backfill (self-heals on page views via `enrich_company`).
 **Live:** dev server restarted at batch start (was down). 14/14 routes 200 (6 new overviews + 6 new details + /calendar + ASML 404). TGT/HON detail pages render the rescued highlights. Valuations render for all 6 seeds (peg: AXON Strong Sell −95.0%, KMX Strong Sell −68.4%, FAST Strong Sell −42.3%, MSCI Hold +2.0%, LDOS Strong Sell −32.0%, TT Strong Sell −77.3%) — clamp-bound where applicable per the batch-40/45 honesty class. No template change (backend-only); screenshot gate N/A.
 
 **Carried follow-ups rechecked:** 60 partial-highlight residuals (likely embedded-release quarters like REGN/EOG/WDAY, EDGAR-lagged quarters, or undiscovered exhibit conventions — next batch's forensic target); XOM self-heal still pending (FY2026 10-K, ~Feb 2027); SPG dominant-quarter self-heal waits on the Q4-2026 filing; V/BRK.B/STZ quarterly EPS tagging still unfixable from the feed; pending-filing cohort at 17 (batch-95 verified); HUM/ORCL self-heal on next detail visit via the any-None lazy trigger.
+
+## 2026-10-19 — batch 97: earnings 8-K matching is a three-guard problem
+
+Matching a 10-Q/10-K to its earnings-release 8-K cannot be done on date proximity alone. Four real counterexamples forced a three-guard rule:
+- **PNC** filed a 2.02 investor-conference 8-K (11-07) *after* its 10-Q (11-03), nearer the filing date than the earnings 8-K (10-15) → guard: candidates must be filed ≤ the 10-Q/10-K filing date.
+- **Tesla** furnishes production/deliveries under 2.02 two days after quarter end, three weeks before the earnings 8-K → guard: candidates must be filed ≥7 days after period end (books can't be closed sooner).
+- **OXY** filed a "pre-earnings" 2.02 8-K (10-09) before the real earnings 8-K (11-12) → "earliest" alone picks the pre-release; nearest-to-filing (with the two guards) picks correctly.
+- **FDX** filed a recast-supplement 2.02 8-K after the earnings 8-K → the ≤ filing-date guard excludes it.
+
+Final rule: candidates are 2.02 8-Ks filed 7–60 days after period end and not after the formal filing; nearest to the filing date wins. The audit (252 companies) confirmed only PNC and FDX had wrong content stored; both were cleared and re-filled.
+
+Related: EDGAR submissions bucket pagination is required for both 10-Q/10-K discovery (high-volume filers' "recent" bucket holds < n_quarters) and 8-K coverage (an 8-K can sit in an older bucket than its 10-Q); and discovery must extend to the oldest *stored* period, not just the latest N filings, because the stored window lags submissions when companyfacts is behind.
