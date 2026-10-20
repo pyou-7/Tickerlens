@@ -207,7 +207,53 @@ def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
     Net / Income $1.22 / ..." block) would otherwise fill the 6-line lede
     budget with cell fragments and starve the real bullets. Shorter runs
     (1-2 lines) are kept — they may be legit mini-headings. Batch 97.
+
+    A short table heading ("Book Value Per Share") directly above 2+
+    fragment rows is residue too — it joins the run for the 3+ count, so a
+    heading + its last row ("Book Value Per Share" / "1Q26" / "$361.19")
+    drops as one run. Batch 100.
     """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        j = i
+        if (
+            _looks_like_table_heading(lines[j])
+            and j + 2 < len(lines)
+            and _looks_like_table_fragment(lines[j + 1])
+            and _looks_like_table_fragment(lines[j + 2])
+        ):
+            j += 1  # fold the heading into the fragment run
+        while j < len(lines) and _looks_like_table_fragment(lines[j]):
+            j += 1
+        if j - i >= 3:
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def _looks_like_table_heading(ln: str) -> bool:
+    """True for a short metric-table heading ("Book Value Per Share").
+
+    Longer than a cell fragment but still table residue when it directly
+    heads fragment rows. Bullets are always content; sentence-terminated
+    lines are narrative; admin/boilerplate/contact markers are never table
+    headings. Batch 100.
+    """
+    if len(ln) >= 40 or ln.startswith("•"):
+        return False
+    if ln.rstrip().endswith((".", "!", "?", ":")):
+        return False
+    if (
+        _ADMIN_LINE_RE.match(ln)
+        or _BOILERPLATE_RE.match(ln)
+        or _CONTACT_HEADER_RE.match(ln)
+        or _CONTACT_LINE_RE.search(ln)
+    ):
+        return False
+    return len(ln.split()) <= 4
     out: list[str] = []
     i = 0
     while i < len(lines):
@@ -438,6 +484,127 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
         return f"{headline} {lines[j]}", j + 1
     return headline, i + 1
 
+
+# --- Cover title-block skip (batch 100) --------------------------------------
+#
+# Some filers (Goldman Sachs, in both Workiva and Donnelley vintages) open the
+# earnings-release exhibit with a cover page: a quarter-period title
+# ("Second Quarter 2026", or the wrapped "Full Year and" / "Fourth Quarter
+# 2025"), a generic kind line ("Earnings Results"), inline media/investor
+# contact lines, the company masthead + address, and a repeated banner line
+# ("SECOND QUARTER 2026 EARNINGS RESULTS"). The naive headline pick takes the
+# cover title ("Second Quarter 2026") and the lede fills with the contact /
+# masthead lines — while the real headline sits after the banner.
+#
+# The trigger is deliberately narrow: period title + kind line, then a
+# "Media/Investor Relations:" contact line carrying a phone number and a
+# banner repeating the period words with "earnings results", all within a
+# bounded window. Anything else returns None and the caller falls through to
+# the standard headline pick with behavior unchanged.
+
+_COVER_PERIOD_RE = re.compile(
+    r"^(?:full\s+year(?:\s+and)?\s+)?(?:first|second|third|fourth)\s+quarter\s+\d{4}$",
+    re.IGNORECASE,
+)
+# Wrapped period title: "Full Year and" on its own line, quarter on the next.
+_COVER_PERIOD_WRAP_RE = re.compile(r"^full\s+year(?:\s+and)?$", re.IGNORECASE)
+_COVER_AND_RE = re.compile(r"^and$", re.IGNORECASE)
+_COVER_YEAR_RE = re.compile(r"^20\d{2}$")
+_COVER_BARE_QUARTER_RE = re.compile(
+    r"^(?:first|second|third|fourth)\s+quarter$", re.IGNORECASE
+)
+
+
+def _match_cover_title(lines: list[str], i: int) -> int | None:
+    """Match a cover period title at lines[i]; return its end index, or None.
+
+    Shapes (Goldman Sachs, Workiva and Donnelley vintages):
+      "Second Quarter 2026"
+      "Full Year and" / "Fourth Quarter 2025"
+      "Full Year" / "and" / "Fourth Quarter 2024"
+      "Third Quarter" / "2024"
+    """
+    j = i
+    if j < len(lines) and _COVER_PERIOD_WRAP_RE.match(lines[j]):
+        j += 1
+        # "Full Year" / "and" / "Fourth Quarter 2024" three-line form.
+        if j < len(lines) and _COVER_AND_RE.match(lines[j]):
+            j += 1
+    if j < len(lines) and _COVER_PERIOD_RE.match(lines[j]):
+        return j + 1
+    if (
+        j < len(lines)
+        and _COVER_BARE_QUARTER_RE.match(lines[j])
+        and j + 1 < len(lines)
+        and _COVER_YEAR_RE.match(lines[j + 1])
+    ):
+        return j + 2
+    return None
+_COVER_KIND_RE = re.compile(r"^earnings\s+results?$", re.IGNORECASE)
+_COVER_CONTACT_RE = re.compile(r"^(media|investor)\s+relations\s*:", re.IGNORECASE)
+_COVER_BANNER_RE = re.compile(
+    r"(first|second|third|fourth).*quarter.*earnings\s+results", re.IGNORECASE
+)
+_COVER_SCAN_LINES = 12
+_COVER_HEADLINE_MAX_LINES = 4
+
+
+def _cover_block_headline(lines: list[str], i: int) -> tuple[str, int] | None:
+    """Skip a cover title block; return (headline, body_start), or None.
+
+    Returns None when the cover shape is not present at lines[i]. The real
+    headline after a cover often wraps mid-phrase ("...Per Common" /
+    "Share of $20.98 ..."), which _join_wrapped_headline deliberately does
+    not join, so continuation lines are joined here with a section-heading
+    stop: a candidate that is itself a table fragment ("Financial Summary")
+    is the metric-table heading, not headline. $-/%-bearing fragments are
+    never a stop — real headline continuations carry figures ("...$20.98").
+    """
+    k = _match_cover_title(lines, i)
+    if k is None:
+        return None
+    if k >= len(lines) or not _COVER_KIND_RE.match(lines[k]):
+        return None
+    contact_at = banner_at = -1
+    for j in range(k + 1, min(k + 1 + _COVER_SCAN_LINES, len(lines))):
+        if (
+            contact_at < 0
+            and _COVER_CONTACT_RE.match(lines[j])
+            and _PHONE_RE.search(lines[j])
+        ):
+            contact_at = j
+        if contact_at >= 0 and _COVER_BANNER_RE.search(lines[j]):
+            banner_at = j
+            break
+    if contact_at < 0 or banner_at < 0:
+        return None
+    h = banner_at + 1
+    if h >= len(lines):
+        return None
+    parts = [lines[h]]
+    j = h + 1
+    while j < len(lines) and len(parts) < _COVER_HEADLINE_MAX_LINES:
+        cand = lines[j]
+        if (
+            len(cand) > 100
+            or cand.rstrip().endswith((".", "!", "?", ":"))
+            or _HEADLINE_CONT_BAD_START_RE.match(cand)
+            or _ADMIN_LINE_RE.match(cand)
+            or _BOILERPLATE_RE.match(cand)
+            or _CONTACT_HEADER_RE.match(cand)
+            or _CONTACT_LINE_RE.search(cand)
+        ):
+            break
+        if (
+            _looks_like_table_fragment(cand)
+            and "$" not in cand
+            and "%" not in cand
+        ):
+            break
+        parts.append(cand)
+        j += 1
+    return " ".join(parts), j
+
 # Guidance and Outlook section headings in earnings releases
 _GUIDANCE_HEADING_RE = re.compile(
     r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
@@ -627,6 +794,11 @@ def extract_press_release_highlights(
             # city line never becomes the headline.
             i = _skip_masthead_block(lines, i + 1)
             continue
+        cover = _cover_block_headline(lines, i)
+        if cover is not None:
+            # Cover title block (GS): the real headline follows the banner.
+            headline, body_start = cover
+            break
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i

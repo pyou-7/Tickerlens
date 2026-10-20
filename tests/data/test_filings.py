@@ -1295,3 +1295,206 @@ long-standing commitment to returning capital to shareholders.</p>
     assert "Net income was 818 million dollars" in result
     # Table fragments must not consume the lede.
     assert "Income $1.22" not in result
+
+
+# ── Cover title-block skip (batch 100) ──────────────────────────────────────
+# Goldman Sachs opens its ex-99.1 with a cover page (quarter-period title +
+# "Earnings Results", inline media/investor contacts, masthead + address,
+# repeated banner) before the real headline. The naive pick took the cover
+# title and filled the lede with contact/masthead lines.
+
+
+def _gs_cover_html(
+    *,
+    period_lines=("Second Quarter 2026",),
+    banner="SECOND QUARTER 2026 EARNINGS RESULTS",
+    headline_lines=(
+        "Goldman Sachs Reports Second Quarter Earnings Per Common",
+        "Share of $20.98 and Increases the Quarterly Dividend to $5.00",
+        "Per Common Share in the Third Quarter",
+    ),
+) -> str:
+    cover = "".join(f"<p>{ln}</p>" for ln in period_lines)
+    cover += "<p>Earnings Results</p>"
+    cover += "<p>Media Relations: Tony Fratto 212-902-5400</p>"
+    cover += "<p>Investor Relations: Jehan Ilahi 212-902-0300</p>"
+    cover += "<p>The Goldman Sachs Group, Inc.</p>"
+    cover += "<p>200 West Street | New York, NY 10282</p>"
+    cover += f"<p>{banner}</p>"
+    headline = "".join(f"<p>{ln}</p>" for ln in headline_lines)
+    table = (
+        "<p>Financial Summary</p><p>Net Revenues</p><p>2Q26</p>"
+        "<p>$20.34 billion</p><p>Net Earnings</p><p>2Q26</p>"
+        "<p>$6.63 billion</p><p>Book Value Per Share</p><p>2Q26</p><p>$367.67</p>"
+    )
+    lede = (
+        "<p>NEW YORK, July 14, 2026 \u2013 The Goldman Sachs Group, Inc. (NYSE: GS) "
+        "today reported net revenues of $20.34 billion and net earnings of $6.63 "
+        "billion for the second quarter ended June 30, 2026. Net revenues were "
+        "$37.57 billion and net earnings were $12.26 billion for the first half "
+        "of 2026, reflecting strong performance across the franchise.</p>"
+    )
+    return (
+        "<html><body><p>EX-99.1</p><p>2</p><p>a2q26gsearningsresults.htm</p>"
+        "<p>EX-99.1</p><p>Exhibit 99.1</p>"
+        f"{cover}{headline}{table}{lede}</body></html>"
+    )
+
+
+def test_cover_block_skip_picks_real_headline() -> None:
+    result = extract_press_release_highlights(_gs_cover_html())
+    assert result is not None
+    assert result.startswith(
+        "Goldman Sachs Reports Second Quarter Earnings Per Common Share of "
+        "$20.98 and Increases the Quarterly Dividend to $5.00 "
+        "Per Common Share in the Third Quarter"
+    )
+    # Cover residue must not leak into the headline or lede.
+    assert "Tony Fratto" not in result
+    assert "200 West Street" not in result
+    assert "SECOND QUARTER 2026 EARNINGS RESULTS" not in result
+    # The real narrative lede survives the metric table.
+    assert "NEW YORK, July 14, 2026" in result
+    assert "net revenues of $20.34 billion" in result
+
+
+def test_cover_block_wrapped_period_title_and_title_case_banner() -> None:
+    # Q4 shape: "Full Year and" / "Fourth Quarter 2025" cover title and a
+    # title-case (not all-caps) banner repeat.
+    result = extract_press_release_highlights(
+        _gs_cover_html(
+            period_lines=("Full Year and", "Fourth Quarter 2025"),
+            banner="Full Year and Fourth Quarter 2025 Earnings Results",
+            headline_lines=(
+                "Goldman Sachs Reports Earnings Per Common Share of $51.32 for 2025 and",
+                "Increases the Quarterly Dividend to $4.50 Per Common Share",
+            ),
+        )
+    )
+    assert result is not None
+    assert result.startswith(
+        "Goldman Sachs Reports Earnings Per Common Share of $51.32 for 2025 and "
+        "Increases the Quarterly Dividend to $4.50 Per Common Share"
+    )
+    assert "Tony Fratto" not in result
+
+
+def test_cover_block_three_line_period_title() -> None:
+    # Older Donnelley vintage: "Full Year" / "and" / "Fourth Quarter 2024".
+    result = extract_press_release_highlights(
+        _gs_cover_html(
+            period_lines=("Full Year", "and", "Fourth Quarter 2024"),
+            banner="Full Year and Fourth Quarter 2024 Earnings Results",
+            headline_lines=(
+                "Goldman Sachs Reports Earnings Per Common Share of $40.54 for 2024",
+            ),
+        )
+    )
+    assert result is not None
+    assert result.startswith(
+        "Goldman Sachs Reports Earnings Per Common Share of $40.54 for 2024"
+    )
+    assert "Full Year" not in result.split("\n\n")[0]
+    assert "Tony Fratto" not in result
+
+
+def test_cover_block_quarter_then_bare_year_title() -> None:
+    # Older Donnelley vintage: "Third Quarter" / "2024".
+    result = extract_press_release_highlights(
+        _gs_cover_html(
+            period_lines=("Third Quarter", "2024"),
+            banner="Third Quarter 2024 Earnings Results",
+            headline_lines=(
+                "Goldman Sachs Reports Third Quarter Earnings Per Common Share of $8.40",
+            ),
+        )
+    )
+    assert result is not None
+    assert result.startswith(
+        "Goldman Sachs Reports Third Quarter Earnings Per Common Share of $8.40"
+    )
+    assert "Tony Fratto" not in result
+
+
+def test_cover_block_section_heading_stops_headline_join() -> None:
+    # Q1 shape: single-line headline directly above the metric table — the
+    # "Financial Summary" heading must not be swallowed into the headline.
+    result = extract_press_release_highlights(
+        _gs_cover_html(
+            period_lines=("First Quarter 2026",),
+            banner="First Quarter 2026 Earnings Results",
+            headline_lines=(
+                "Goldman Sachs Reports First Quarter Earnings Per Common Share of $17.55",
+            ),
+        )
+    )
+    assert result is not None
+    assert result.startswith(
+        "Goldman Sachs Reports First Quarter Earnings Per Common Share of $17.55"
+    )
+    assert "Financial Summary" not in result.split("\n\n")[0]
+
+
+def test_cover_block_no_fire_without_kind_line() -> None:
+    # Period title not followed by "Earnings Results" — standard path keeps
+    # the old behavior (cover title picked as headline).
+    html = _gs_cover_html().replace("<p>Earnings Results</p>", "<p>At a Glance</p>")
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("Second Quarter 2026")
+
+
+def test_cover_block_no_fire_without_contact_phone() -> None:
+    # Contact lines without phone numbers — the cover shape is not confirmed.
+    html = _gs_cover_html().replace("212-902-5400", "").replace("212-902-0300", "")
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("Second Quarter 2026")
+
+
+def test_cover_block_no_fire_without_banner() -> None:
+    html = _gs_cover_html().replace(
+        "<p>SECOND QUARTER 2026 EARNINGS RESULTS</p>", ""
+    )
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("Second Quarter 2026")
+
+
+def test_table_heading_folds_into_fragment_run() -> None:
+    # A short table heading above 2+ fragment rows drops with the run...
+    lede = (
+        "CUPERTINO, California \u2014 Acme Corp today announced financial results for its "
+        "fiscal 2025 fourth quarter ended December 31, 2025. The Company posted quarterly "
+        "revenue of 50.2 billion dollars, up 8 percent year over year, with strong "
+        "performance across every segment of the business. Diluted earnings per share "
+        "were 2.10 dollars, up 12 percent year over year, reflecting operating leverage "
+        "and a favorable product mix. The board declared a quarterly dividend of 0.25 "
+        "dollars per share, payable in the first quarter, consistent with the company's "
+        "long-standing commitment to returning capital to shareholders. Gross margin was "
+        "44 percent, reflecting a strong product mix and continued services growth. "
+        "Operating cash flow reached a quarterly record, supporting ongoing investment "
+        "in the business."
+    )
+    html = f"""<html><body>
+<p>EX-99.1</p><p>Exhibit 99.1</p>
+<h1>Acme Corp Reports Fourth Quarter 2025 Results</h1>
+<p>Financial Summary</p><p>Net Revenues</p><p>4Q25</p><p>$50.2 billion</p>
+<p>Book Value Per Share</p><p>4Q25</p><p>$100.00</p>
+<p>{lede}</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Book Value Per Share" not in result
+    assert "$100.00" not in result
+    assert "CUPERTINO, California" in result
+    # ...while a short 2-fragment run with no heading is still kept.
+    html2 = f"""<html><body>
+<p>EX-99.1</p><p>Exhibit 99.1</p>
+<h1>Acme Corp Reports Fourth Quarter 2025 Results</h1>
+<p>4Q25</p><p>$50.2 billion</p>
+<p>{lede}</p>
+</body></html>"""
+    result2 = extract_press_release_highlights(html2)
+    assert result2 is not None
+    assert "$50.2 billion" in result2
