@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-from tickerlens.data.edgar import EdgarClient, normalize_cik
+from tickerlens.data.edgar import EdgarClient, normalize_cik, predecessor_ciks
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ class EarningsPeriod:
     sec_doc: str         # "avgo-20250504.htm"  — main filing document
     er_accession: str | None  # 8-K accession, if found
     er_doc: str | None        # ex-99 exhibit filename, if found
+    sec_cik: str | None = None  # CIK whose submissions feed listed the 10-Q/10-K
+    er_cik: str | None = None   # CIK whose submissions feed listed the matched 8-K
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -66,6 +68,43 @@ def _merge_filings_recent(
     return merged
 
 
+def _submissions_sources(
+    ticker: str, edgar_client: EdgarClient, cik: str
+) -> list[tuple[str, dict]]:
+    """(cik, source-state) for the ticker's CIK plus predecessor CIKs.
+
+    Batch 99: the source state holds the source's recent block, its bucket
+    list, and the pagination cursor — discover_earnings_filings pages each
+    source's buckets independently. Predecessor fetches are best-effort: a
+    failure is logged and skipped, so a dead old-CIK feed never breaks
+    discovery for the current CIK.
+    """
+    sources = [(cik, edgar_client.submissions(cik))]
+    for pred in predecessor_ciks(cik):
+        try:
+            sources.append((pred, edgar_client.submissions(pred)))
+        except Exception:
+            logger.warning(
+                "Predecessor submissions fetch failed for %s (%s)",
+                pred,
+                ticker,
+                exc_info=True,
+            )
+    return [
+        (
+            src_cik,
+            {
+                "filings_raw": subs["filings"]["recent"],
+                "bucket_names": [
+                    f["name"] for f in subs["filings"].get("files", [])
+                ],
+                "bucket_i": 0,
+            },
+        )
+        for src_cik, subs in sources
+    ]
+
+
 def discover_earnings_filings(
     ticker: str,
     edgar_client: EdgarClient,
@@ -83,13 +122,44 @@ def discover_earnings_filings(
     so the latest-8 filings start at 2024-09-30 and the stored 2024-06-30
     quarter (the 9th filing) would never match an 8-K.
 
+    Batch 99: merges the predecessor-CIK submissions feeds (see
+    _CIK_SUCCESSIONS in data/edgar.py) — SEC moves a ticker to a new CIK on
+    a reorganization (XOM -> 0002115436) and the new CIK's feed starts at
+    the succession, so pre-succession earnings 8-Ks live only under the old
+    CIK. Each extracted filing carries its source CIK (the archives path
+    its documents live under); accession collisions between the feeds (the
+    same filing attributed to both CIKs, e.g. XOM's Q2-2026 10-Q) dedupe to
+    the current CIK's copy.
+
     Raises KeyError if the ticker is not found in EDGAR.
     """
     cik = edgar_client.cik_for_ticker(ticker)
-    subs = edgar_client.submissions(cik)
-    filings_raw = subs["filings"]["recent"]
+    sources = _submissions_sources(ticker, edgar_client, cik)
 
-    sec_filings = _extract_sec_filings(filings_raw)
+    def extract_all() -> tuple[list[dict], list[dict]]:
+        """Merge per-CIK extractions.
+
+        Within one source the merged recent+bucket arrays concatenate exactly
+        as before (a CIK's buckets are disjoint from its recent block). Across
+        sources, accessions are deduped — sources are ordered
+        current-CIK-first, so on a collision (the same filing attributed to
+        both CIKs, e.g. XOM's Q2-2026 10-Q) the current CIK's copy wins and
+        its src_cik points at the live archives path.
+        """
+        sec, ers = [], []
+        seen_sec, seen_er = set(), set()  # accessions claimed by earlier sources
+        for src_cik, state in sources:
+            src_sec = _extract_sec_filings(state["filings_raw"], src_cik=src_cik)
+            src_er = _extract_er_8ks(state["filings_raw"], src_cik=src_cik)
+            new_sec = [f for f in src_sec if f["accession"] not in seen_sec]
+            new_er = [e for e in src_er if e["accession"] not in seen_er]
+            seen_sec.update(f["accession"] for f in new_sec)
+            seen_er.update(e["accession"] for e in new_er)
+            sec.extend(new_sec)
+            ers.extend(new_er)
+        return sec, ers
+
+    sec_filings, er_8ks = extract_all()
     # Batch 97: the top-level "recent" bucket may cover fewer than n_quarters
     # of 10-Q/10-K for high-volume filers (BAC's recent holds 3 10-Q + 1
     # 10-K) — older quarters then never matched an earnings 8-K and their
@@ -97,9 +167,8 @@ def discover_earnings_filings(
     # buckets (001 = next-older after recent) until we have enough 10-Q/10-K.
     # The 8-Ks contemporary with those older quarters ride along in the same
     # buckets, so _extract_er_8ks sees them too. Cached by fetch_json, so the
-    # extra requests are one-time-ish per CIK.
-    bucket_names = [f["name"] for f in subs["filings"].get("files", [])]
-    bucket_i = 0
+    # extra requests are one-time-ish per CIK. Batch 99: each source CIK
+    # pages its own bucket list.
     while True:
         sec_ok = len(sec_filings) >= n_quarters
         oldest_ok = (
@@ -110,30 +179,37 @@ def discover_earnings_filings(
         # Batch 97: the 8-K for the oldest needed quarter can sit in an older
         # bucket than its 10-Q (MS's Oct-2024 8-K vs its Nov-2024 10-Q) —
         # keep paging until the 8-Ks reach the oldest period's 8-K window.
-        er_8ks = _extract_er_8ks(filings_raw)
         er_ok = (
             oldest_period_end is None
             or not er_8ks
             or min(er["filing_date"] for er in er_8ks)
             <= oldest_period_end + timedelta(days=7)
         )
-        if (sec_ok and oldest_ok and er_ok) or bucket_i >= len(bucket_names):
+        next_src = next(
+            (s for s in sources if s[1]["bucket_i"] < len(s[1]["bucket_names"])),
+            None,
+        )
+        if (sec_ok and oldest_ok and er_ok) or next_src is None:
             break
+        src_cik, state = next_src
         try:
             # NB: a bucket file's top level IS the "recent"-shaped block
             # (no "filings" wrapper).
-            older = edgar_client.submissions_bucket(cik, bucket_names[bucket_i])
-            filings_raw = _merge_filings_recent(filings_raw, older)
-            sec_filings = _extract_sec_filings(filings_raw)
+            older = edgar_client.submissions_bucket(
+                src_cik, state["bucket_names"][state["bucket_i"]]
+            )
+            state["filings_raw"] = _merge_filings_recent(state["filings_raw"], older)
+            sec_filings, er_8ks = extract_all()
         except Exception:
             logger.warning(
-                "Older-submissions bucket %s unreadable for %s",
-                bucket_names[bucket_i],
+                "Older-submissions bucket %s unreadable for %s (%s)",
+                state["bucket_names"][state["bucket_i"]],
                 ticker,
+                src_cik,
                 exc_info=True,
             )
             break
-        bucket_i += 1
+        state["bucket_i"] += 1
 
     # Take the most recent n_quarters 10-Q/10-K sorted by period end,
     # extended down to oldest_period_end when the stored window lags
@@ -160,9 +236,14 @@ def discover_earnings_filings(
             er_doc = _find_ex99_doc(cik, matched, edgar_client)
             filing["er_accession"] = matched["accession"]
             filing["er_doc"] = er_doc
+            # Batch 99: the 8-K's own source CIK — its filing index and
+            # exhibits live under that CIK's archives path, not necessarily
+            # the ticker's current CIK.
+            filing["er_src_cik"] = matched.get("src_cik")
         else:
             filing["er_accession"] = None
             filing["er_doc"] = None
+            filing["er_src_cik"] = None
 
     # Build result objects, sorted oldest-first
     selected.sort(key=lambda x: x["report_date"])
@@ -171,7 +252,14 @@ def discover_earnings_filings(
 
 # ── filing discovery helpers ──────────────────────────────────────────────────
 
-def _extract_sec_filings(filings_raw: dict[str, Any]) -> list[dict]:
+def _extract_sec_filings(
+    filings_raw: dict[str, Any], src_cik: str | None = None
+) -> list[dict]:
+    """10-Q/10-K filings from a submissions block, tagged with ``src_cik``.
+
+    Batch 99: the tag records which CIK's feed the filing came from — its
+    documents live under that CIK's archives path.
+    """
     forms = filings_raw["form"]
     accessions = filings_raw["accessionNumber"]
     report_dates = filings_raw["reportDate"]
@@ -187,12 +275,19 @@ def _extract_sec_filings(filings_raw: dict[str, Any]) -> list[dict]:
                 "report_date": date.fromisoformat(report_dates[i]),
                 "filing_date": date.fromisoformat(filing_dates[i]),
                 "primary_doc": primary_docs[i],
+                "src_cik": src_cik,
             })
     return results
 
 
-def _extract_er_8ks(filings_raw: dict[str, Any]) -> list[dict]:
-    """Return all 8-Ks that contain item 2.02 (earnings release)."""
+def _extract_er_8ks(
+    filings_raw: dict[str, Any], src_cik: str | None = None
+) -> list[dict]:
+    """All 8-Ks containing item 2.02 (earnings release), tagged with ``src_cik``.
+
+    Batch 99: the tag records which CIK's feed the 8-K came from — its
+    filing index and exhibits live under that CIK's archives path.
+    """
     forms = filings_raw["form"]
     accessions = filings_raw["accessionNumber"]
     filing_dates = filings_raw["filingDate"]
@@ -210,6 +305,7 @@ def _extract_er_8ks(filings_raw: dict[str, Any]) -> list[dict]:
                 # guard).
                 "primary_doc": primary_docs[i],
                 "items": items_list[i] or "",
+                "src_cik": src_cik,
             })
     return results
 
@@ -550,7 +646,9 @@ def _find_ex99_doc(
     press release directly in the primary 8-K document).
     """
     accession = matched_8k["accession"]
-    url = edgar_client.filing_index_url(cik, accession)
+    # Batch 99: the filing index lives under the 8-K's own source CIK
+    # (predecessor-CIK 8-Ks are not under the ticker's current CIK).
+    url = edgar_client.filing_index_url(matched_8k.get("src_cik") or cik, accession)
     try:
         html = edgar_client.fetch_text(url)
     except Exception:
@@ -586,6 +684,11 @@ def _to_period(f: dict, cik: str) -> EarningsPeriod:
         sec_doc=f["primary_doc"],
         er_accession=f.get("er_accession"),
         er_doc=f.get("er_doc"),
+        # Batch 99: source CIKs for the archives paths of the 10-Q/10-K doc
+        # and the 8-K exhibit — a predecessor-CIK filing's documents live
+        # under the predecessor CIK, not the ticker's current CIK.
+        sec_cik=f.get("src_cik"),
+        er_cik=f.get("er_src_cik"),
     )
 
 
@@ -593,7 +696,9 @@ def _to_period(f: dict, cik: str) -> EarningsPeriod:
 
 def sec_doc_url(cik: str, period: EarningsPeriod) -> str:
     """Full EDGAR URL for the 10-Q/10-K main document."""
-    cik_num = str(int(normalize_cik(cik)))
+    # Batch 99: the document lives under the CIK whose submissions feed
+    # listed it — a predecessor-CIK filing's accession embeds the old CIK.
+    cik_num = str(int(normalize_cik(period.sec_cik or cik)))
     acc_clean = period.sec_accession.replace("-", "")
     return f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_clean}/{period.sec_doc}"
 
@@ -602,6 +707,8 @@ def er_doc_url(cik: str, period: EarningsPeriod) -> str | None:
     """Full EDGAR URL for the earnings release exhibit, or None."""
     if not period.er_accession or not period.er_doc:
         return None
-    cik_num = str(int(normalize_cik(cik)))
+    # Batch 99: the exhibit lives under the CIK whose submissions feed
+    # listed the 8-K — a predecessor-CIK 8-K's accession embeds the old CIK.
+    cik_num = str(int(normalize_cik(period.er_cik or cik)))
     acc_clean = period.er_accession.replace("-", "")
     return f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_clean}/{period.er_doc}"
