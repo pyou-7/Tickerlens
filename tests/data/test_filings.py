@@ -2475,3 +2475,166 @@ def test_trailing_comma_stripped_from_headline() -> None:
     head = hl.split("\n\n")[0]
     assert head == "United Rentals Announces Fourth Quarter and Full-Year 2025 Results"
     assert not head.endswith(",")
+
+
+def test_bullet_highlights_with_dollar_and_percent_are_not_a_table() -> None:
+    # Batch 107: Amphenol's "Third Quarter 2024 Highlights:" bullets each
+    # carry $ and % ("Record sales of $4.04 billion, up 26%...") — four such
+    # bullets tripped the data_rows >= 4 threshold and the genuine narrative
+    # section was discarded as a financial table, leaving 6 APH quarters
+    # with no highlights. Bullet-led lines are prose, not table rows.
+    from tickerlens.data.filings import _looks_like_financial_table
+    bullets = [
+        "• Record sales of $4.04 billion, up 26% in U.S. dollars",
+        "• Record GAAP Diluted EPS of $0.48, up 17% compared to prior year",
+        "• Record Adjusted Diluted EPS of $0.50, up 28% compared to prior year",
+        "• GAAP and record Adjusted Operating Margin of 20.3% and 21.9%",
+        "• Operating and Free Cash Flow of $704 million and $476 million",
+    ]
+    assert not _looks_like_financial_table(bullets)
+
+
+def test_table_rows_without_bullets_still_detected() -> None:
+    # The batch-97 guard still fires on real tables (Lilly/WM shapes): units
+    # parentheticals and $+% data rows without bullets.
+    from tickerlens.data.filings import _looks_like_financial_table
+    assert _looks_like_financial_table([
+        "Trulicity $1,234  $1,100  12%",
+        "Mounjaro $987  $800  23%",
+        "Verzenio $654  $600  9%",
+        "Jardiance $321  $300  7%",
+    ])
+    assert _looks_like_financial_table([
+        "(Dollars in millions)",
+        "Revenue  10,000  9,000",
+    ])
+
+
+def test_bare_masthead_name_skipped_for_real_headline() -> None:
+    # Batch 107: Amphenol heads the release with the bare company name (no
+    # corporate suffix) + kicker/address block before the real headline.
+    # The name must not become the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "Amphenol",
+            "News Release",
+            "World Headquarters",
+            "358 Hall Avenue",
+            "Wallingford, CT 06492",
+            "Telephone (203) 265-8900",
+            "AMPHENOL REPORTS RECORD THIRD QUARTER 2024 RESULTS",
+            "Third Quarter 2024 Highlights:",
+            "• Record sales of $4.04 billion, up 26% in U.S. dollars",
+            "• Record GAAP Diluted EPS of $0.48, up 17% compared to prior year",
+            "Wallingford, Connecticut, October 23, 2024. Amphenol Corporation "
+            "(NYSE: APH) today reported third quarter 2024 results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "AMPHENOL REPORTS RECORD THIRD QUARTER 2024 RESULTS"
+
+
+def test_bare_masthead_name_kept_when_no_headline_follows() -> None:
+    # The skip only fires when a headline-shaped line follows past a
+    # residue block — a genuine short headline with no masthead shape
+    # after it is picked as-is.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "United Airlines",
+            "CHICAGO, Oct. 15, 2025 -- United Airlines today announced "
+            "third-quarter 2025 financial results with filler text to pass "
+            "the minimum length requirement for extraction to succeed here.",
+        )
+    )
+    assert hl is not None
+    # No residue block + no later headline: the name stays (honest fallback
+    # for docs with no clear headline, e.g. UAL).
+    assert hl.split("\n\n")[0] == "United Airlines"
+
+
+def test_conjunction_lead_continuation_joins() -> None:
+    # Batch 107: "AMPHENOL REPORTS RECORD FOURTH QUARTER" / "AND FULL YEAR
+    # 2024 RESULTS" — a mid-phrase wrap with the conjunction leading the
+    # continuation line.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "AMPHENOL REPORTS RECORD FOURTH QUARTER",
+            "AND FULL YEAR 2024 RESULTS",
+            "Fourth Quarter 2024 Highlights:",
+            "• Sales of $4.3 billion, up 30% in U.S. dollars",
+            "Wallingford, Connecticut, January 22, 2025. Amphenol Corporation "
+            "today reported fourth quarter 2024 results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "AMPHENOL REPORTS RECORD FOURTH QUARTER AND FULL YEAR 2024 RESULTS"
+    )
+
+
+def test_conjunction_lead_does_not_swallow_lede() -> None:
+    # A headline followed by a lede sentence that merely starts with "And"
+    # but ends with terminal punctuation is not joined.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "ACME REPORTS RECORD QUARTER",
+            "And the outlook for next year is strong and positive.",
+            "Wallingford, Connecticut, October 23, 2024. Acme Corporation "
+            "today reported third quarter 2024 results with enough filler "
+            "text to pass the minimum extraction length requirement.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "ACME REPORTS RECORD QUARTER"
+
+
+def test_wrap_tail_still_joins_after_masthead_skip_change() -> None:
+    # Guard: the batch-106 verb-fragment join ("WM Announces" / "Fourth
+    # Quarter and" / "Full Year 2025 Results") must not be stolen by the
+    # batch-107 bare-masthead skip — a verb tail is a wrap fragment, never
+    # a masthead name.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "WM Announces",
+            "Fourth Quarter and",
+            "Full Year 2025 Results",
+            "HOUSTON -- WM today announced results with enough filler text "
+            "to pass the minimum extraction length requirement for this "
+            "regression test of the wrapped-headline join behavior.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "WM Announces Fourth Quarter and Full Year 2025 Results"
+
+
+def test_full_address_masthead_never_headline() -> None:
+    # Batch 107: Equifax heads releases with a 50-char street address
+    # ("1550 Peachtree Street, N.W. Atlanta, Georgia 30309") that clears
+    # the 48-char bound in _looks_like_masthead_residue and became the
+    # headline for all 8 quarters. A full address is an admin line.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match("1550 Peachtree Street, N.W. Atlanta, Georgia 30309")
+    assert not _ADMIN_LINE_RE.match("2025 Results Are In")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "1550 Peachtree Street, N.W. Atlanta, Georgia 30309",
+            "NEWS RELEASE",
+            "Contact:",
+            "Trevor Burns Kate Walker",
+            "Investor Relations Media Relations",
+            "trevor.burns@equifax.com mediainquiries@equifax.com",
+            "Equifax Delivers Strong 10% Revenue Growth in Third Quarter 2026",
+            "ATLANTA, OCTOBER 20, 2026 -- Equifax today announced results.",
+            "• Third quarter reported revenue of $1.693 billion, up 10%",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Equifax Delivers Strong 10% Revenue Growth in Third Quarter 2026"
+    )

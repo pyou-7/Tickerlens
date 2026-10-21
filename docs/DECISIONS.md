@@ -1968,3 +1968,15 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 - **The `\b` word boundary doesn't work for symbols.** `\b&\s*$` never matches `Merck &` because there's no word boundary between space and `&`. Symbols (`&`, `–`, `—`) must match without `\b`; words keep `\b` on both sides so `Anderson` doesn't match `and`.
 
 **Related:** Closes the batch-105 `WMT fragment wraps` follow-up (7/7 WMT quarters fixed). Still open: STZ table-row wart; UAL/INTC company-name headlines; PLUG/CB fragments; pending-filing cohort at 20 (verified systematic EDGAR lag, not our bug); partial residuals at 4.
+
+## 2026-10-21 — Batch 107: APH/EFX extraction defects from round-36 seeds
+
+**Decision:** Four extraction fixes in `data/filings.py`, all surfaced by seeding COP/APH/CARR/EFX/BKR/ED: (1) bullet-led lines are prose, not table rows — `_looks_like_financial_table` no longer counts •/●/- lines toward the data_rows >= 4 threshold (Amphenol's narrative bullets each carry $ and %); (2) `_skip_bare_masthead_name` — a ≤3-word non-headline-shaped candidate is a masthead when a headline-shaped line follows within 6 lines past admin/residue/labels with ≥1 residue line seen; verb-tail/wrap-tail candidates are excluded (they belong to `_join_wrapped_headline`); (3) `_join_wrapped_headline` also joins when the next line opens with and/or/but (mid-phrase wrap, mirror of the wrap tail); (4) full street addresses (house number + ZIP) are `_ADMIN_LINE_RE` — Equifax's 50-char address cleared the 48-char masthead-residue bound.
+
+**Rationale:** The batch-97 financial-table guard was built for Lilly/WM tables (no bullets); Amphenol's bullets are the first narrative section dense enough with $+% to trip it. The 48-char residue bound is load-bearing for short headlines, so long addresses needed their own precise pattern rather than a bound relaxation.
+
+**Blast-radius method (batch-106 lesson applied):** old-vs-new extraction compared on AAPL/JPM/LLY/WM/MRK samples — all 5 identical. The 924-test suite (including batch 97–106 headline regression tests) is green. The DB-wide scan's 149 flagged headlines are pre-existing classes ('EARNINGS RELEASE', 'EXHIBIT-99.1', 'INVESTOR RELATIONS:'), not regressions — recorded as carried follow-ups.
+
+**Pending-filing recheck lesson:** a naive "any fact with end=2026-06-30" check false-positived on 424B2 fee facts, DEF 14A proxy tables, and S-4 registration fees. The revenue-duration-facts check in `_pending_filing_note` is the correct ground truth — a recheck must use it, not raw fact existence.
+
+**Related:** APH 2/8 → 8/8 highlights, EFX 8/8 headlines fixed. Still open: STZ table-row wart; UAL/INTC company-name headlines (no clear headline in doc); PLUG/CB fragments; pending-filing cohort at 22; partial residuals at 4; Wikipedia 403s; 149 pre-existing junk-headline shapes.

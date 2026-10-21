@@ -165,7 +165,13 @@ _ADMIN_LINE_RE = re.compile(
     # this exact shape. Batch 105.
     r"|^news\s+from\s+\S+$"
     # "THE PRESS RELEASE" exhibit label (Bank of America). Batch 105.
-    r"|^the\s+press\s+release$",
+    r"|^the\s+press\s+release$"
+    # Full street address on one line ("1550 Peachtree Street, N.W. Atlanta,
+    # Georgia 30309" — Equifax heads releases with it; at 50 chars it clears
+    # the 48-char bound in _looks_like_masthead_residue and became the
+    # headline). A headline never starts with a house number and ends with
+    # a ZIP. Batch 107.
+    r"|^\d{1,6}\s+\S.*\b\d{5}(?:-\d{4})?\s*$",
     re.IGNORECASE,
 )
 
@@ -199,7 +205,15 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 # millions)"), "% Change" column headers, or data rows dense with $ and %.
 # Such a section is not narrative highlights — rejecting it lets the lede
 # fallback (the real opening bullets) serve instead. Batch 97.
+#
+# Batch 107: bullet-led lines (•/●/-) are narrative prose, never table rows.
+# Amphenol's "Third Quarter 2024 Highlights:" bullets ("Record sales of $4.04
+# billion, up 26%...") each carry $ and % — without the bullet guard, four
+# such bullets trip the data_rows >= 4 threshold and a genuine narrative
+# section is discarded as a table. Real tables (Lilly/WM) have no bullets.
 _TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
+
+_BULLET_LEAD_RE = re.compile(r"^[•●\-–—]\s")
 
 
 def _looks_like_financial_table(lines: list[str]) -> bool:
@@ -209,7 +223,7 @@ def _looks_like_financial_table(lines: list[str]) -> bool:
     for ln in lines:
         if _TABLE_UNITS_RE.search(ln) or re.search(r"% change", ln, re.IGNORECASE):
             strong = True
-        elif "$" in ln and "%" in ln:
+        elif not _BULLET_LEAD_RE.match(ln) and "$" in ln and "%" in ln:
             data_rows += 1
     return strong or data_rows >= 4
 
@@ -579,6 +593,12 @@ _HEADLINE_VERB_TAIL_RE = re.compile(
 # bullets, datelines, quoted or numeric-led lines.
 _HEADLINE_CONT_BAD_START_RE = re.compile(r"^[•\-\d\"“]")
 
+# A continuation line that opens with a conjunction ("AND FULL YEAR 2024
+# RESULTS" after "AMPHENOL REPORTS RECORD FOURTH QUARTER"): the headline was
+# wrapped mid-phrase with the conjunction leading the second line, the mirror
+# of the wrap-tail case above. Batch 107.
+_HEADLINE_CONT_LEAD_RE = re.compile(r"^(and|or|but)\b", re.IGNORECASE)
+
 
 # A page-image exhibit "line" that is really a whole page starting with a run
 # of social-media URLs (Ford: "1 https://ford.to/facebook https://x.com/ford
@@ -644,14 +664,25 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
     join, the continuation may itself end on a wrap word ("WM Announces" /
     "Fourth Quarter and" / "Full Year 2025 Results"). Each join re-checks all
     guards, so the iteration cannot run away into the lede.
+
+    3. (Batch 107) The next line opens with a conjunction ("AMPHENOL REPORTS
+       RECORD FOURTH QUARTER" / "AND FULL YEAR 2024 RESULTS"): a mid-phrase
+       wrap with the conjunction leading the continuation. The conjunction
+       lead is as strong a fragment signal as the wrap tail — a complete
+       headline is never followed by a conjunction-led fragment — and the
+       same continuation guards apply.
     """
     headline = lines[i]
     j = i + 1
     joins = 0
     while (
         joins < 3
-        and (_HEADLINE_WRAP_TAIL_RE.search(headline) or _HEADLINE_VERB_TAIL_RE.search(headline))
         and j < len(lines)
+        and (
+            _HEADLINE_WRAP_TAIL_RE.search(headline)
+            or _HEADLINE_VERB_TAIL_RE.search(headline)
+            or _HEADLINE_CONT_LEAD_RE.match(lines[j])
+        )
         and len(lines[j]) <= 140
         and not lines[j].rstrip().endswith((".", "!", "?", ":"))
         and not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
@@ -664,6 +695,57 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
         j += 1
         joins += 1
     return headline, j
+
+
+def _skip_bare_masthead_name(lines: list[str], i: int) -> int | None:
+    """Return the index of the real headline after a bare masthead-name block.
+
+    Batch 107: some filers head the release with a bare company name (no
+    corporate suffix — Amphenol's "Amphenol") followed by a kicker/address
+    block ("News Release" / "World Headquarters" / "358 Hall Avenue" /
+    "Wallingford, CT 06492" / "Telephone (203) 265-8900") and only then the
+    real headline ("AMPHENOL REPORTS RECORD THIRD QUARTER 2024 RESULTS").
+    The name is not the headline when a headline-shaped line follows within
+    6 lines past only admin, residue/contact, or short label lines — and at
+    least one residue/contact line is seen, so a genuine short headline is
+    never skipped.
+
+    Narrowness guards: the candidate must be short (<=3 words), not already
+    headline-shaped, free of terminal punctuation, and must not end on a
+    wrap tail or headline verb — those are _join_wrapped_headline's wrapped-
+    fragment cases ("WM Announces" / "Fourth Quarter and" / "Full Year 2025
+    Results"), not a masthead. Returns None when the shape doesn't hold.
+    """
+    ln = lines[i]
+    words = ln.split()
+    if len(words) > 3 or _looks_like_headline(ln):
+        return None
+    if _HEADLINE_VERB_TAIL_RE.search(ln) or _HEADLINE_WRAP_TAIL_RE.search(ln):
+        return None
+    if re.search(r"[.!?;:]\s*$", ln):
+        return None
+    j = i + 1
+    saw_residue = False
+    while j < len(lines) and j - i <= 6:
+        cand = lines[j]
+        if _looks_like_headline(cand):
+            return j if saw_residue else None
+        if _ADMIN_LINE_RE.match(cand):
+            j += 1
+            continue
+        if (
+            _CONTACT_HEADER_RE.match(cand)
+            or _CONTACT_LINE_RE.search(cand)
+            or _looks_like_masthead_residue(cand)
+        ):
+            saw_residue = True
+            j += 1
+            continue
+        if len(cand.split()) <= 4 and not re.search(r"[.!?]\s*$", cand):
+            j += 1  # kicker/label line ("News Release", "World Headquarters")
+            continue
+        return None
+    return None
 
 
 # --- Cover title-block skip (batch 100) --------------------------------------
@@ -1052,6 +1134,13 @@ def extract_press_release_highlights(
                 headline, body_start = f"{ln} {nxt}", i + 2
                 break
             i += 1
+            continue
+        masthead_skip = _skip_bare_masthead_name(lines, i)
+        if masthead_skip is not None:
+            # Bare company-name masthead (Amphenol's "Amphenol") with the
+            # real headline a few lines down past the address block.
+            # Batch 107.
+            i = masthead_skip
             continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline, next_i = _join_wrapped_headline(lines, i)
