@@ -1956,3 +1956,15 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Decision:** Treat contact-block residue as a headline-quality defect class, not just a skip-logic gap. A DB-wide scan (not just the seed tickers) found 248 affected quarters, proving the extractor's contact handling had systematic blind spots across ~48 tickers.
 **Rationale:** The batch-104 lesson (blast-radius scan before repair) applied again — the seed tickers (PGR/NKE) were symptoms, not the disease. Fixing the code without the DB scan would have left ~200 stale rows.
 **Consequence:** Live repair is now a standard batch tool for extractor fixes. The repair script only overwrites when the new headline differs (None never overwrites, except for deliberate unparseable-page-line clears), making it safe to re-run.
+
+## 2026-10-21 — Batch 106: headline-fragment defect classes from round-35 seeds
+
+**What:** Four new headline-quality defect classes fixed in `data/filings.py`, surfaced by seeding MRK/EMR/FCX/DOW/URI/CNC: (1) verb-fragment headlines (`_HEADLINE_VERB_TAIL_RE` — a headline ending with a headline verb is a company+verb fragment; join the continuation); (2) dash-wrapped page numbers (`- 1 -`, `-`, `1 -`, `- 1`) as admin lines; (3) suite-address masthead residue (`_SUITE_ADDRESS_RE`); (4) split-kicker residue (`Release`/`Press` alone, lone comma). Plus: `_join_wrapped_headline` iterates (max 3) for multi-line headlines; comma-wrap signal; `&`/`–`/`—` match without `\b` in the wrap-tail (the `\b` never fires between space and `&`); 140-char continuation cap (was 100); trailing-comma strip on picked headlines.
+
+**Why:** 58 quarters had verb-fragment headlines (`Freeport Reports` ×8, `Walmart Reports` ×7, `GRAND CANYON EDUCATION, INC. REPORTS` ×8, etc.), 6 had suite-address headlines, 3 had page-number headlines — all visible on company pages. The batch-91 wrap-tail design (conjunction/preposition breaks only) couldn't handle company+verb fragments, which are the most common wrap shape in the wild.
+
+**Two implementation lessons:**
+- **A fix's blast radius must be scanned before AND after repair.** The first repair pass wrote 3 bad values (`1 -` → `1 -` still junk; `WM Announces Fourth Quarter and` truncated; `Merck &` fragment) because the fixes were incomplete. Each bad value forced a code refinement (page-fragment patterns, join iteration, `&` without `\b`). The repair script's "overwrite only when different" is not enough — a second pass must verify the NEW values aren't also junk.
+- **The `\b` word boundary doesn't work for symbols.** `\b&\s*$` never matches `Merck &` because there's no word boundary between space and `&`. Symbols (`&`, `–`, `—`) must match without `\b`; words keep `\b` on both sides so `Anderson` doesn't match `and`.
+
+**Related:** Closes the batch-105 `WMT fragment wraps` follow-up (7/7 WMT quarters fixed). Still open: STZ table-row wart; UAL/INTC company-name headlines; PLUG/CB fragments; pending-filing cohort at 20 (verified systematic EDGAR lag, not our bug); partial residuals at 4.
