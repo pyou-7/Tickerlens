@@ -1939,3 +1939,15 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Alternatives considered:** synthesizing periods from 6-K reportDates without a formal anchor — rejected: the anchor integrates with the existing period_end matching, FY labeling, and source-string machinery. Treating the 6-K primary doc as the release — rejected: it is the cover form; the release is always the EX-99.1 exhibit. Requiring only a quarter token in the primary-doc name (no month-end guard) — rejected: event-dated 6-Ks (dividend declarations) can carry quarter tokens; the month-end requirement keeps them out.
 
 **Related:** closes the carried "SHOP 6-K discovery (foreign filers)" follow-up; SHOP backfilled 7/8 → 8/8. Still open: GEV footnote-definition headline wart; STZ table-row wart; pending-filing cohort at 17; partial residuals at 4 (AFRM, LIN image-only; CCI no Q4-2024 8-K; SKYD pre-merger).
+
+## 2026-10-20 — Batch 104: footnote-definition legend lines are never headline material
+
+**What:** new `_FOOTNOTE_DEF_RE` in `data/filings.py`, skipped in the headline pass and the lede pass of `extract_press_release_highlights`; `_ADMIN_LINE_RE` extended with bare `^page\s+\d+$` and lone `^news$`.
+
+**Why:** GEV's Workiva ex-99 opens with a footnote legend block (`1 Defined as remaining performance obligation (RPO)` / `*Non-GAAP Financial Measure` / `Page 1`) before the real headline, and the numeric definition line was being stored as the headline — a visible defect on the detail page. `_LEDE_FOOTNOTE_RE` only matches parenthesized markers (`(a)`, `(1)`), so bare-key definitions were invisible to every skip rule.
+
+**Two implementation lessons:**
+- **A fix's blast radius must be scanned against the DB before commit.** The scan found SO's Q2-2024 exhibit carrying the same Workiva header shape: skipping bare "Page 1" alone would have promoted the lone "News" kicker to headline (strictly worse than "Page 1"). The `^news$` admin addition was a discovered requirement, not a design choice — and it rescued SO's real headline ("Southern Company reports second-quarter 2024 earnings"), which no previous pass had ever reached. The scan pattern: match the new skip regexes against stored headlines (1 hit: the GEV wart) and first-lines (2 hits: GEV, SO) before writing the repair.
+- **The definition verb is the guard, not the number.** `^\d{1,3}\s+` alone would swallow numeric-opening headlines; requiring `(defined as|represents|includes|excludes|reflects)` keeps "2025 outlook raised", "1Q26 record quarter", and "1 billion in buybacks" safe. Same principle as the batch-100 cover-block narrowness: the trigger's narrowness is the safety.
+
+**Related:** closes the carried "GEV footnote-definition headline wart"; live repair cleared and re-filled GEV Q2 FY2025 + SO Q2 FY2024. Still open: STZ table-row wart (metric-table-as-highlights — deliberately deferred: real headline + real figures, a separate quality class); pending-filing cohort at 17; partial residuals at 4 (AFRM, LIN image-only; CCI no Q4-2024 8-K; SKYD pre-merger).

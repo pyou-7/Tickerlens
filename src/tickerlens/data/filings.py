@@ -127,6 +127,7 @@ _ADMIN_LINE_RE = re.compile(
     # and the real headline was never reached, batch 97)
     r"|^exhibit\s+99\b"  # Exhibit 99.1
     r"|^page\s+\d+\s+of\s+\d+$"  # "Page 1 of 24" exhibit headers (MetLife)
+    r"|^page\s+\d+$"  # bare "Page 1" headers (GEV's Workiva exhibits, batch 104)
     r"|^\d{1,3}$"  # page numbers
     r"|^\S+\.html?$"  # exhibit filename lines
     r"|^\(furnished herewith\)$"  # SEC exhibit parenthetical (Deere-style)
@@ -136,7 +137,11 @@ _ADMIN_LINE_RE = re.compile(
     r"november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
     r"\.?\s+\d{1,2},?\s+\d{4}$"
     r"|^n\s*e\s*w\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter kicker (Humana)
-    r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$",  # spaced-letter "press release"
+    r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter "press release"
+    # Lone "News" section kicker: Southern Company's releases put it before
+    # the contact block, and once bare "Page 1" is skipped the kicker would
+    # become the headline (batch 104). A real headline is never one word.
+    r"|^news$",
     re.IGNORECASE,
 )
 
@@ -215,6 +220,28 @@ def _looks_like_table_fragment(ln: str) -> bool:
 # with the marker running straight into the text, and the old [\s.] tail let
 # that endnote boilerplate fill the lede and get stored as highlights.
 _LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
+
+
+# Footnote-definition legend lines (GEV's Workiva ex-99 opens with
+# "1 Defined as remaining performance obligation (RPO)" /
+# "*Non-GAAP Financial Measure" / "Page 1" before the real headline, and the
+# numeric one was picked as the headline in batch 103's aftermath). Two
+# shapes, both never headline or lede material. Batch 104.
+#   - numeric key + definition verb: "1 Defined as ...", "2 Represents ...",
+#     "1 Includes ...", "3 Excludes ..." — the verb is the guard that keeps a
+#     numeric-opening headline from being swallowed ("2025 outlook raised"
+#     can't match: 4-digit year; "1Q26 record quarter" can't match: no space
+#     and no verb; "1 billion in buybacks" can't match: no verb).
+#   - glyph footnote markers attached to the text: "*Non-GAAP Financial
+#     Measure", "†Excludes ...". The marker must sit at line start with the
+#     text attached — a spaced "* Foo" or mid-line asterisk is prose
+#     punctuation, not a legend (bullet "•" is a different char and is
+#     unaffected).
+_FOOTNOTE_DEF_RE = re.compile(
+    r"^\d{1,3}\s+(defined as|represents|includes|excludes|reflects)\b"
+    r"|^[*†‡]\S",
+    re.IGNORECASE,
+)
 
 
 def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
@@ -799,6 +826,13 @@ def extract_press_release_highlights(
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             i += 1
             continue
+        if _FOOTNOTE_DEF_RE.match(ln):
+            # Footnote-definition legend lines (GEV's Workiva exhibit opens
+            # with "1 Defined as remaining performance obligation (RPO)" /
+            # "*Non-GAAP Financial Measure" before the real headline): never
+            # headline material. Batch 104.
+            i += 1
+            continue
         if _TOC_HEADING_RE.match(ln):
             # Combined release+supplement packet (SPG): skip the table of
             # contents so its heading and entries never become the headline.
@@ -840,9 +874,11 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
-            if _LEDE_FOOTNOTE_RE.match(ln):
+            if _LEDE_FOOTNOTE_RE.match(ln) or _FOOTNOTE_DEF_RE.match(ln):
                 i += 1
-                continue  # table footnotes ("(a) ...", "(1) ...") are never lede
+                continue  # table footnotes ("(a) ...", "(1) ...") and
+                # footnote-definition legends ("1 Defined as ...",
+                # "*Non-GAAP Financial Measure") are never lede
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute

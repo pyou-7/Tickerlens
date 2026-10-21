@@ -1716,3 +1716,133 @@ technologies and dependable execution across the full well lifecycle.</p>
     assert "Revenue of $5.5 billion" in result
     assert "approximately $582 million" in result
     assert "Chevron" not in result
+
+
+# ── Batch 104: footnote-definition legend lines are never the headline ────────
+# GEV's Workiva ex-99 opens with a footnote legend block
+# ("1 Defined as remaining performance obligation (RPO)" /
+# "*Non-GAAP Financial Measure" / "Page 1") before the real headline, and the
+# numeric definition line was picked as the headline. Southern Company's
+# exhibit showed the follow-on shape: skipping bare "Page 1" exposed the lone
+# "News" kicker as the would-be headline.
+
+_GEV_LEGEND_HTML = """<html><body>
+<p>EX-99</p><p>2</p><p>gevpressrelease2q25.htm</p><p>EX-99</p>
+<p>1 Defined as remaining performance obligation (RPO)</p>
+<p>*Non-GAAP Financial Measure</p>
+<p>Page 1</p>
+<p>GE Vernova reports second quarter 2025 financial results</p>
+<p>Strong 2Q'25 results with continued growth, margin expansion and positive cash flow; raising 2025 guidance</p>
+<p>Second Quarter 2025 Highlights:</p>
+<p>\u2022Orders of $12.4B, +4% organically; continued strong demand at Power and Electrification</p>
+<p>\u2022Backlog1 growth of $5.2B sequentially from equipment and services</p>
+<p>\u2022Revenue of $9.1B, +11%, +12% organically* with growth in both equipment and services</p>
+<p>\u2022Net income of $0.5B; net income margin of 5.4%</p>
+<p>About GE Vernova</p>
+<p>""" + "GE Vernova pad. " * 60 + """</p>
+</body></html>"""
+
+_SO_KICKER_HTML = """<html><body>
+<p>EX-99</p><p>2</p><p>ex99-pressreleaseq22024.htm</p><p>EX-99</p><p>Exhibit 99</p>
+<p>Page 1</p>
+<p>News</p>
+<p>Media Contact: Southern Company Media Relations</p>
+<p>404-506-5333 or 1-866-506-5333</p>
+<p>southerncompany.com</p>
+<p>Investor Relations Contact:</p>
+<p>Scott Gammill</p>
+<p>404-506-0901</p>
+<p>sagammil@southernco.com</p>
+<p>August 1, 2024</p>
+<p>Southern Company reports second-quarter 2024 earnings</p>
+<p>ATLANTA \u2013 Southern Company today reported second-quarter earnings of $1.2 billion, or $1.10 per share, compared with $838 million, or $0.79 per share, in the second quarter of 2023.</p>
+<p>Excluding the items described below, Southern Company earned $1.1 billion, or $1.03 per share, during the second quarter of 2024, compared with $990 million, or $0.93 per share, during the second quarter of 2023.</p>
+<p>About Southern Company</p>
+<p>""" + "Southern Company pad. " * 60 + """</p>
+</body></html>"""
+
+
+def test_footnote_def_re_matches_legend_shapes():
+    from tickerlens.data.filings import _FOOTNOTE_DEF_RE
+
+    assert _FOOTNOTE_DEF_RE.match("1 Defined as remaining performance obligation (RPO)")
+    assert _FOOTNOTE_DEF_RE.match("2 Represents the principal cash flow elements")
+    assert _FOOTNOTE_DEF_RE.match("1 Includes restructuring charges")
+    assert _FOOTNOTE_DEF_RE.match("*Non-GAAP Financial Measure")
+    assert _FOOTNOTE_DEF_RE.match("\u2020Excludes one-time items")
+
+
+def test_footnote_def_re_rejects_real_headline_shapes():
+    from tickerlens.data.filings import _FOOTNOTE_DEF_RE
+
+    # 4-digit years, "1Q"-style quarter opens, and numeric-opening prose are
+    # all plausible headlines — none carries a definition verb, so none may
+    # be swallowed.
+    assert not _FOOTNOTE_DEF_RE.match("2025 outlook raised on strong demand")
+    assert not _FOOTNOTE_DEF_RE.match("1Q26 record quarter for widgets")
+    assert not _FOOTNOTE_DEF_RE.match("1 billion in buybacks announced")
+    assert not _FOOTNOTE_DEF_RE.match("News")
+    # A spaced asterisk is prose punctuation, not a legend marker.
+    assert not _FOOTNOTE_DEF_RE.match("* Non-GAAP Financial Measure")
+
+
+def test_gev_legend_lines_never_become_headline():
+    # GEV Q2 FY2025 shape: footnote-definition legend block precedes the
+    # headline. The real headline must lead; no legend line may appear.
+    result = extract_press_release_highlights(_GEV_LEGEND_HTML)
+    assert result is not None
+    headline = result.split("\n")[0]
+    assert headline == "GE Vernova reports second quarter 2025 financial results"
+    assert "Defined as remaining performance obligation" not in result
+    assert "*Non-GAAP Financial Measure" not in result
+    assert "Page 1" not in result
+    assert "Orders of $12.4B" in result
+
+
+def test_lone_news_kicker_and_bare_page_never_become_headline():
+    # SO Q2 FY2024 shape: bare "Page 1" then a lone "News" kicker, then a
+    # contact block and the date, then the real headline. Skipping "Page 1"
+    # must not promote the kicker — the real headline must win.
+    result = extract_press_release_highlights(_SO_KICKER_HTML)
+    assert result is not None
+    headline = result.split("\n")[0]
+    assert headline == "Southern Company reports second-quarter 2024 earnings"
+    assert headline != "News"
+    assert "Page 1" not in result.split("\n\n")[0]
+
+
+def test_news_corp_headline_not_swallowed_by_news_kicker_rule():
+    # The lone-"News" admin rule must not eat a headline that merely starts
+    # with the word News.
+    html = """<html><body>
+<p>EX-99.1</p>
+<p>NEWS CORP ANNOUNCES SECOND QUARTER 2025 RESULTS</p>
+<p>New York \u2013 News Corp today reported revenue of $2.1 billion, up 5% compared to the prior year, driven by growth in the Digital Real Estate Services and Book Publishing segments.</p>
+<p>Net income for the quarter was $312 million, or $0.54 per diluted share, reflecting higher operating leverage and continued cost discipline across the portfolio.</p>
+<p>About News Corp</p>
+<p>""" + "News Corp pad. " * 60 + """</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.split("\n")[0] == "NEWS CORP ANNOUNCES SECOND QUARTER 2025 RESULTS"
+
+
+def test_lede_pass_skips_footnote_def_lines():
+    # Footnote-definition legends appearing after the headline (no Highlights
+    # section, so the lede fallback runs) are skipped, not stored.
+    html = """<html><body>
+<p>EX-99.1</p>
+<p>ACME CORP REPORTS THIRD QUARTER 2025 RESULTS</p>
+<p>1 Defined as remaining performance obligation</p>
+<p>*Non-GAAP Financial Measure</p>
+<p>CUPERTINO, California \u2013 Acme Corp today announced revenue of $4.2 billion for the third quarter, up 9% year over year, with growth across all major product categories and geographies.</p>
+<p>Net income was $812 million, or $1.04 per diluted share, compared with net income of $701 million, or $0.91 per diluted share, in the prior-year quarter.</p>
+<p>About Acme Corp</p>
+<p>""" + "Acme Corp pad. " * 60 + """</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.split("\n")[0] == "ACME CORP REPORTS THIRD QUARTER 2025 RESULTS"
+    assert "Defined as remaining performance obligation" not in result
+    assert "*Non-GAAP Financial Measure" not in result
+    assert "revenue of $4.2 billion" in result
