@@ -2638,3 +2638,201 @@ def test_full_address_masthead_never_headline() -> None:
     assert hl.split("\n\n")[0] == (
         "Equifax Delivers Strong 10% Revenue Growth in Third Quarter 2026"
     )
+
+
+def test_ordinal_tail_headline_joins() -> None:
+    # Batch 108: a headline ending on a period/ordinal word ("Plug Power
+    # Third", "Kroger Reports Fourth") is a wrapped-headline fragment, not a
+    # complete headline — the continuation sits on the next line.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Plug Power Third",
+        "Quarter 2025 Highlights",
+        "$177 Million in Quarterly Revenue",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Plug Power Third Quarter 2025 Highlights"
+    assert next_i == 2
+
+
+def test_ordinal_tail_full_joins() -> None:
+    # Batch 108: "Full" is a period word too ("Intercontinental Exchange
+    # Reports Strong Full" / "Year 2025 Results").
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Intercontinental Exchange Reports Strong Full",
+        "Year 2025 Results",
+        "ATLANTA -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Intercontinental Exchange Reports Strong Full Year 2025 Results"
+    assert next_i == 2
+
+
+def test_quarter_tail_bare_year_joins() -> None:
+    # Batch 108: "{ordinal} Quarter" / bare year ("Intercontinental Exchange
+    # Reports Second Quarter" / "2026"). The year is never a lede start, so
+    # the digit-lead guard is bypassed for this exact shape only.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Intercontinental Exchange Reports Second Quarter",
+        "2026",
+        "ATLANTA -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Intercontinental Exchange Reports Second Quarter 2026"
+    assert next_i == 2
+
+
+def test_ordinal_tail_multi_join_with_conjunction() -> None:
+    # Batch 108: the ordinal join composes with the batch-107 conjunction
+    # lead ("Kroger Reports Second" / "Quarter 2026 Results" /
+    # "and Updates Guidance for 2026").
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Kroger Reports Second",
+        "Quarter 2026 Results",
+        "and Updates Guidance for 2026",
+        "Second Quarter Highlights",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Kroger Reports Second Quarter 2026 Results and Updates Guidance for 2026"
+    )
+    assert next_i == 3
+
+
+def test_ordinal_tail_ignores_sentence_lede() -> None:
+    # Batch 108: the continuation guards still apply — a sentence-terminated
+    # lede line never joins an ordinal-tail fragment.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Kroger Reports Fourth",
+        "Quarter results were strong overall.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Kroger Reports Fourth"
+    assert next_i == 1
+
+
+def test_bare_year_without_quarter_tail_not_joined() -> None:
+    # Batch 108: a bare year joins ONLY after "{ordinal} Quarter" / "Full
+    # Year" — a complete headline is never glued to a stray year line.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Acme Reports Results",
+        "2026",
+        "Net income was strong this quarter.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Acme Reports Results"
+    assert next_i == 1
+
+
+def test_ordinal_fragment_not_misread_as_bare_masthead() -> None:
+    # Batch 108: end-to-end regression for the batch-107 _skip_bare_masthead_name
+    # misfire — "Plug Power Third" was read as a bare masthead name, its
+    # continuation "Quarter 2025 Highlights" as digit-bearing residue, and
+    # "$177 Million in Quarterly Revenue" was picked as the headline.
+    from src.tickerlens.data.filings import _skip_bare_masthead_name
+
+    lines = [
+        "Plug Power Third",
+        "Quarter 2025 Highlights",
+        "$177 Million in Quarterly Revenue",
+    ]
+    assert _skip_bare_masthead_name(lines, 0) is None
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "Plug Power Third",
+            "Quarter 2025 Highlights",
+            "$177 Million in Quarterly Revenue",
+            "Continued Global Market Expansion and Operational Progress",
+            "SLINGERLANDS, N.Y., November 10, 2025 - Plug Power Inc. (NASDAQ: PLUG), "
+            "a global leader in comprehensive hydrogen solutions, today announced "
+            "its financial results for the third quarter ended September 30, 2025.",
+            "• For the third quarter 2025, revenue was $177 million, up 13% year over year.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Plug Power Third Quarter 2025 Highlights"
+
+
+def test_fragment_join_continues_through_wrap() -> None:
+    # Batch 108: a 1-word fragment join must not stop on a dangling wrap tail
+    # ("Kroger" / "Reports Third Quarter 2025 Results and" / "Updates") — the
+    # joined fragment feeds through the wrap joiner.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "Kroger",
+            "Reports Third Quarter 2025 Results and",
+            "Updates",
+            "Guidance for 2025",
+            "Third Quarter",
+            "Highlights",
+            "CINCINNATI, November 20, 2025 - The Kroger Co. (NYSE: KR) today "
+            "reported its third quarter 2025 results.",
+            "• Identical Sales without fuel increased 2.6%.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Kroger Reports Third Quarter 2025 Results and Updates"
+
+
+def test_verb_lead_join_continues_through_wrap() -> None:
+    # Batch 108: same for the company-name + headline-verb join ("Genuine
+    # Parts Company" / "Reports Fourth Quarter and" / "Full-Year 2025 Results").
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "Genuine Parts Company",
+            "Reports Fourth Quarter and",
+            "Full-Year 2025 Results",
+            "ATLANTA, February 18, 2026 - Genuine Parts Company (NYSE: GPC) "
+            "today reported fourth quarter and full-year 2025 results.",
+            "• Fourth quarter sales were $5.8 billion, up 2.1%.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Genuine Parts Company Reports Fourth Quarter and Full-Year 2025 Results"
+    )
+
+
+def test_xcel_address_block_masthead_skipped() -> None:
+    # Batch 108: Xcel Energy heads releases with a street address, a
+    # date+city+ZIP line, and the all-caps company name before the real
+    # headline. None of them may become the headline.
+    filler = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 20
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.01", "Exhibit 99.01",
+            "414 Nicollet Mall",
+            "July 30, 2026 Minneapolis, MN 55401",
+            "XCEL ENERGY",
+            "SECOND QUARTER 2026 EARNINGS REPORT",
+            "•Second quarter diluted GAAP and ongoing earnings per share were $0.93.",
+            "MINNEAPOLIS -- Xcel Energy Inc. (NASDAQ: XEL) today reported 2026 "
+            "second quarter GAAP earnings.",
+            filler,
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "SECOND QUARTER 2026 EARNINGS REPORT"
+
+
+def test_all_caps_name_before_all_caps_headline_skipped() -> None:
+    # Batch 108: the all-caps masthead rule is narrow — a mixed-case short
+    # line before a headline is not skipped by it.
+    from src.tickerlens.data.filings import _looks_like_headline
+
+    assert _looks_like_headline("SECOND QUARTER 2026 EARNINGS REPORT")
+    assert not _looks_like_headline("Xcel Energy")

@@ -3974,3 +3974,34 @@ def test_repair_stale_fy_wraps_gap_never_repaired() -> None:
     assert [(r.fy, r.fp) for r in fixed] == [
         (2025, "Q1"), (2025, "Q3"), (2025, "Q4"), (2026, "Q1"),
     ]
+
+
+def test_concept_facts_uses_regulated_revenue_when_revenues_stale():
+    """Batch 108 (Xcel Energy): the filer abandoned ``Revenues`` after 2019;
+    ``RegulatedAndUnregulatedOperatingRevenue`` runs current. The fresh
+    utility tag must win over the stale generic tag."""
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2019-07-01", "2019-09-30", 3_013_000_000.0, 2019, "Q3",
+                                 filed="2019-10-25"),
+                        ]
+                    }
+                },
+                "RegulatedAndUnregulatedOperatingRevenue": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 3_119_000_000.0, 2026, "Q2",
+                                 filed="2026-07-30"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, facts = concept_facts(cf, Metric.REVENUE, staleness_window=(70, 115))
+    assert tag == "RegulatedAndUnregulatedOperatingRevenue"
+    assert facts[0].val == 3_119_000_000.0

@@ -132,6 +132,12 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
             "RevenueFromContractWithCustomerIncludingAssessedTax",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
+            # Utilities that report regulated/unregulated operating revenue
+            # instead of the generic tags (Xcel Energy abandoned ``Revenues``
+            # after 2019; ``RegulatedAndUnregulatedOperatingRevenue`` runs
+            # current). Only reached when the generic tags are stale/absent,
+            # so it never overrides a fresh generic tag. Batch 108.
+            "RegulatedAndUnregulatedOperatingRevenue",
         ),
         unit="USD",
     ),

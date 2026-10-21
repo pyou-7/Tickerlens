@@ -147,6 +147,14 @@ _ADMIN_LINE_RE = re.compile(
     r"|^(january|february|march|april|may|june|july|august|september|october|"
     r"november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
     r"\.?\s+\d{1,2},?\s+\d{4}$"
+    # Date + city + ST + ZIP ("July 30, 2026 Minneapolis, MN 55401" or
+    # "10/31/2024 Minneapolis, MN 55401" — Xcel Energy heads releases with a
+    # street address, then the date/city/ZIP, then the company name). Never
+    # headline or lede material. Batch 108.
+    r"|^(?:(january|february|march|april|may|june|july|august|september|october|"
+    r"november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
+    r"\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{4})"
+    r"\s+[A-Za-z][A-Za-z\s.,'-]*,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$"
     r"|^n\s*e\s*w\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter kicker (Humana)
     r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter "press release"
     # Lone "News" section kicker: Southern Company's releases put it before
@@ -599,6 +607,36 @@ _HEADLINE_CONT_BAD_START_RE = re.compile(r"^[•\-\d\"“]")
 # of the wrap-tail case above. Batch 107.
 _HEADLINE_CONT_LEAD_RE = re.compile(r"^(and|or|but)\b", re.IGNORECASE)
 
+# A release-date line ("July 30, 2026", "July 30, 2026 Minneapolis, MN
+# 55401", or "10/31/2024 Minneapolis, MN 55401"): never headline material.
+# Used by the masthead-residue skip to recognize address+date+name masthead
+# blocks (Xcel). Batch 108.
+_DATE_LINE_RE = re.compile(
+    r"^((january|february|march|april|may|june|july|august|september|october|"
+    r"november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
+    r"\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{4})\b",
+    re.IGNORECASE,
+)
+
+# A headline that ends on a period/ordinal word ("Plug Power Third",
+# "Intercontinental Exchange Reports Strong Full", "Kroger Reports Fourth")
+# is a wrapped-headline fragment, not a complete headline — the real headline
+# continues on the next line ("Quarter 2025 Highlights", "Year 2025 Results").
+# A complete release headline never ends on a bare ordinal. Batch 108.
+_HEADLINE_ORDINAL_TAIL_RE = re.compile(
+    r"\b(first|second|third|fourth|full)\s*$", re.IGNORECASE
+)
+
+# A headline ending on "{ordinal} Quarter" / "Full Year" with a bare 4-digit
+# year on the next line ("Intercontinental Exchange Reports Second Quarter" /
+# "2026"): the year completes the headline. The year is never a lede start,
+# so the digit-lead continuation guard is bypassed for this exact shape only.
+# Batch 108.
+_HEADLINE_QUARTER_TAIL_RE = re.compile(
+    r"\b((first|second|third|fourth)\s+quarter|full\s+year)\s*$", re.IGNORECASE
+)
+_HEADLINE_BARE_YEAR_RE = re.compile(r"^20\d{2}$")
+
 
 # A page-image exhibit "line" that is really a whole page starting with a run
 # of social-media URLs (Ford: "1 https://ford.to/facebook https://x.com/ford
@@ -671,26 +709,45 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        lead is as strong a fragment signal as the wrap tail — a complete
        headline is never followed by a conjunction-led fragment — and the
        same continuation guards apply.
+
+    4. (Batch 108) The picked headline ends on a period/ordinal word ("Plug
+       Power Third", "Kroger Reports Fourth", "Intercontinental Exchange
+       Reports Strong Full"): a wrapped-headline fragment whose continuation
+       ("Quarter 2025 Highlights", "Year 2025 Results") sits on the next
+       line. A complete headline never ends on a bare ordinal, and the
+       continuation guards still apply.
+
+    5. (Batch 108) The picked headline ends on "{ordinal} Quarter" / "Full
+       Year" and the next line is a bare 4-digit year ("Intercontinental
+       Exchange Reports Second Quarter" / "2026"). The year is never a lede
+       start, so the digit-lead guard is bypassed for this exact shape only.
     """
     headline = lines[i]
     j = i + 1
     joins = 0
-    while (
-        joins < 3
-        and j < len(lines)
-        and (
+    while joins < 3 and j < len(lines):
+        year_join = bool(
+            _HEADLINE_QUARTER_TAIL_RE.search(headline)
+            and _HEADLINE_BARE_YEAR_RE.match(lines[j])
+        )
+        if not (
             _HEADLINE_WRAP_TAIL_RE.search(headline)
             or _HEADLINE_VERB_TAIL_RE.search(headline)
+            or _HEADLINE_ORDINAL_TAIL_RE.search(headline)
             or _HEADLINE_CONT_LEAD_RE.match(lines[j])
-        )
-        and len(lines[j]) <= 140
-        and not lines[j].rstrip().endswith((".", "!", "?", ":"))
-        and not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
-        and not _ADMIN_LINE_RE.match(lines[j])
-        and not _BOILERPLATE_RE.match(lines[j])
-        and not _CONTACT_HEADER_RE.match(lines[j])
-        and not _CONTACT_LINE_RE.search(lines[j])
-    ):
+            or year_join
+        ):
+            break
+        if not (
+            len(lines[j]) <= 140
+            and not lines[j].rstrip().endswith((".", "!", "?", ":"))
+            and (year_join or not _HEADLINE_CONT_BAD_START_RE.match(lines[j]))
+            and not _ADMIN_LINE_RE.match(lines[j])
+            and not _BOILERPLATE_RE.match(lines[j])
+            and not _CONTACT_HEADER_RE.match(lines[j])
+            and not _CONTACT_LINE_RE.search(lines[j])
+        ):
+            break
         headline = f"{headline} {lines[j]}"
         j += 1
         joins += 1
@@ -712,15 +769,23 @@ def _skip_bare_masthead_name(lines: list[str], i: int) -> int | None:
 
     Narrowness guards: the candidate must be short (<=3 words), not already
     headline-shaped, free of terminal punctuation, and must not end on a
-    wrap tail or headline verb — those are _join_wrapped_headline's wrapped-
-    fragment cases ("WM Announces" / "Fourth Quarter and" / "Full Year 2025
-    Results"), not a masthead. Returns None when the shape doesn't hold.
+    wrap tail, headline verb, or period/ordinal word — those are
+    _join_wrapped_headline's wrapped-fragment cases ("WM Announces" /
+    "Fourth Quarter and" / "Full Year 2025 Results" / "Plug Power Third"),
+    not a masthead. Without the ordinal guard, "Plug Power Third" was read
+    as a bare masthead name, its continuation "Quarter 2025 Highlights" as
+    digit-bearing residue, and "$177 Million in Quarterly Revenue" was
+    picked as the headline. Batch 108.
     """
     ln = lines[i]
     words = ln.split()
     if len(words) > 3 or _looks_like_headline(ln):
         return None
-    if _HEADLINE_VERB_TAIL_RE.search(ln) or _HEADLINE_WRAP_TAIL_RE.search(ln):
+    if (
+        _HEADLINE_VERB_TAIL_RE.search(ln)
+        or _HEADLINE_WRAP_TAIL_RE.search(ln)
+        or _HEADLINE_ORDINAL_TAIL_RE.search(ln)
+    ):
         return None
     if re.search(r"[.!?;:]\s*$", ln):
         return None
@@ -1082,7 +1147,13 @@ def extract_press_release_highlights(
             # them instead of skipping. Batch 105.
             nxt = lines[i + 1] if i + 1 < len(lines) else ""
             if _HEADLINE_VERB_LEAD_RE.match(nxt) and len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
-                headline, body_start = f"{ln} {nxt}", i + 2
+                # The joined fragment may itself be wrapped further ("Genuine
+                # Parts Company" / "Reports Fourth Quarter and" / "Full-Year
+                # 2025 Results"): run it through the wrap joiner instead of
+                # stopping, so a dangling wrap tail is never stored. Batch 108.
+                joined = f"{ln} {nxt}"
+                headline, rel_next = _join_wrapped_headline([joined] + lines[i + 2 :], 0)
+                body_start = i + 1 + rel_next
                 break
             i = _skip_masthead_block(lines, i + 1)
             continue
@@ -1093,8 +1164,17 @@ def extract_press_release_highlights(
             # residue run only when a contact header/line follows it —
             # otherwise a stray residue-shaped line is left for the normal
             # headline pick. Batch 105.
+            # Batch 108: also skip when a release-date line follows (Xcel:
+            # "414 Nicollet Mall" / "July 30, 2026 Minneapolis, MN 55401" /
+            # "XCEL ENERGY" before the headline) — the address+date+name is
+            # a masthead block, not headline material.
             j = i
-            while j < len(lines) and j - i < 4 and _looks_like_masthead_residue(lines[j]):
+            while (
+                j < len(lines)
+                and j - i < 4
+                and _looks_like_masthead_residue(lines[j])
+                and not _DATE_LINE_RE.match(lines[j])
+            ):
                 j += 1
             if (
                 j > i
@@ -1102,6 +1182,7 @@ def extract_press_release_highlights(
                 and (
                     _CONTACT_HEADER_RE.match(lines[j])
                     or _CONTACT_LINE_RE.search(lines[j])
+                    or _DATE_LINE_RE.match(lines[j])
                 )
             ):
                 i = j
@@ -1121,6 +1202,20 @@ def extract_press_release_highlights(
             # the same words are a TOC entry title elsewhere. Batch 105.
             i += 1
             continue
+        if (
+            i + 1 < len(lines)
+            and len(ln.split()) <= 3
+            and ln.upper() == ln
+            and any(c.isalpha() for c in ln)
+            and _looks_like_headline(lines[i + 1])
+            and lines[i + 1].upper() == lines[i + 1]
+        ):
+            # All-caps company-name masthead before an all-caps headline
+            # ("XCEL ENERGY" / "SECOND QUARTER 2026 EARNINGS REPORT"): the
+            # name is not the headline. Narrow: both lines all-caps, the name
+            # is short, the next line is headline-shaped. Batch 108.
+            i += 1
+            continue
         if len(ln.split()) == 1 and i + 1 < len(lines) and _looks_like_headline(lines[i + 1]):
             # Orphaned logo/name fragment on its own line before the headline
             # (Dollar General's "Dollar" / Plug Power's "Plug" / WM's "WM"):
@@ -1131,7 +1226,14 @@ def extract_press_release_highlights(
             # which the contact-block skip handles. Batch 105.
             nxt = lines[i + 1]
             if len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
-                headline, body_start = f"{ln} {nxt}", i + 2
+                # The joined fragment may itself be wrapped further ("Kroger"
+                # / "Reports Third Quarter 2025 Results and" / "Updates" /
+                # "Guidance for 2025"): run it through the wrap joiner instead
+                # of stopping, so a dangling wrap tail ("...Results and") is
+                # never stored. Batch 108.
+                joined = f"{ln} {nxt}"
+                headline, rel_next = _join_wrapped_headline([joined] + lines[i + 2 :], 0)
+                body_start = i + 1 + rel_next
                 break
             i += 1
             continue
