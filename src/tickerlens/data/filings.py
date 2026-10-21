@@ -132,6 +132,13 @@ _ADMIN_LINE_RE = re.compile(
     # ("99.1" after "EXHIBIT"). Never headline material. Batch 105.
     r"|^page\s+\d+\s+of\s+\d+$"  # "Page 1 of 24" exhibit headers (MetLife)
     r"|^page\s+\d+$"  # bare "Page 1" headers (GEV's Workiva exhibits, batch 104)
+    r"|^-\s*\d+\s*-$"  # dash-wrapped page numbers ("- 1 -", Merck's Donnelley
+    # exhibits; batch 106). A real headline is never a page number.
+    r"|^-\s*$"  # bare dash (Merck's page footer; batch 106)
+    r"|^\d+\s*-$"  # page-number fragment ("1 -" from a "- 1 -" split across
+    # lines; Merck's Donnelley exhibits, batch 106)
+    r"|^-\s*\d+$"  # page-number fragment ("- 1" from a "- 1 -" split;
+    # batch 106)
     r"|^\d{1,3}$"  # page numbers
     r"|^\S+\.html?$"  # exhibit filename lines
     r"|^\(furnished herewith\)$"  # SEC exhibit parenthetical (Deere-style)
@@ -146,6 +153,13 @@ _ADMIN_LINE_RE = re.compile(
     # the contact block, and once bare "Page 1" is skipped the kicker would
     # become the headline (batch 104). A real headline is never one word.
     r"|^news$"
+    # Bare "Release" / "Press" from a "News Release" / "Press Release" kicker
+    # split across lines (Merck's Donnelley exhibits: "News" / "Release" on
+    # separate lines; batch 106). A real headline is never one word.
+    r"|^release$|^press$"
+    # Lone comma (Deere's exhibit: a stray "," line before the real headline;
+    # batch 106). Never headline material.
+    r"|^,\s*$"
     # "News from <Company>" kicker (AEP: "News from AEP" before the real
     # headline). Single-token company name only — a real headline never has
     # this exact shape. Batch 105.
@@ -399,10 +413,17 @@ def _looks_like_masthead_residue(ln: str) -> bool:
     a short digit-bearing line (street / city-postal). The digit rule is
     word-count-guarded (<=4 words) so a digit-bearing headline is never
     swallowed.
+
+    Batch 106: US street addresses with suite designators ("100 First Stamford
+    Place, Suite 700" — United Rentals) run to 6 words, so a suite-address
+    pattern covers them without relaxing the word-count guard for all
+    digit-bearing lines. A real headline never contains a suite designator.
     """
     if len(ln) > 48:
         return False
     if _CONTACT_LINE_RE.search(ln):
+        return True
+    if _SUITE_ADDRESS_RE.search(ln):
         return True
     words = ln.split()
     if len(words) == 1:
@@ -410,6 +431,14 @@ def _looks_like_masthead_residue(ln: str) -> bool:
     if len(words) <= 4 and any(c.isdigit() for c in ln):
         return True  # street / city-postal line ("Bärengasse 32")
     return False
+
+
+# A US street address with a suite/floor designator ("100 First Stamford
+# Place, Suite 700"). Never a headline. Batch 106.
+_SUITE_ADDRESS_RE = re.compile(
+    r"^\d+\s+[\w\s.,'-]{2,30}?\b(suite|ste\.?|apt\.?|apartment|unit|fl\.?|floor)\b",
+    re.IGNORECASE,
+)
 
 
 def _skip_masthead_block(lines: list[str], i: int) -> int:
@@ -533,7 +562,17 @@ def _skip_toc(lines: list[str], i: int) -> int:
 # two lines, breaking after a conjunction or preposition ("...Results and" /
 # "Increases Guidance ..."). Joining the next line recovers the full headline.
 _HEADLINE_WRAP_TAIL_RE = re.compile(
-    r"\b(and|or|of|for|to|with|in|on|at|the|a|an|&|–|—)\s*$", re.IGNORECASE
+    r"(\b(and|or|of|for|to|with|in|on|at|the|a|an)\b|[&–—]|,\s*)\s*$", re.IGNORECASE
+)
+
+# A headline that ends with a headline verb ("Freeport Reports",
+# "Merck ... Announces") is a company+verb fragment, not a complete headline —
+# the real headline continues on the next line ("Second-Quarter 2026 Results").
+# Batch 106: without this, the verb-fragment is stored as the headline and the
+# period ("Second-Quarter 2026 Results") is lost.
+_HEADLINE_VERB_TAIL_RE = re.compile(
+    r"\b(reports?|announces?|delivers?|posts?|declares?|names?|elects?)\s*$",
+    re.IGNORECASE,
 )
 
 # Lines that can never be a headline continuation: sentence-terminated prose,
@@ -585,19 +624,35 @@ def _looks_like_headline(ln: str) -> bool:
 
 
 def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
-    """Join a wrapped headline's continuation line; return (headline, next index).
+    """Join a wrapped headline's continuation lines; return (headline, next index).
 
-    Only fires when the picked headline ends on a conjunction/preposition and
-    the next line is short, fragment-shaped (no terminal sentence punctuation),
-    and carries none of the admin/boilerplate/contact markers — so a genuine
-    short headline never swallows the lede.
+    Fires in two cases:
+    1. The picked headline ends on a conjunction/preposition and the next line
+       is short (≤140 chars), fragment-shaped (no terminal sentence
+       punctuation), and carries none of the admin/boilerplate/contact
+       markers — so a genuine short headline never swallows the lede.
+    2. (Batch 106) The picked headline ends with a headline verb ("Freeport
+       Reports", "Merck ... Announces"): a company+verb fragment whose
+       continuation ("Second-Quarter 2026 Results") sits on the next line.
+       The verb tail is a strong fragment signal — a complete headline never
+       ends with a bare verb — and the continuation guards (≤140 chars, no
+       terminal punctuation, no admin/contact/boilerplate markers) still
+       apply, so a genuine "[Company] Reports" short headline followed by a
+       lede sentence (which ends with a period) never joins.
+
+    Iterates (max 3 joins) for multi-line headlines: after a verb-fragment
+    join, the continuation may itself end on a wrap word ("WM Announces" /
+    "Fourth Quarter and" / "Full Year 2025 Results"). Each join re-checks all
+    guards, so the iteration cannot run away into the lede.
     """
     headline = lines[i]
     j = i + 1
-    if (
-        _HEADLINE_WRAP_TAIL_RE.search(headline)
+    joins = 0
+    while (
+        joins < 3
+        and (_HEADLINE_WRAP_TAIL_RE.search(headline) or _HEADLINE_VERB_TAIL_RE.search(headline))
         and j < len(lines)
-        and len(lines[j]) <= 100
+        and len(lines[j]) <= 140
         and not lines[j].rstrip().endswith((".", "!", "?", ":"))
         and not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
         and not _ADMIN_LINE_RE.match(lines[j])
@@ -605,8 +660,10 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
         and not _CONTACT_HEADER_RE.match(lines[j])
         and not _CONTACT_LINE_RE.search(lines[j])
     ):
-        return f"{headline} {lines[j]}", j + 1
-    return headline, i + 1
+        headline = f"{headline} {lines[j]}"
+        j += 1
+        joins += 1
+    return headline, j
 
 
 # --- Cover title-block skip (batch 100) --------------------------------------
@@ -1043,6 +1100,11 @@ def extract_press_release_highlights(
             i += 1
         body = "\n\n".join(lede)
 
+    # A trailing comma means the headline's continuation was too long to join
+    # (URI Q4 2025: 166-char sub-headline). Strip it — a headline never ends
+    # with a comma. Batch 106.
+    if headline:
+        headline = headline.rstrip().removesuffix(",").rstrip()
     result = f"{headline}\n\n{body}".strip() if headline else body.strip()
     if len(result) < 200:
         logger.info("Press-release highlights too short after extraction")

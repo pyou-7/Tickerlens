@@ -2203,3 +2203,275 @@ def test_company_name_masthead_still_skipped() -> None:
     assert hl is not None
     assert hl.split("\n\n")[0] == "CHURCH & DWIGHT DELIVERS STRONG SECOND QUARTER RESULTS"
     assert not hl.startswith("Church & Dwight Co., Inc.\n")
+
+
+def test_dash_wrapped_page_number_never_headline() -> None:
+    # Batch 106: Merck's Donnelley exhibits open with "- 1 -" (dash-wrapped
+    # page number) before the real headline. It was stored as the headline.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match("- 1 -")
+    assert _ADMIN_LINE_RE.match("-1-")
+    assert _ADMIN_LINE_RE.match("- 12 -")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "- 1 -",
+            "News Release",
+            "Merck & Co., Inc., Rahway, N.J., USA Announces",
+            "Second-Quarter 2026 Financial Results",
+            "RAHWAY, N.J., Aug. 4, 2026 -- Merck today announced results.",
+        )
+    )
+    assert hl is not None
+    head = hl.split("\n\n")[0]
+    assert head == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces "
+        "Second-Quarter 2026 Financial Results"
+    )
+
+
+def test_bare_dash_never_headline() -> None:
+    # Batch 106: Merck's page footers render a bare "-" line that was stored
+    # as the headline on two quarters.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match("-")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "-",
+            "Freeport Reports",
+            "Second-Quarter 2026 Results",
+            "PHOENIX, AZ, July 23, 2026 -- Freeport reported results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Freeport Reports Second-Quarter 2026 Results"
+
+
+def test_verb_fragment_headline_joins_continuation() -> None:
+    # Batch 106: a headline ending with a headline verb ("Freeport Reports")
+    # is a company+verb fragment; the continuation ("Second-Quarter and
+    # Six-Month 2026 Results") is part of the headline, not the lede.
+    from tickerlens.data.filings import _join_wrapped_headline
+    lines = [
+        "Freeport Reports",
+        "Second-Quarter and Six-Month 2026 Results",
+        "PHOENIX, AZ, July 23, 2026 -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Freeport Reports Second-Quarter and Six-Month 2026 Results"
+    assert next_i == 2
+
+
+def test_verb_fragment_headline_ignores_sentence_lede() -> None:
+    # Guard: a genuine "[Company] Reports" short headline followed by a
+    # sentence-terminated lede line must NOT join — the terminal punctuation
+    # guard keeps short headlines from swallowing the lede.
+    from tickerlens.data.filings import _join_wrapped_headline
+    lines = [
+        "Acme Corp Reports",
+        "Net income was 5.2 billion dollars, up 8 percent year over year.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Acme Corp Reports"
+    assert next_i == 1
+
+
+def test_verb_fragment_joins_long_continuation() -> None:
+    # Batch 106: Merck's continuation runs 119 chars — the old 100-char cap
+    # blocked the join. Long continuations still join when every other guard
+    # passes (no terminal punctuation, no bullet/admin/contact markers).
+    from tickerlens.data.filings import _join_wrapped_headline
+    cont = (
+        "Second-Quarter 2026 Financial Results; Highlights Key Regulatory and "
+        "Clinical Milestones Across Broad, Diverse Pipeline"
+    )
+    assert len(cont) > 100
+    lines = ["Merck & Co., Inc., Rahway, N.J., USA Announces", cont,
+             "Financial Highlights"]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces " + cont
+    )
+    assert next_i == 2
+
+
+def test_suite_address_masthead_residue_skipped() -> None:
+    # Batch 106: United Rentals' masthead ("United Rentals, Inc." /
+    # "100 First Stamford Place, Suite 700" / "Stamford, CT 06902" /
+    # "Telephone: ..." / "unitedrentals.com") — the 6-word suite address
+    # slipped past the 4-word masthead-residue guard and became the headline.
+    from tickerlens.data.filings import _looks_like_masthead_residue
+    assert _looks_like_masthead_residue("100 First Stamford Place, Suite 700")
+    # Guard: a digit-bearing headline without a suite designator and over 4
+    # words is still NOT residue.
+    assert not _looks_like_masthead_residue("Q2 2026 Revenue Up 15 Percent Year Over Year")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "United Rentals, Inc.",
+            "100 First Stamford Place, Suite 700",
+            "Stamford, CT 06902",
+            "Telephone: 203 622 3131",
+            "unitedrentals.com",
+            "United Rentals Announces Record Second Quarter Results",
+            "STAMFORD, Conn. -- July 22, 2026 -- United Rentals today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "United Rentals Announces Record Second Quarter Results"
+
+
+def test_page_number_fragments_never_headline() -> None:
+    # Batch 106: Merck's "- 1 -" page number can split across lines ("-" /
+    # "1 -"). Both fragments are admin, never headline material.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match("1 -")
+    assert _ADMIN_LINE_RE.match("- 1")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit", "99.1",
+            "-",
+            "1 -",
+            "News Release",
+            "Merck & Co., Inc., Rahway, N.J.,",
+            "USA Announces Second-Quarter 2025 Financial Results",
+            "RAHWAY, N.J. -- Merck today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces "
+        "Second-Quarter 2025 Financial Results"
+    )
+
+
+def test_comma_wrapped_headline_joins() -> None:
+    # Batch 106: a headline ending with a comma ("Merck & Co., Inc., Rahway,
+    # N.J.,") is a wrap fragment — a complete headline never ends with a
+    # comma. The continuation joins under the usual guards.
+    from tickerlens.data.filings import _join_wrapped_headline
+    lines = [
+        "Merck & Co., Inc., Rahway, N.J.,",
+        "USA Announces Second-Quarter 2025 Financial Results",
+        "RAHWAY, N.J. -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces "
+        "Second-Quarter 2025 Financial Results"
+    )
+    assert next_i == 2
+
+
+def test_multi_line_headline_iterates_joins() -> None:
+    # Batch 106: "WM Announces" / "Fourth Quarter and" / "Full Year 2025
+    # Results" — the verb-fragment join fires, then the wrap-word ("and")
+    # join fires again. Iteration is bounded and each join re-checks guards.
+    from tickerlens.data.filings import _join_wrapped_headline
+    lines = [
+        "WM Announces",
+        "Fourth Quarter and",
+        "Full Year 2025 Results",
+        "HOUSTON -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "WM Announces Fourth Quarter and Full Year 2025 Results"
+    assert next_i == 3
+
+
+def test_multi_join_stops_at_bullet() -> None:
+    # Guard: iteration stops at a bullet line even if the headline ends with
+    # a wrap word — the bullet guard applies to every join.
+    from tickerlens.data.filings import _join_wrapped_headline
+    lines = [
+        "Acme Reports",
+        "Fourth Quarter and",
+        "• Bullet lede starts here",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Acme Reports Fourth Quarter and"
+    assert next_i == 2
+
+
+def test_split_news_release_kicker_never_headline() -> None:
+    # Batch 106: Merck's Donnelley exhibits split the kicker across lines
+    # ("News" / "Release"). "News" was already admin; bare "Release" is now
+    # too. A real headline is never one word.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match("Release")
+    assert _ADMIN_LINE_RE.match("Press")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "-",
+            "1 -",
+            "News",
+            "Release",
+            "Merck & Co.,",
+            "Inc., Rahway, N.J., USA Announces Third-Quarter 2025 Financial Results",
+            "RAHWAY, N.J. -- Merck today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces "
+        "Third-Quarter 2025 Financial Results"
+    )
+
+
+def test_ampersand_wrap_headline_joins() -> None:
+    # Batch 106: "Merck &" — the & in the wrap-tail list never matched
+    # because \b doesn't fire between space and &. Symbols match without a
+    # word boundary; words keep \b on both sides ("Anderson" must not match).
+    from tickerlens.data.filings import _HEADLINE_WRAP_TAIL_RE, _join_wrapped_headline
+    assert _HEADLINE_WRAP_TAIL_RE.search("Merck &")
+    assert _HEADLINE_WRAP_TAIL_RE.search("Results and")
+    assert not _HEADLINE_WRAP_TAIL_RE.search("Anderson Cooper")
+    assert not _HEADLINE_WRAP_TAIL_RE.search("Quarterly Results")
+    lines = [
+        "Merck &",
+        "Co., Inc., Rahway, N.J., USA Announces First-Quarter 2026 Financial Results",
+        "RAHWAY, N.J. -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Merck & Co., Inc., Rahway, N.J., USA Announces "
+        "First-Quarter 2026 Financial Results"
+    )
+    assert next_i == 2
+
+
+def test_lone_comma_never_headline() -> None:
+    # Batch 106: Deere's exhibit has a stray "," line before the real
+    # headline. A headline never ends with (or is) a comma.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+    assert _ADMIN_LINE_RE.match(",")
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            ",",
+            "Deere Reports Net Income of $1.245 Billion for Fourth Quarter",
+            "MOLINE, Ill. -- Deere today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Deere Reports Net Income of $1.245 Billion for Fourth Quarter"
+
+
+def test_trailing_comma_stripped_from_headline() -> None:
+    # Batch 106: when the continuation is too long to join (URI Q4 2025's
+    # 166-char sub-headline), the picked headline ends with a comma — strip
+    # it rather than storing the wart.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "United Rentals Announces Fourth Quarter and Full-Year 2025 Results,",
+            "Introduces 2026 Outlook for Growth, and Announces Plan to Return Approximately $2 Billion to Shareholders in 2026 Supported by New $5 Billion Share Repurchase Program",
+            "STAMFORD, Conn. -- United Rentals today announced results.",
+        )
+    )
+    assert hl is not None
+    head = hl.split("\n\n")[0]
+    assert head == "United Rentals Announces Fourth Quarter and Full-Year 2025 Results"
+    assert not head.endswith(",")
