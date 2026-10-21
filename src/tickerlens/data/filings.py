@@ -126,6 +126,10 @@ _ADMIN_LINE_RE = re.compile(
     # header without ".1" — without this the "EX-99" line became the headline
     # and the real headline was never reached, batch 97)
     r"|^exhibit\s+99\b"  # Exhibit 99.1
+    r"|^exhibit$"  # bare "EXHIBIT" when the label wraps across lines (WM:
+    # "EXHIBIT" / "99.1" on separate lines). Batch 105.
+    r"|^\d+\.\d+$"  # bare version fragment from a wrapped exhibit label
+    # ("99.1" after "EXHIBIT"). Never headline material. Batch 105.
     r"|^page\s+\d+\s+of\s+\d+$"  # "Page 1 of 24" exhibit headers (MetLife)
     r"|^page\s+\d+$"  # bare "Page 1" headers (GEV's Workiva exhibits, batch 104)
     r"|^\d{1,3}$"  # page numbers
@@ -141,7 +145,13 @@ _ADMIN_LINE_RE = re.compile(
     # Lone "News" section kicker: Southern Company's releases put it before
     # the contact block, and once bare "Page 1" is skipped the kicker would
     # become the headline (batch 104). A real headline is never one word.
-    r"|^news$",
+    r"|^news$"
+    # "News from <Company>" kicker (AEP: "News from AEP" before the real
+    # headline). Single-token company name only — a real headline never has
+    # this exact shape. Batch 105.
+    r"|^news\s+from\s+\S+$"
+    # "THE PRESS RELEASE" exhibit label (Bank of America). Batch 105.
+    r"|^the\s+press\s+release$",
     re.IGNORECASE,
 )
 
@@ -333,17 +343,33 @@ _CONTACT_LINE_RE = re.compile(
 #   609-806-1200
 # Role-prefixed variants head the same shape of block (Humana's "FOR MORE
 # INFORMATION CONTACT:", GCE's "Investor Relations Contact:", Synopsys'
-# "INVESTOR CONTACT:" / "EDITORIAL CONTACT:") — without the prefix only the
-# header line was skipped and the name/title/phone detail lines polluted the
-# headline and lede.
+# "INVESTOR CONTACT:" / "EDITORIAL CONTACT:", Hershey's "FINANCIAL CONTACT:",
+# RTX's bare "Media Contact" / "Investor Contact" with no colon) — without the
+# prefix only the header line was skipped and the name/title/phone detail lines
+# polluted the headline and lede.
+# Company-prefixed variant (Progressive: "The Progressive Corporation Company
+# Contact:") — the company name stands where a role prefix would.
 # Matched separately from _CONTACT_LINE_RE because the block's detail lines are
 # not emails / media-labeled lines, and because here we want to *skip* the whole
 # block (see _skip_contact_block), whereas the boilerplate regex below uses
 # "contacts?(\s|:)" to *terminate* the lede when a contacts section appears at
 # the end of a release.
 _CONTACT_HEADER_RE = re.compile(
-    r"^((for more information|investor(\s+relations)?|media|press|editorial)\s+)?"
-    r"contacts?\s*:",
+    r"^((for more information|investor(\s+relations)?|financial|media|press|editorial)\s+)?"
+    r"contacts?\b"
+    # Company-prefixed header: "The Progressive Corporation Company Contact:"
+    # (batch 105). A real headline never ends with "Company Contact:".
+    r"|^.*\bcompany\s+contacts?\b"
+    # Bare role labels with no "contact" word (American Airlines: "Corporate
+    # Communications" / "Investor Relations"). Full-line anchored so a real
+    # headline mentioning investor relations is never swallowed.
+    r"|^(investor relations|corporate communications|media relations)$"
+    # Date-prefixed header (American Water: "July 29, 2026 Investor Contact:").
+    # The date prefix keeps the standard branch from matching.
+    r"|^(january|february|march|april|may|june|july|august|september|october|"
+    r"november|december)\s+\d{1,2},\s+\d{4}\s+"
+    r"((for more information|investor(\s+relations)?|financial|media|press|editorial)\s+)?"
+    r"contacts?\b",
     re.IGNORECASE,
 )
 
@@ -421,7 +447,17 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
             or (len(ln) >= 15 and ln.upper() == ln and any(c.isalpha() for c in ln))
         )
         if looks_like_content and not _PHONE_RE.search(ln):
-            break
+            # A contact name/title line can itself look like content ("Paul
+            # Trussell Sandra Carreon-John" — two names, four words; Nike,
+            # Hershey, Cisco all head their releases this way). It is still
+            # contact detail when an unambiguous contact line (email or phone)
+            # follows within the next two lines — a real headline is never
+            # followed by an email address. Batch 105.
+            following = lines[j + 1 : j + 3]
+            if not any(
+                _CONTACT_LINE_RE.search(f) or _PHONE_RE.search(f) for f in following
+            ):
+                break
         j += 1
     return j
 
@@ -503,6 +539,49 @@ _HEADLINE_WRAP_TAIL_RE = re.compile(
 # Lines that can never be a headline continuation: sentence-terminated prose,
 # bullets, datelines, quoted or numeric-led lines.
 _HEADLINE_CONT_BAD_START_RE = re.compile(r"^[•\-\d\"“]")
+
+
+# A page-image exhibit "line" that is really a whole page starting with a run
+# of social-media URLs (Ford: "1 https://ford.to/facebook https://x.com/ford
+# https://ford.to/linkedin Ford Reports ..."). The URLs are never headline
+# material; the headline follows them. Batch 105.
+_LEADING_URL_RUN_RE = re.compile(r"^(\d+\s+)?(https?://\S+\s*)+")
+
+
+# A headline verb opening the line after a company-name line: the name is the
+# first half of a wrapped headline ("Genuine Parts Company" / "Reports Fourth
+# Quarter ..."), not a masthead. Batch 105.
+_HEADLINE_VERB_LEAD_RE = re.compile(
+    r"^(reports?|announces?|delivers?|posts?|declares?|names?|elects?|approves?|"
+    r"raises?|beats?|tops?|reaffirms?|launches?|completes?|acquires?)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_headline(ln: str) -> bool:
+    """True for a plausible release-headline line (batch 105).
+
+    Used to detect an orphaned logo/name fragment: a 1-2 word line is never
+    the headline when the next line is headline-shaped (Dollar General's
+    "Dollar" before "General Corporation Reports First Quarter 2026
+    Results"). Deliberately narrow: 4+ words, no terminal sentence
+    punctuation, none of the admin/contact/boilerplate markers, not a bullet.
+    """
+    words = ln.split()
+    if len(words) < 4 or len(ln) > _MAX_HEADLINE_CHARS:
+        return False
+    if ln.startswith(("•", "-", "*")):
+        return False
+    if re.search(r"[.!?]\s*$", ln):
+        return False
+    if (
+        _ADMIN_LINE_RE.match(ln)
+        or _BOILERPLATE_RE.match(ln)
+        or _CONTACT_HEADER_RE.match(ln)
+        or _CONTACT_LINE_RE.search(ln)
+    ):
+        return False
+    return True
 
 
 def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
@@ -814,6 +893,20 @@ def extract_press_release_highlights(
     i = 0
     while i < len(lines):
         ln = lines[i]
+        url_run = _LEADING_URL_RUN_RE.match(ln)
+        if url_run:
+            # Page-image exhibit (Ford): the "line" is a whole page starting
+            # with social links. Strip the URL run; the headline is the text
+            # up to the first bullet. Without this the URL run became the
+            # headline (batch 105).
+            rest = ln[url_run.end():].strip()
+            bullet = rest.find("•")
+            cand = rest[:bullet].strip() if bullet != -1 else rest
+            if cand and len(cand) <= _MAX_HEADLINE_CHARS and _looks_like_headline(cand):
+                headline, body_start = cand, i + 1
+                break
+            i += 1
+            continue
         if _CONTACT_HEADER_RE.match(ln):
             # Contact block header (bare "Contact:" as well as role-prefixed
             # "Investor Relations Contact:" / "INVESTOR CONTACT:" / "FOR MORE
@@ -843,14 +936,66 @@ def extract_press_release_highlights(
         if len(ln) <= 80 and _COMPANY_NAME_LINE_RE.search(ln):
             # Company masthead (CHD): skip the name plus a following
             # head-office address block (Chubb, Humana) so a street or
-            # city line never becomes the headline.
+            # city line never becomes the headline. But when the next line
+            # opens with a headline verb, the name is the first half of a
+            # wrapped headline (Genuine Parts Company: "Genuine Parts Company"
+            # / "Reports Fourth Quarter and Full-Year 2025 Results") — join
+            # them instead of skipping. Batch 105.
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if _HEADLINE_VERB_LEAD_RE.match(nxt) and len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
+                headline, body_start = f"{ln} {nxt}", i + 2
+                break
             i = _skip_masthead_block(lines, i + 1)
             continue
+        if _looks_like_masthead_residue(ln):
+            # Address-block masthead with no company-name line (General
+            # Dynamics: "11011 Sunset Hills Road" / "Reston, Virginia 20190
+            # News" / "www.gd.com" before the contact block). Skip the
+            # residue run only when a contact header/line follows it —
+            # otherwise a stray residue-shaped line is left for the normal
+            # headline pick. Batch 105.
+            j = i
+            while j < len(lines) and j - i < 4 and _looks_like_masthead_residue(lines[j]):
+                j += 1
+            if (
+                j > i
+                and j < len(lines)
+                and (
+                    _CONTACT_HEADER_RE.match(lines[j])
+                    or _CONTACT_LINE_RE.search(lines[j])
+                )
+            ):
+                i = j
+                continue
         cover = _cover_block_headline(lines, i)
         if cover is not None:
             # Cover title block (GS): the real headline follows the banner.
             headline, body_start = cover
             break
+        if (
+            ln.lower() == "earnings release"
+            and i + 1 < len(lines)
+            and _looks_like_headline(lines[i + 1])
+        ):
+            # "Earnings Release" document label (Mastercard): the real
+            # headline follows. Skipped here (not in _ADMIN_LINE_RE) because
+            # the same words are a TOC entry title elsewhere. Batch 105.
+            i += 1
+            continue
+        if len(ln.split()) == 1 and i + 1 < len(lines) and _looks_like_headline(lines[i + 1]):
+            # Orphaned logo/name fragment on its own line before the headline
+            # (Dollar General's "Dollar" / Plug Power's "Plug" / WM's "WM"):
+            # a single-word line is never the headline when a headline-shaped
+            # line follows. Join them — the fragment is the start of the
+            # headline, not a separate element. Single-word only: a 2-word
+            # line may be a contact name (American Water's "Aaron Musgrave"),
+            # which the contact-block skip handles. Batch 105.
+            nxt = lines[i + 1]
+            if len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
+                headline, body_start = f"{ln} {nxt}", i + 2
+                break
+            i += 1
+            continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i
@@ -901,6 +1046,13 @@ def extract_press_release_highlights(
     result = f"{headline}\n\n{body}".strip() if headline else body.strip()
     if len(result) < 200:
         logger.info("Press-release highlights too short after extraction")
+        return None
+    if not headline and len(result.split("\n\n")[0]) > 1000:
+        # Page-image exhibit (Bank of America slide deck): the "lines" are
+        # whole pages with no usable headline. A page-line is not a highlight;
+        # return None so the UI shows "Not available" instead of garbage.
+        # Batch 105.
+        logger.info("Press-release highlights are page-lines without a headline")
         return None
     if len(result) > max_chars:
         result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"

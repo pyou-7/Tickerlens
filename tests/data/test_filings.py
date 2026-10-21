@@ -1846,3 +1846,360 @@ def test_lede_pass_skips_footnote_def_lines():
     assert "Defined as remaining performance obligation" not in result
     assert "*Non-GAAP Financial Measure" not in result
     assert "revenue of $4.2 billion" in result
+
+
+# ── Batch 105: contact-block residue must not become the headline ─────────────
+# Fresh-ticker seeding (PGR, NKE, NFLX, CRM) surfaced a defect family the
+# earlier contact-block fixes missed: the headline pass stopped at a contact
+# header it didn't recognize, or _skip_contact_block broke early on a
+# multi-name detail line, so "The Progressive Corporation Company Contact:" /
+# "Paul Trussell Sandra Carreon-John" became the stored headline. A DB-wide
+# blast-radius scan found the same residue on ~50 quarters across 10 tickers
+# (HSY, CSCO, AAL, HLT, HCA-stale, AON, LUV), all repaired by re-extraction.
+
+_FILLER_105 = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor "
+    "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis "
+    "nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
+    "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu "
+    "fugiat nulla pariatur. "
+)
+
+
+def _contact_release_html(*lines: str) -> str:
+    body = "".join(f"<p>{ln}</p>" for ln in lines)
+    return f"<html><body>{body}<p>{_FILLER_105 * 4}</p><h2>About Acme</h2><p>Boilerplate.</p></body></html>"
+
+
+def test_contact_header_company_prefixed_is_skipped() -> None:
+    # Progressive: "The Progressive Corporation Company Contact:" — a company-
+    # name-prefixed contact header the old regex didn't recognize, so it
+    # became the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "NEWS RELEASE",
+            "The Progressive Corporation Company Contact:",
+            "300 North Commons Blvd. Julianna Paterra",
+            "Mayfield Village, Ohio 44143 (719) 432-2509",
+            "http://www.progressive.com",
+            "investor_relations@progressive.com",
+            "PROGRESSIVE REPORTS JUNE RESULTS",
+            "MAYFIELD VILLAGE, OHIO -- July 15, 2026 -- The Progressive Corporation "
+            "(NYSE:PGR) today reported results for the month and quarter ended June 30, 2026.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "PROGRESSIVE REPORTS JUNE RESULTS"
+    assert "Company Contact" not in hl
+    assert "progressive.com" not in hl
+
+
+def test_contact_block_names_before_emails_are_skipped() -> None:
+    # Nike: the header matched, but _skip_contact_block broke on the four-word
+    # names line ("Paul Trussell Sandra Carreon-John") as "content", making it
+    # the headline. A name/title line followed by an email is still detail.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "q1fy27exhibit991er.htm", "EX-99.1",
+            "Investor Contact: Media Contact:",
+            "Paul Trussell Sandra Carreon-John",
+            "investor.relations@nike.com",
+            "media.relations@nike.com",
+            "NIKE, INC. REPORTS FISCAL 2027 FIRST QUARTER RESULTS",
+            "BEAVERTON, Ore., Oct. 1, 2026 -- NIKE, Inc. (NYSE:NKE) today reported "
+            "fiscal 2027 financial results for its first quarter ended August 31, 2026.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "NIKE, INC. REPORTS FISCAL 2027 FIRST QUARTER RESULTS"
+    assert "Trussell" not in hl
+    assert "nike.com" not in hl
+
+
+def test_contact_header_financial_role_prefix() -> None:
+    # Hershey: "FINANCIAL CONTACT:" — the role-prefix list lacked "financial",
+    # so the header fell through to the single-line contact skip and the
+    # names line became the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "EXHIBIT 99.1 - PRESS RELEASE DATED JULY 30, 2026",
+            "FINANCIAL CONTACT: MEDIA CONTACT:",
+            "Anoori Naughton Allison Kleinfelter",
+            "anaughton@hersheys.com akleinfelter@hersheys.com",
+            "Hershey Reports Second-Quarter 2026 Financial Results",
+            "HERSHEY, Pa., July 30, 2026 - The Hershey Company (NYSE: HSY) today "
+            "announced net sales and earnings for the second quarter ended June 28, 2026.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Hershey Reports Second-Quarter 2026 Financial Results"
+    assert "Naughton" not in hl
+    assert "hersheys.com" not in hl
+
+
+def test_contact_header_bare_role_labels() -> None:
+    # American Airlines: bare "Corporate Communications" / "Investor Relations"
+    # labels with no colon head the contact blocks; the old regex required the
+    # colon, so "Corporate Communications" became the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "a8kerexhibit991q2-26.htm", "EX-99.1", "Exhibit 99.1",
+            "Corporate Communications",
+            "mediarelations@aa.com",
+            "Investor Relations",
+            "investor.relations@aa.com",
+            "FOR RELEASE: Thursday, July 23, 2026",
+            "American Airlines continues to execute on commercial priorities, "
+            "delivering highest quarterly revenue in company history",
+            "FORT WORTH, Texas -- American Airlines Group Inc. (NASDAQ: AAL) today "
+            "reported its second-quarter 2026 financial results.",
+        )
+    )
+    assert hl is not None
+    assert "American Airlines continues to execute on commercial priorities" in hl.split("\n\n")[0]
+    assert "Corporate Communications" not in hl
+    assert "aa.com" not in hl
+
+
+def test_contact_header_with_inline_detail() -> None:
+    # Hilton: "Investor Contact 7930 Jones Branch Drive" — the header carries
+    # inline address detail and no colon, so the old regex missed it and
+    # "Charlie Ruehr" became the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "q22026earningsrelease.htm", "PRESS RELEASE",
+            "Investor Contact 7930 Jones Branch Drive",
+            "Charlie Ruehr",
+            "McLean, VA 22102",
+            "+1 703 883 1000 ir.hilton.com",
+            "Media Contact",
+            "Kent Landers",
+            "+1 703 883 3246",
+            "Hilton Reports Second Quarter Results",
+            "MCLEAN, VA (July 28, 2026) - Hilton Worldwide Holdings Inc. (NYSE: HLT) "
+            "today reported its second quarter 2026 results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Hilton Reports Second Quarter Results"
+    assert "Charlie Ruehr" not in hl
+    assert "Kent Landers" not in hl
+    assert "703 883" not in hl
+
+
+def test_contact_block_names_before_phones_are_skipped() -> None:
+    # Cisco: the names line is followed by company tokens and phone numbers —
+    # the lookahead must see through one non-contact line to the phones.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "exhibit991pressrelease-q4f.htm", "EX-99.1",
+            "Press Contact: Investor Relations Contact:",
+            "Robyn Blum Sami Badri",
+            "Cisco Cisco",
+            "1 (408) 930-8548 1 (469) 420-4834",
+            "rojenkin@cisco.com sambadri@cisco.com",
+            "CISCO REPORTS FOURTH QUARTER AND FISCAL YEAR 2026 EARNINGS",
+            "News Summary: record top and bottom-line performance with double-digit "
+            "growth in Q4 and FY 2026.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "CISCO REPORTS FOURTH QUARTER AND FISCAL YEAR 2026 EARNINGS"
+    assert "Robyn Blum" not in hl
+    assert "cisco.com" not in hl
+
+
+def test_contact_block_lookahead_does_not_swallow_headline() -> None:
+    # The email/phone lookahead must not consume a real headline: a Title-Case
+    # headline (shaped like "Best Buy Reports First Quarter Results") followed
+    # by narrative — not by an email — still becomes the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Contact:",
+            "Ken Bond",
+            "Oracle Investor Relations",
+            "1.650.607.0349",
+            "ken.bond@oracle.com",
+            "Best Buy Reports First Quarter Results",
+            "RICHFIELD, Minn., May 29, 2026 -- Best Buy Co., Inc. (NYSE: BBY) today "
+            "announced results for the first quarter ended May 2, 2026.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Best Buy Reports First Quarter Results"
+    assert "Ken Bond" not in hl
+
+
+def test_skip_contact_block_lookahead_unit() -> None:
+    # Direct unit test of the batch-105 lookahead: a content-shaped name line
+    # followed by an email stays inside the block; one followed by narrative
+    # ends it.
+    from tickerlens.data.filings import _skip_contact_block
+
+    lines = [
+        "Investor Contact:",
+        "Paul Trussell Sandra Carreon-John",
+        "investor.relations@nike.com",
+        "NIKE, INC. REPORTS FISCAL 2027 FIRST QUARTER RESULTS",
+    ]
+    assert _skip_contact_block(lines, 0) == 3
+
+    lines2 = [
+        "Investor Contact:",
+        "Paul Trussell Sandra Carreon-John",
+        "NIKE, INC. REPORTS FISCAL 2027 FIRST QUARTER RESULTS",
+    ]
+    # No email/phone follows the names line: the block ends there, as before
+    # (the lookahead only extends the block when contact evidence follows).
+    assert _skip_contact_block(lines2, 0) == 1
+
+
+def test_contact_header_bare_role_no_colon() -> None:
+    # RTX: bare "Media Contact" / "Investor Contact" with no colon head the
+    # same block shape. The old regex required the colon, so the phone number
+    # became the headline. Batch 105 (surfaced by the live repair).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "a2026-07x238xkerexhibit99.htm", "EX-99", "Exhibit 99",
+            "Media Contact",
+            "202.384.2474",
+            "Investor Contact",
+            "781.522.5123",
+            "RTX Reports Q2 2026 Results",
+            "ARLINGTON, Va., July 23, 2026 -- RTX (NYSE: RTX) reports second "
+            "quarter 2026 results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "RTX Reports Q2 2026 Results"
+    assert "202.384.2474" not in hl
+    assert "Media Contact" not in hl
+
+
+def test_masthead_residue_run_without_company_name() -> None:
+    # General Dynamics: an address-block masthead with no company-name line
+    # ("11011 Sunset Hills Road" / "Reston, Virginia 20190 News" /
+    # "www.gd.com") before the contact block. The street address became the
+    # headline. Batch 105 (surfaced by the live repair).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "gd-20250330exhibit991.htm", "EX-99", "Exhibit 99.1",
+            "11011 Sunset Hills Road",
+            "Reston, Virginia 20190 News",
+            "www.gd.com",
+            "Contact: Jeff A. Davis",
+            "Tel: 703 876 3483",
+            "press@generaldynamics.com",
+            "General Dynamics Reports First-Quarter 2025 Financial Results",
+            "RESTON, Va., April 23, 2026 -- General Dynamics (NYSE: GD) today "
+            "reported first-quarter 2025 financial results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "General Dynamics Reports First-Quarter 2025 Financial Results"
+    assert "Sunset Hills Road" not in hl
+    assert "Jeff A. Davis" not in hl
+
+
+def test_news_from_kicker_is_skipped() -> None:
+    # AEP: "News from AEP" kicker before the real headline (batch-104 handled
+    # the lone "News"; this generalizes to "News from <Company>"). Batch 105
+    # (surfaced by the live repair).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "a1q20268kpressreleaseex991.htm", "EX-99", "Exhibit 99.1",
+            "News from AEP",
+            "AEP Reports First-Quarter 2026 Earnings",
+            "COLUMBUS, Ohio, April 29, 2026 -- American Electric Power (NASDAQ: "
+            "AEP) today reported first-quarter 2026 earnings.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "AEP Reports First-Quarter 2026 Earnings"
+    assert "News from AEP" not in hl
+
+
+def test_orphaned_name_fragment_is_skipped() -> None:
+    # Dollar General: the logo/name fragment "Dollar" on its own line before
+    # the wrapped "General Corporation Reports ..." headline. The fragment
+    # became the headline. Batch 105 (surfaced by the live repair).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "tm2616084d1_ex99.htm", "EX-99", "EXHIBIT 99", "Exhibit 99",
+            "Dollar",
+            "General Corporation Reports First Quarter 2026 Results",
+            "GOODLETTSVILLE, Tenn. -- Dollar General Corporation (NYSE: DG) "
+            "today reported financial results for its first quarter ended May 1, 2026.",
+        )
+    )
+    assert hl is not None
+    assert "General Corporation Reports First Quarter 2026 Results" in hl.split("\n\n")[0]
+    assert not hl.startswith("Dollar\n")
+
+
+def test_leading_url_run_is_stripped_for_headline() -> None:
+    # Ford: a page-image exhibit whose "line" is a whole page starting with
+    # social links. The URL run became the headline. Batch 105 (surfaced by
+    # the live repair).
+    page1 = (
+        "1 https://ford.to/facebook https://x.com/ford https://ford.to/linkedin "
+        "Ford Reports First-Quarter 2026 Financial Results; Raises Full-Year Guidance "
+        "\u2022 First-quarter revenue of $43.3 billion; net income of $2.5 billion. "
+        "DEARBORN, Mich., April 29, 2026 -- Ford Motor Company (NYSE: F) today announced "
+        "its first-quarter 2026 financial results. " + _FILLER_105 * 6
+    )
+    page2 = (
+        "2 Total Company Highlights First Quarter 2025 2026 Change Wholesale Units (000) "
+        "971 934 (4)% Revenue ($B) 40.7 43.3 6 % Net Income ($B) 0.5 2.5. " + _FILLER_105 * 6
+    )
+    html = (
+        "<html><body><p>EX-99</p><p>exhibit99toapril292026fo.htm</p><p>EX-99</p>"
+        f"<p>{page1}</p><p>{page2}</p></body></html>"
+    )
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Ford Reports First-Quarter 2026 Financial Results; Raises Full-Year Guidance"
+    assert "ford.to" not in hl.split("\n\n")[0]
+
+
+def test_company_name_wrapped_headline_is_joined() -> None:
+    # Genuine Parts Company: the company name on its own line followed by a
+    # headline-verb line ("Reports Fourth Quarter ...") is a wrapped headline,
+    # not a masthead. The old code skipped the name as a masthead and left a
+    # fragment headline. Batch 105 (surfaced by the live repair).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "d44894dex991.htm", "EX-99.1", "Exhibit 99.1",
+            "www.genpt.com",
+            "News Release",
+            "February 17, 2026",
+            "Genuine Parts Company",
+            "Reports Fourth Quarter and Full-Year 2025 Results",
+            "ATLANTA, Feb. 17, 2026 -- Genuine Parts Company (NYSE: GPC) today "
+            "reported fourth quarter and full-year 2025 results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Genuine Parts Company Reports Fourth Quarter and Full-Year 2025 Results"
+    assert "genpt.com" not in hl
+
+
+def test_company_name_masthead_still_skipped() -> None:
+    # Guard: a company-name line followed by NON-headline text is still a
+    # masthead and must be skipped (the batch-90 CHD behavior).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "chd-ex99_1.htm", "EX-99.1",
+            "Church & Dwight Co., Inc.",
+            "News Release",
+            "Contact:",
+            "Lee McChesney",
+            "CHURCH & DWIGHT DELIVERS STRONG SECOND QUARTER RESULTS",
+            "EWING, NJ, July 31, 2026 -- Church & Dwight Co., Inc. (NYSE: CHD) today "
+            "announced that the Company exceeded its second quarter outlook.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "CHURCH & DWIGHT DELIVERS STRONG SECOND QUARTER RESULTS"
+    assert not hl.startswith("Church & Dwight Co., Inc.\n")

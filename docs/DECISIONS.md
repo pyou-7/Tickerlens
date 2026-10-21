@@ -1951,3 +1951,8 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 - **The definition verb is the guard, not the number.** `^\d{1,3}\s+` alone would swallow numeric-opening headlines; requiring `(defined as|represents|includes|excludes|reflects)` keeps "2025 outlook raised", "1Q26 record quarter", and "1 billion in buybacks" safe. Same principle as the batch-100 cover-block narrowness: the trigger's narrowness is the safety.
 
 **Related:** closes the carried "GEV footnote-definition headline wart"; live repair cleared and re-filled GEV Q2 FY2025 + SO Q2 FY2024. Still open: STZ table-row wart (metric-table-as-highlights — deliberately deferred: real headline + real figures, a separate quality class); pending-filing cohort at 17; partial residuals at 4 (AFRM, LIN image-only; CCI no Q4-2024 8-K; SKYD pre-merger).
+
+## 2026-10-21 — Batch 105: contact-block residue headlines
+**Decision:** Treat contact-block residue as a headline-quality defect class, not just a skip-logic gap. A DB-wide scan (not just the seed tickers) found 248 affected quarters, proving the extractor's contact handling had systematic blind spots across ~48 tickers.
+**Rationale:** The batch-104 lesson (blast-radius scan before repair) applied again — the seed tickers (PGR/NKE) were symptoms, not the disease. Fixing the code without the DB scan would have left ~200 stale rows.
+**Consequence:** Live repair is now a standard batch tool for extractor fixes. The repair script only overwrites when the new headline differs (None never overwrites, except for deliberate unparseable-page-line clears), making it safe to re-run.
