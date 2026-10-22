@@ -2945,3 +2945,211 @@ def test_company_name_with_ticker_parenthetical_not_headline() -> None:
     )
     assert hl is not None
     assert hl.split("\n\n")[0] == "FIRST QUARTER 2024 RESULTS AND KEY METRICS"
+
+
+def test_spaced_earnings_release_label_skipped() -> None:
+    # Elevance Health: a spaced-letter "E A R N I N G S R E L E A S E"
+    # document label heads the release; the real headline follows it.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "2",
+            "a3q2024elvearningsrelease.htm",
+            "EX-99.1",
+            "E A R N I N G S R E L E A S E",
+            "ELEVANCE HEALTH REPORTS THIRD QUARTER 2024 RESULTS",
+            "Indianapolis, IN - October 17, 2024 - Elevance Health, Inc. (NYSE: ELV) "
+            "reported third quarter 2024 results with additional filler text here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "ELEVANCE HEALTH REPORTS THIRD QUARTER 2024 RESULTS"
+
+
+def test_wrapped_spaced_earnings_label_skipped() -> None:
+    # Elevance Health Q3 2025: the spaced kicker wraps across two lines
+    # ("E A R" / "N I N G S R E L E A S E" with thin spaces); both lines are
+    # the label, not the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Exhibit 99.1",
+            "E A R",
+            "N I N G S \u2009\u2009R E L E A S E",
+            "ELEVANCE HEALTH REPORTS THIRD QUARTER 2025 RESULTS",
+            "Indianapolis, IN - October 16, 2025 - Elevance Health, Inc. (NYSE: ELV) "
+            "reported third quarter 2025 results with additional filler text here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "ELEVANCE HEALTH REPORTS THIRD QUARTER 2025 RESULTS"
+
+
+def test_prefixed_earnings_release_label_and_address_block_skipped() -> None:
+    # Amgen: a ticker/date-prefixed "AMGN-2024.9.30 EARNINGS RELEASE" label,
+    # then "Exhibit 99.1" / "News Release", then a head-office address block
+    # (street / city,ST ZIP / telephone / URL) before the real headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "2",
+            "amgn-20240930earningsrelea.htm",
+            "AMGN-2024.9.30 EARNINGS RELEASE",
+            "Exhibit 99.1",
+            "News Release",
+            "One Amgen Center Drive",
+            "Thousand Oaks, CA 91320-1799",
+            "Telephone 805-447-1000",
+            "www.amgen.com",
+            "AMGEN REPORTS THIRD QUARTER 2024 FINANCIAL RESULTS",
+            "THOUSAND OAKS, Calif. (Oct. 30, 2024) - Amgen (NASDAQ:AMGN) today "
+            "announced financial results for the third quarter of 2024 here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "AMGEN REPORTS THIRD QUARTER 2024 FINANCIAL RESULTS"
+    assert "One Amgen Center Drive" not in hl
+    assert "Thousand Oaks" not in hl.split("\n\n")[0]
+
+
+def test_exhibit_dash_marker_skipped() -> None:
+    # Air Products: the exhibit marker uses a dash ("EXHIBIT-99.1"), then
+    # "Exhibit 99.1" / "News Release" before the real headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "exhibit99130sep24.htm",
+            "EXHIBIT-99.1",
+            "Exhibit 99.1",
+            "News Release",
+            "Air Products Reports Fiscal 2024 Fourth Quarter GAAP EPS of $8.81",
+            "LEHIGH VALLEY, Pa. (November 7, 2024) - Air Products (NYSE:APD) today "
+            "reported full-year fiscal 2024 results with additional filler text.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Air Products Reports Fiscal 2024 Fourth Quarter GAAP EPS of $8.81"
+    )
+
+
+def test_ticker_prefixed_exhibit_marker_skipped() -> None:
+    # T-Mobile: a ticker-prefixed exhibit marker ("TMUS EXHIBIT 99.1") heads
+    # the release; the real headline follows.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "tmus09302024ex991.htm",
+            "TMUS EXHIBIT 99.1",
+            "EXHIBIT 99.1",
+            "T-Mobile Delivers Industry-Leading Growth in Customers in Q3",
+            "Bellevue, WA -- October 23, 2024 -- T-Mobile US, Inc. (NASDAQ: TMUS) "
+            "reported third quarter 2024 results with additional filler text.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "T-Mobile Delivers Industry-Leading Growth in Customers in Q3"
+    )
+
+
+def test_echibit_typo_marker_skipped() -> None:
+    # Citi Q1 2025: the filer typoed the marker as "ECHIBIT 99.1".
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "ECHIBIT 99.1",
+            "News Release",
+            "CITIGROUP REPORTS FIRST QUARTER 2025 RESULTS",
+            "New York, April 15, 2025 -- Citigroup Inc. today reported net income "
+            "for the first quarter 2025 with additional filler text here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "CITIGROUP REPORTS FIRST QUARTER 2025 RESULTS"
+
+
+def test_name_prefixed_for_immediate_release_skipped() -> None:
+    # TJX: a contact name heads the "FOR IMMEDIATE RELEASE" marker
+    # ("Debra McConnell FOR IMMEDIATE RELEASE"); the real headline follows.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Debra McConnell FOR IMMEDIATE RELEASE",
+            "THE TJX COMPANIES, INC. REPORTS Q1 FY26 RESULTS",
+            "Framingham, MA -- May 21, 2025 -- The TJX Companies, Inc. today "
+            "reported first quarter fiscal 2026 results with filler text here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "THE TJX COMPANIES, INC. REPORTS Q1 FY26 RESULTS"
+
+
+def test_batch110_admin_patterns_reject_real_headline_shapes() -> None:
+    # The new _ADMIN_LINE_RE alternatives must not swallow real headlines:
+    # a "One"-led company name, a headline mentioning an exhibit, a street
+    # suffix inside a longer headline, or a city/state without a ZIP.
+    from tickerlens.data.filings import _ADMIN_LINE_RE
+
+    assert not _ADMIN_LINE_RE.match("Oneok Announces Fourth Quarter 2025 Results")
+    assert not _ADMIN_LINE_RE.match("T-Mobile Delivers Industry-Leading Growth in Q3")
+    assert not _ADMIN_LINE_RE.match("Acme Reports Earnings Release Call Details")
+    assert not _ADMIN_LINE_RE.match("CUPERTINO, California")
+    assert not _ADMIN_LINE_RE.match("Thousand Oaks, CA")
+    assert not _ADMIN_LINE_RE.match("One Amgen Center Driveway Expansion Planned")
+
+
+def test_bare_earnings_release_label_with_exhibit_marker_skipped() -> None:
+    # Amgen/Northrop: the bare "EARNINGS RELEASE" label is followed by
+    # "Exhibit 99.1" / "News Release" (+ address block), not directly by the
+    # headline. The label must still be skipped so the real headline wins.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "2",
+            "amgn-20241231earningsrelea.htm",
+            "EARNINGS RELEASE",
+            "Exhibit 99.1",
+            "News Release",
+            "One Amgen Center Drive",
+            "Thousand Oaks, CA 91320-1799",
+            "Telephone 805-447-1000",
+            "www.amgen.com",
+            "AMGEN REPORTS FOURTH QUARTER AND FULL YEAR 2024 FINANCIAL RESULTS",
+            "THOUSAND OAKS, Calif. (Feb. 4, 2025) - Amgen (NASDAQ:AMGN) today "
+            "announced financial results for the fourth quarter of 2024 here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "AMGEN REPORTS FOURTH QUARTER AND FULL YEAR 2024 FINANCIAL RESULTS"
+    )
+
+
+def test_long_headline_within_raised_limit_is_picked() -> None:
+    # TJX Q4 FY25: the genuine headline runs 243 chars. At the old 220-char
+    # limit it was unpickable (headline came back None and the lede filled
+    # with contact detail lines). The raised limit picks it up.
+    headline = (
+        "THE TJX COMPANIES, INC. REPORTS Q4 AND FY25 RESULTS; Q4 COMP STORE "
+        "SALES UP 5%, PRETAX PROFIT MARGIN OF 11.6%, AND FULL YEAR RESULTS "
+        "WITH ADDITIONAL DETAIL HERE TO EXCEED THE OLD LIMIT OF TWO HUNDRED "
+        "AND TWENTY CHARACTERS FOR HEADLINE LENGTH"
+    )
+    assert 220 < len(headline) <= 300
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Exhibit 99.1",
+            "CONTACT:",
+            "Debra McConnell FOR IMMEDIATE RELEASE",
+            "Global Communications Wednesday, February 26, 2025",
+            "(508) 390-2323",
+            headline,
+            "Framingham, MA -- February 26, 2025 -- The TJX Companies, Inc. "
+            "today reported fourth quarter fiscal 2025 results with filler.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == headline
+    assert "Global Communications" not in hl.split("\n\n")[0]

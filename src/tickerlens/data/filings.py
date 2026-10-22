@@ -108,7 +108,13 @@ def _followed_by_prose(text: str, pos: int) -> bool:
 _MIN_RELEASE_CHARS = 800
 
 # Headline candidates longer than this are usually run-on body text, not a title.
-_MAX_HEADLINE_CHARS = 220
+# Batch 110: raised 220 -> 300 — TJX's genuine Q4 FY25 headline runs 243 chars
+# ("THE TJX COMPANIES, INC. REPORTS Q4 AND FY25 RESULTS; Q4 COMP STORE SALES
+# UP 5%, PRETAX PROFIT MARGIN OF 11.6%,"); at 220 it was unpickable, the
+# headline came back None, and the lede fallback (after _drop_table_fragment_runs
+# removed the CONTACT: header) filled with contact detail lines. Page-line junk
+# runs 1000+ chars, so 300 still excludes it.
+_MAX_HEADLINE_CHARS = 300
 
 # Lines that mark the start of boilerplate we never want in highlights.
 _BOILERPLATE_RE = re.compile(
@@ -125,7 +131,6 @@ _ADMIN_LINE_RE = re.compile(
     r"|^ex-?99(\.1)?\b"  # EX-99.1 / bare EX-99 (NextEra renders the exhibit
     # header without ".1" — without this the "EX-99" line became the headline
     # and the real headline was never reached, batch 97)
-    r"|^exhibit\s+99\b"  # Exhibit 99.1
     r"|^exhibit$"  # bare "EXHIBIT" when the label wraps across lines (WM:
     # "EXHIBIT" / "99.1" on separate lines). Batch 105.
     r"|^\d+\.\d+$"  # bare version fragment from a wrapped exhibit label
@@ -157,6 +162,34 @@ _ADMIN_LINE_RE = re.compile(
     r"\s+[A-Za-z][A-Za-z\s.,'-]*,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$"
     r"|^n\s*e\s*w\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter kicker (Humana)
     r"|^p\s*r\s*e\s*s\s*s\s*r\s*e\s*l\s*e\s*a\s*s\s*e\s*$"  # spaced-letter "press release"
+    r"|^e\s+a\s+r\s+n\s+i\s+n\s+g\s+s\s+r\s+e\s+l\s+e\s+a\s+s\s+e\s*$"  # spaced-letter
+    # "earnings release" document label (Elevance Health heads releases with
+    # it; the real headline follows). \s+ (not \s*) so the unspaced
+    # "Earnings Release" — a table-of-contents entry title — is not swallowed
+    # here. Batch 110.
+    r"|^\S+\s+earnings\s+release$"  # ticker/date-prefixed "EARNINGS RELEASE"
+    # document label (Amgen: "AMGN-2024.9.30 EARNINGS RELEASE"). A real
+    # headline is never "<single-token> Earnings Release". Batch 110.
+    r"|^.*\bfor\s+immediate\s+release$"  # name-prefixed "FOR IMMEDIATE RELEASE"
+    # (TJX: "Debra McConnell FOR IMMEDIATE RELEASE"). The ^.* prefix lets the
+    # end-anchored marker match after a contact name; a real headline never
+    # ends with the release marker. Batch 110.
+    r"|^exhibit[\s\-]+99(\.1)?\b"  # Exhibit 99.1 / EXHIBIT-99.1 (Air Products
+    # uses the dash form; the real headline follows "News Release"). Batch 110.
+    r"|^[A-Z][\w.\-]*\s+exhibit[\s\-]+99(\.1)?\s*$"  # ticker-prefixed exhibit
+    # marker (T-Mobile: "TMUS EXHIBIT 99.1"). Batch 110.
+    r"|^echibit\s+99(\.1)?\b"  # "ECHIBIT 99.1" — the filer's typo for
+    # "EXHIBIT 99.1" (Citi Q1 2025 release). Batch 110.
+    # Pre-headline company address block (Amgen: street / city,ST ZIP /
+    # "Telephone ..." / www.amgen.com between "News Release" and the real
+    # headline). Each shape is full-line anchored; a real headline never
+    # looks like an address, a phone line, or a bare city+ZIP. Batch 110.
+    r"|^[A-Za-z][A-Za-z\s.'-]*,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?$"
+    r"|^(telephone|tel\.?|phone)\s*[:\-]?\s*\+?[\d.\-() ]+$"
+    r"|^(?:\d{1,6}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+    r"\s+[A-Za-z0-9][A-Za-z0-9\s.'-]{1,39}?\b(drive|dr|street|st|avenue|ave|road|rd|"
+    r"boulevard|blvd|lane|ln|way|plaza|parkway|pkwy|court|ct|circle|cir|trail|"
+    r"place)\.?$"
     # Lone "News" section kicker: Southern Company's releases put it before
     # the contact block, and once bare "Page 1" is skipped the kicker would
     # become the headline (batch 104). A real headline is never one word.
@@ -684,6 +717,22 @@ _HEADLINE_VERB_LEAD_RE = re.compile(
 )
 
 
+def _wrapped_spaced_label_skip(lines: list[str], i: int) -> int:
+    """Return how many lines a spaced-letter document label occupies at *i*.
+
+    Elevance Health's Q3 2025 exhibit wraps the kicker across two lines
+    ("E A R" / "N I N G S R E L E A S E", with thin spaces). The joined
+    no-space form must be a document label and the first fragment short, so
+    wrapped prose is never swallowed. Single-line spaced labels are covered
+    by _ADMIN_LINE_RE. Batch 110.
+    """
+    if i + 1 < len(lines) and len(lines[i]) <= 12:
+        joined = re.sub(r"\s+", "", lines[i] + lines[i + 1]).lower()
+        if joined in ("earningsrelease", "newsrelease", "pressrelease"):
+            return 2
+    return 0
+
+
 def _looks_like_headline(ln: str) -> bool:
     """True for a plausible release-headline line (batch 105).
 
@@ -824,15 +873,20 @@ def _skip_bare_masthead_name(lines: list[str], i: int) -> int | None:
         cand = lines[j]
         if _looks_like_headline(cand):
             return j if saw_residue else None
-        if _ADMIN_LINE_RE.match(cand):
-            j += 1
-            continue
         if (
             _CONTACT_HEADER_RE.match(cand)
             or _CONTACT_LINE_RE.search(cand)
             or _looks_like_masthead_residue(cand)
         ):
+            # Checked before the admin branch: address-block lines that are
+            # also admin-skippable (street / city,ST ZIP / telephone — batch
+            # 110) must still count as residue, otherwise the saw_residue
+            # guard below fails and a bare masthead name is kept as the
+            # headline (Amphenol).
             saw_residue = True
+            j += 1
+            continue
+        if _ADMIN_LINE_RE.match(cand):
             j += 1
             continue
         if len(cand.split()) <= 4 and not re.search(r"[.!?]\s*$", cand):
@@ -1152,6 +1206,13 @@ def extract_press_release_highlights(
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             i += 1
             continue
+        wrapped_label = _wrapped_spaced_label_skip(lines, i)
+        if wrapped_label:
+            # Wrapped spaced-letter document label (Elevance Health Q3 2025:
+            # "E A R" / "N I N G S R E L E A S E"); the real headline follows.
+            # Batch 110.
+            i += wrapped_label
+            continue
         if _FOOTNOTE_DEF_RE.match(ln):
             # Footnote-definition legend lines (GEV's Workiva exhibit opens
             # with "1 Defined as remaining performance obligation (RPO)" /
@@ -1221,14 +1282,17 @@ def extract_press_release_highlights(
             # Cover title block (GS): the real headline follows the banner.
             headline, body_start = cover
             break
-        if (
-            ln.lower() == "earnings release"
-            and i + 1 < len(lines)
-            and _looks_like_headline(lines[i + 1])
-        ):
-            # "Earnings Release" document label (Mastercard): the real
-            # headline follows. Skipped here (not in _ADMIN_LINE_RE) because
-            # the same words are a TOC entry title elsewhere. Batch 105.
+        if ln.lower() == "earnings release":
+            # "Earnings Release" document label (Mastercard, Amgen, Northrop
+            # Grumman): the real headline follows, but not necessarily on the
+            # next line — Amgen/Northrop put "Exhibit 99.1" / "News Release" /
+            # an address block between the label and the headline. Skip the
+            # label and let the loop find the headline; don't require the
+            # next line to be headline-shaped (batch 105 did, which left the
+            # label as the headline for Amgen/Northrop). Skipped here (not in
+            # _ADMIN_LINE_RE) because the same words are a TOC entry title
+            # elsewhere. A real headline is never the bare words
+            # "Earnings Release". Batch 105; generalized batch 110.
             i += 1
             continue
         if (
