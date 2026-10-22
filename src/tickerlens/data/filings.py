@@ -430,9 +430,16 @@ _CONTACT_HEADER_RE = re.compile(
     # (batch 105). A real headline never ends with "Company Contact:".
     r"|^.*\bcompany\s+contacts?\b"
     # Bare role labels with no "contact" word (American Airlines: "Corporate
-    # Communications" / "Investor Relations"). Full-line anchored so a real
-    # headline mentioning investor relations is never swallowed.
-    r"|^(investor relations|corporate communications|media relations)$"
+    # Communications" / "Investor Relations"; BlackRock: "INVESTOR RELATIONS:"
+    # / "MEDIA RELATIONS:" with a trailing colon). Full-line anchored so a
+    # real headline mentioning investor relations is never swallowed.
+    # Batch 111: the colon variant made every BlackRock quarter's headline
+    # the contact header.
+    r"|^(investor relations|corporate communications|media relations):?$"
+    # Company-name-prefixed header without the word "Company" (Qualcomm:
+    # "Qualcomm Contact:"). Full-line anchored and length-capped; a real
+    # headline never ends with "Contact(s):". Batch 111.
+    r"|^[\w&.,'\-\s]{1,80}\s+contacts?:\s*$"
     # Date-prefixed header (American Water: "July 29, 2026 Investor Contact:").
     # The date prefix keeps the standard branch from matching.
     r"|^(january|february|march|april|may|june|july|august|september|october|"

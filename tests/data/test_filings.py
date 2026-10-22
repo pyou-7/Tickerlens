@@ -3153,3 +3153,65 @@ def test_long_headline_within_raised_limit_is_picked() -> None:
     assert hl is not None
     assert hl.split("\n\n")[0] == headline
     assert "Global Communications" not in hl.split("\n\n")[0]
+
+
+def test_contact_header_company_name_prefixed_is_skipped() -> None:
+    # Qualcomm: "Qualcomm Contact:" — a company-name-prefixed contact header
+    # without the word "Company". The old regex only recognized the
+    # "... Company Contact:" form, so the header became the headline on every
+    # Qualcomm quarter. Batch 111.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "qcom092924erex991.htm", "Exhibit 99.1",
+            "FOR IMMEDIATE RELEASE",
+            "Qualcomm Contact:",
+            "Mauricio Lopez-Hodoyan",
+            "Vice President, Investor Relations",
+            "Phone: 1-858-658-4813 | e-mail: ir@qualcomm.com",
+            "Qualcomm Announces Fourth Quarter and Fiscal 2024 Results",
+            "SAN DIEGO - November 6, 2024 - Qualcomm Incorporated (NASDAQ: QCOM) "
+            "today announced results for its fourth quarter of fiscal 2024.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Qualcomm Announces Fourth Quarter and Fiscal 2024 Results"
+    assert "Qualcomm Contact" not in hl
+    assert "ir@qualcomm.com" not in hl
+    assert "Mauricio Lopez-Hodoyan" not in hl
+
+
+def test_contact_header_bare_role_label_with_colon() -> None:
+    # BlackRock: "INVESTOR RELATIONS:" / "MEDIA RELATIONS:" — bare role labels
+    # with a trailing colon. The old regex required no colon, so the header
+    # became the headline on every BlackRock quarter. Batch 111.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "blk-ex99_1.htm", "Exhibit 99.1",
+            "INVESTOR RELATIONS:",
+            "Caroline Rodda 212.810.3442",
+            "MEDIA RELATIONS:",
+            "Ed Sweeney 646.231.0268",
+            "BlackRock Reports Third Quarter 2024 Diluted EPS of $10.90, or $11.46 as adjusted",
+            "New York, October 11, 2024 – BlackRock, Inc. (NYSE: BLK) today "
+            "reported financial results for the third quarter of 2024.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "BlackRock Reports Third Quarter 2024 Diluted EPS of $10.90, or $11.46 as adjusted"
+    )
+    assert "INVESTOR RELATIONS" not in hl.split("\n\n")[0]
+    assert "Caroline Rodda" not in hl
+    assert "Ed Sweeney" not in hl
+
+
+def test_contact_header_company_prefixed_never_matches_headline() -> None:
+    # The company-name-prefixed branch is full-line anchored at a short line
+    # ending in "Contact(s):" — a genuine headline never has that shape, and
+    # a contact header with inline detail ("Analyst Contact: Abby Motsinger")
+    # is not matched by this branch.
+    from tickerlens.data.filings import _CONTACT_HEADER_RE
+
+    assert not _CONTACT_HEADER_RE.match("Analyst Contact: Abby Motsinger")
+    assert _CONTACT_HEADER_RE.match("Qualcomm Contact:")
+    assert _CONTACT_HEADER_RE.match("INVESTOR RELATIONS:")
