@@ -968,7 +968,7 @@ def compute_valuation(
             sales_confidence = "Medium"  # cap: the guardrail, not the data, drives the target
         if sales_rate_note is not None:
             sales_confidence = "Medium"  # cap: the rate environment, not the data, drives the target
-        if hyper_growth:
+        if hyper_growth and ttm_eps_diluted is not None:
             # Batch 74: per-share earnings exist here — the PEG path was
             # skipped because the EPS *growth* is outside the model's 40%
             # range, not because earnings are missing. The batch-33 "no
@@ -981,6 +981,12 @@ def compute_valuation(
                 "on sales instead (less reliable)."
             )
         else:
+            # Batch 114: when ttm_eps_diluted is None the hyper-growth input
+            # is TTM *net-income* growth (the filer reports no usable XBRL
+            # EPS facts — e.g. KKR, STZ), not EPS growth, and the PEG path
+            # was never reachable (it needs per-share EPS to anchor). The
+            # batch-74 reroute story would be doubly false here, so the
+            # honest line is the no-per-share-earnings one.
             sales_opening = (
                 "No per-share earnings to anchor a P/E multiple — valuing on sales "
                 "instead (less reliable)."

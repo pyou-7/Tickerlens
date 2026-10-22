@@ -406,6 +406,26 @@ def test_hyper_growth_reroutes_to_sales():
     assert not any("No per-share earnings" in r for r in v.reasoning)
 
 
+def test_hyper_growth_no_eps_uses_honest_line():
+    # Batch 114: filers with no usable XBRL EPS facts (KKR, STZ) reach the
+    # sales fallback with ttm_eps_diluted=None — the hyper-growth input is
+    # then TTM *net-income* growth, not EPS growth, and the PEG path was
+    # never reachable (it needs per-share EPS to anchor). The batch-74
+    # "TTM EPS growth ... outside the PEG model's 40% design range" line
+    # would be doubly false here, so the fallback must use the honest
+    # no-per-share-earnings line instead. Mirror KKR: no per-share EPS,
+    # 53.7% net-income growth, 14.3% net margin.
+    v = _base(ttm_eps_diluted=None, eps_growth_pct=53.7,
+              ten_year_yield_pct=2.0, ttm_revenue=21_000_000_000.0,
+              ttm_net_income=3_000_000_000.0)
+    assert v.method == "sales"
+    assert v.target_price is not None
+    assert any("No per-share earnings to anchor a P/E multiple" in r
+               for r in v.reasoning)
+    assert not any("outside the PEG model's 40% design range" in r
+                   for r in v.reasoning)
+
+
 def test_hyper_growth_boundary():
     # The reroute is strictly > 40%: exactly 40% keeps the PEG path (capped
     # multiple, Medium confidence via the cap guardrail); 40.1% reroutes to
