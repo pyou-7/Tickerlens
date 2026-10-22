@@ -3215,3 +3215,72 @@ def test_contact_header_company_prefixed_never_matches_headline() -> None:
     assert not _CONTACT_HEADER_RE.match("Analyst Contact: Abby Motsinger")
     assert _CONTACT_HEADER_RE.match("Qualcomm Contact:")
     assert _CONTACT_HEADER_RE.match("INVESTOR RELATIONS:")
+
+
+def test_dateline_is_never_the_headline() -> None:
+    # Berkshire: its releases have no headline — company name + "NEWS
+    # RELEASE" + date + dateline, then the lede. The old code stored the
+    # company name; the pre-fix code picked the dateline. A dateline is never
+    # a headline: the honest result is headline=None with the lede starting
+    # after the dateline. Batch 112.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "d940849dex991.htm", "Exhibit 99.1",
+            "BERKSHIRE HATHAWAY INC.",
+            "NEWS RELEASE",
+            "FOR IMMEDIATE RELEASE",
+            "August 2, 2025",
+            "Omaha, NE (BRK.A; BRK.B) –",
+            "Berkshire’s operating results for the second quarter and first "
+            "six months of 2025 and 2024 are summarized in the following "
+            "paragraphs.",
+        )
+    )
+    assert hl is not None
+    assert "BERKSHIRE HATHAWAY" not in hl
+    assert "Omaha" not in hl
+    assert hl.split("\n\n")[0].startswith("Berkshire’s operating results")
+
+
+def test_quarter_prefixed_earnings_release_label_is_skipped() -> None:
+    # Berkshire Q1: "FIRST QUARTER 2026 EARNINGS RELEASE" sits between the
+    # company name and "FOR IMMEDIATE RELEASE". The batch-110 label branches
+    # only covered bare "Earnings Release" and single-token prefixes, so the
+    # label became the headline. Batch 112.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "d74313dex991.htm", "Exhibit 99.1",
+            "BERKSHIRE HATHAWAY INC.",
+            "FIRST QUARTER 2026 EARNINGS RELEASE",
+            "FOR IMMEDIATE RELEASE",
+            "May 2, 2026",
+            "Omaha, NE (BRK.A; BRK.B) –",
+            "Berkshire’s operating results for the first quarters of 2026 "
+            "and 2025 are summarized in the following paragraphs.",
+        )
+    )
+    assert hl is not None
+    assert "EARNINGS RELEASE" not in hl.split("\n\n")[0]
+    assert hl.split("\n\n")[0].startswith("Berkshire’s operating results")
+
+
+def test_dateline_and_quarter_label_regexes_stay_narrow() -> None:
+    # The dateline branch only fires when no headline was found, but the
+    # shapes themselves must never match a genuine headline — a real
+    # headline never ends with a bare dash after a comma, and never is a
+    # quarter-prefixed "earnings release" label.
+    from tickerlens.data.filings import _DATELINE_RE, _QUARTER_EARNINGS_LABEL_RE
+
+    assert _DATELINE_RE.match("Omaha, NE (BRK.A; BRK.B) –")
+    assert _DATELINE_RE.match("NEW YORK, May 1, 2025 –")
+    assert _DATELINE_RE.match("Cupertino, California, October 30, 2025 —")
+    assert not _DATELINE_RE.match("Apple Reports Third Quarter Results")
+    assert not _DATELINE_RE.match(
+        "Mastercard Incorporated Reports Third Quarter 2024 Financial Results"
+    )
+    assert not _DATELINE_RE.match("Q2 2025 Results – Conference Call")
+    assert _QUARTER_EARNINGS_LABEL_RE.match("FIRST QUARTER 2026 EARNINGS RELEASE")
+    assert _QUARTER_EARNINGS_LABEL_RE.match("third quarter 2024 earnings release")
+    assert not _QUARTER_EARNINGS_LABEL_RE.match(
+        "Acme Schedules First Quarter Earnings Release"
+    )

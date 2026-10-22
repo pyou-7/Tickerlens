@@ -216,6 +216,27 @@ _ADMIN_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Release dateline ("Omaha, NE (BRK.A; BRK.B) –" / "NEW YORK, May 1, 2025 –"):
+# city + state/country (optionally with a date and parenthetical tickers)
+# ending in an em/en dash or hyphen. A dateline is never a headline — when
+# the scan reaches one with no headline found, the release has no headline
+# (Berkshire's releases have none), so the honest result is headline=None
+# with the lede starting after the dateline. Batch 112.
+_DATELINE_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*?,\s+[A-Za-z0-9][A-Za-z0-9 .'\-(),;]*?[–—-]\s*$"
+)
+
+# Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
+# EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
+# headline follows "FOR IMMEDIATE RELEASE" / the date line). Narrow: quarter
+# word + year + the label words, so a genuine headline like "X Schedules
+# First Quarter Earnings Release" (verb + company subject) never matches.
+# Batch 112.
+_QUARTER_EARNINGS_LABEL_RE = re.compile(
+    r"^(first|second|third|fourth)\s+quarter\s+\d{4}\s+earnings\s+release$",
+    re.IGNORECASE,
+)
+
 # A highlights line that carries reported financial figures rather than
 # business narrative: a dollar amount, a percent, or a financial keyword
 # ("revenue", "net income", "per share", "margin", "cash flow", ...).
@@ -1289,17 +1310,21 @@ def extract_press_release_highlights(
             # Cover title block (GS): the real headline follows the banner.
             headline, body_start = cover
             break
-        if ln.lower() == "earnings release":
+        if ln.lower() == "earnings release" or _QUARTER_EARNINGS_LABEL_RE.match(ln):
             # "Earnings Release" document label (Mastercard, Amgen, Northrop
-            # Grumman): the real headline follows, but not necessarily on the
-            # next line — Amgen/Northrop put "Exhibit 99.1" / "News Release" /
-            # an address block between the label and the headline. Skip the
-            # label and let the loop find the headline; don't require the
-            # next line to be headline-shaped (batch 105 did, which left the
-            # label as the headline for Amgen/Northrop). Skipped here (not in
+            # Grumman) and quarter-prefixed variants ("FIRST QUARTER 2026
+            # EARNINGS RELEASE" — Berkshire heads Q1 releases with it): the
+            # real headline follows, but not necessarily on the next line —
+            # Amgen/Northrop put "Exhibit 99.1" / "News Release" / an address
+            # block between the label and the headline. Skip the label and let
+            # the loop find the headline; don't require the next line to be
+            # headline-shaped (batch 105 did, which left the label as the
+            # headline for Amgen/Northrop). Skipped here (not in
             # _ADMIN_LINE_RE) because the same words are a TOC entry title
             # elsewhere. A real headline is never the bare words
-            # "Earnings Release". Batch 105; generalized batch 110.
+            # "Earnings Release" or a quarter-prefixed earnings-release
+            # label. Batch 105; generalized batch 110; quarter-prefixed
+            # variant batch 112.
             i += 1
             continue
         if (
@@ -1345,6 +1370,13 @@ def extract_press_release_highlights(
             i = masthead_skip
             continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
+            if _DATELINE_RE.match(ln):
+                # Dateline reached with no headline found (Berkshire's
+                # releases have no headline at all). A dateline is never a
+                # headline — stop here with headline=None; the lede starts
+                # after the dateline. Batch 112.
+                body_start = i + 1
+                break
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i
         break
