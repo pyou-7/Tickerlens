@@ -655,6 +655,56 @@ def test_match_8k_excludes_8k_filed_after_10q():
     assert _match_8k(filing, [earnings, conference]) == earnings
 
 
+def test_match_8k_post_filing_grace_berkshire():
+    # Batch 113: Berkshire files the 10-Q a day or two BEFORE furnishing the
+    # earnings-release 8-K (Q1'25: 10-Q 2025-05-05, release 2025-05-06) — the
+    # 1-3-day post-filing grace pool rescues quarters with no pre-filing
+    # 2.02 candidate.
+    from tickerlens.services.ir_download import _match_8k
+
+    filing = _sec_filing("10-Q", date(2025, 3, 31), date(2025, 5, 5))
+    release = _er(date(2025, 5, 6))
+    assert _match_8k(filing, [release]) == release
+    # Three days out still qualifies (BRK.B Q1'26: 2026-05-04 -> 2026-05-07).
+    release3 = _er(date(2025, 5, 8))
+    assert _match_8k(filing, [release3]) == release3
+
+
+def test_match_8k_grace_capped_at_3_days():
+    # A 2.02 8-K 4 days after the formal filing is not the earnings release
+    # when no pre-filing candidate exists — the PNC conference shape
+    # (2025-11-07, 4 days after the 11-03 10-Q) without the genuine one.
+    from tickerlens.services.ir_download import _match_8k
+
+    filing = _sec_filing("10-Q", date(2025, 9, 30), date(2025, 11, 3))
+    late = _er(date(2025, 11, 7))
+    assert _match_8k(filing, [late]) is None
+
+
+def test_match_8k_primary_beats_post_filing_grace():
+    # A genuine pre-filing 2.02 always wins over a post-filing one — the
+    # grace pool only fills quarters with no primary candidate.
+    from tickerlens.services.ir_download import _match_8k
+
+    filing = _sec_filing("10-Q", date(2025, 9, 30), date(2025, 11, 3))
+    earnings = _er(date(2025, 10, 15))
+    post = _er(date(2025, 11, 5))
+    assert _match_8k(filing, [post, earnings]) == earnings
+
+
+def test_match_8k_annual_window_75_days():
+    # Batch 113: Berkshire's FY-2025 earnings 8-K came 61 days after year-end
+    # (2025-12-31 -> 2026-03-02, same day as the 10-K) — annual periods get a
+    # 75-day window, quarterly periods keep 60.
+    from tickerlens.services.ir_download import _match_8k
+
+    annual = _sec_filing("10-K", date(2025, 12, 31), date(2026, 3, 2))
+    release = _er(date(2026, 3, 2))
+    assert _match_8k(annual, [release]) == release
+    quarterly = _sec_filing("10-Q", date(2025, 12, 31), date(2026, 3, 2))
+    assert _match_8k(quarterly, [release]) is None
+
+
 def test_discover_extends_to_oldest_stored_period():
     # Batch 97: the stored 8-quarter window can lag submissions (EDGAR
     # companyfacts delay) — discovery must extend past n_quarters to cover
@@ -882,3 +932,20 @@ def test_fallback_keeps_window_guards():
     # In-window candidate with a period-referencing exhibit matches.
     m = _match_8k_non202_fallback(filing, [good], "C", "0000831001", client)
     assert m is not None and m[0]["accession"] == "a1" and m[1] == "c-20240712xex99d1.htm"
+
+
+def test_fallback_rescues_post_filing_non202_8k():
+    # Batch 113: the non-2.02 fallback shares the two-pool guards — a 9.01
+    # earnings 8-K furnished 2 days after the 10-Q still matches when its
+    # exhibit is release-looking and period-referencing.
+    filing = {"form": "10-Q", "report_date": date(2024, 6, 30), "filing_date": date(2024, 8, 2)}
+    late = {"accession": "a4", "filing_date": date(2024, 8, 4), "items": "9.01",
+            "primary_doc": "c-20240804x8k.htm", "src_cik": "0000831001"}
+    client = MagicMock()
+    client.filing_index_url.side_effect = lambda cik, acc: f"https://x/{acc}/"
+    client.fetch_text.return_value = (
+        '<html><body><a href="/Archives/x/c-20240804xex99d1.htm">x</a></body></html>'
+    )
+    matched, doc = _match_8k_non202_fallback(filing, [late], "C", "0000831001", client)
+    assert matched["accession"] == "a4"
+    assert doc == "c-20240804xex99d1.htm"

@@ -515,6 +515,52 @@ def _assign_fy_and_quarter(filings: list[dict]) -> None:
 
 # ── 8-K matching ──────────────────────────────────────────────────────────────
 
+def _er_8k_window_days(filing: dict) -> int:
+    """Period-end window (days) for earnings-8-K candidates.
+
+    Batch 113: annual periods get a wider window — Berkshire Hathaway's
+    FY-2025 earnings 8-K came 61 days after year-end (2025-12-31 ->
+    2026-03-02, filed the same day as the 10-K), outside the 60-day
+    quarterly window. Quarterly earnings cluster at 3-6 weeks after period
+    end and the next quarter's release starts ~100 days out, so 75 days
+    for annuals stays well clear of the following period's release.
+    """
+    return 75 if filing.get("form") == "10-K" else 60
+
+
+def _er_8k_candidate_pools(
+    filing: dict, er_8ks: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Split 8-Ks into (primary, post-filing grace) earnings candidates.
+
+    Batch 113: Berkshire Hathaway files the 10-Q/10-K a day or two BEFORE
+    furnishing the earnings-release 8-K (Q1'25: 10-Q 2025-05-05, release
+    2025-05-06; Q1'26: 10-Q 2026-05-04, release 2026-05-07), so the
+    batch-97 guard (earnings must predate the formal filing) dropped all
+    four recent BRK.B quarters from discovery even though their 8-Ks carry
+    Item 2.02. The primary pool keeps the batch-97 guards; the grace pool
+    (furnished 1-3 days AFTER the formal filing) only fills quarters with
+    no primary candidate, so PNC's 2025-11-07 investor-conference 8-K —
+    4 days post-filing, and a genuine pre-filing 2.02 existed — still
+    cannot win. Both pools keep the 7-day-after-period-end floor (Tesla's
+    2-day deliveries 8-K) and the 60/75-day ceiling.
+    """
+    report = filing["report_date"]
+    filed = filing["filing_date"]
+    window = _er_8k_window_days(filing)
+
+    def in_window(er: dict) -> bool:
+        return 7 <= (er["filing_date"] - report).days <= window
+
+    primary = [er for er in er_8ks if in_window(er) and er["filing_date"] <= filed]
+    grace = [
+        er
+        for er in er_8ks
+        if in_window(er) and 0 < (er["filing_date"] - filed).days <= 3
+    ]
+    return primary, grace
+
+
 def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
     """
     Find the earnings-release 8-K that corresponds to a 10-Q/10-K.
@@ -524,8 +570,8 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
     (10-Ks routinely trail earnings by 4+ weeks, and some 10-Qs by 3+), so
     anchoring on the filing date with a tight window systematically missed
     annual periods. Anchor on the period end instead: candidates are Item
-    2.02 8-Ks filed after the report date and within 60 days; the one nearest
-    the formal filing date wins.
+    2.02 8-Ks filed after the report date and within 60 days (75 for annual
+    periods, batch 113); the one nearest the formal filing date wins.
 
     Two guards keep later/earlier 2.02 furnishings out (batch 97):
     - Filed AFTER the 10-Q/10-K: not the earnings release (PNC furnished a
@@ -535,20 +581,25 @@ def _match_8k(filing: dict, er_8ks: list[dict]) -> dict | None:
       aren't closed) — Tesla furnishes production/deliveries under 2.02 two
       days after quarter end, ahead of the real earnings 8-K three weeks
       later.
+
+    Batch 113: filers that furnish the earnings release AFTER the formal
+    filing (Berkshire: 10-Q a day or two before the release 8-K) fall into
+    the post-filing grace pool (1-3 days) — used only when no primary
+    candidate exists, so the PNC guard above still holds.
     """
-    report = filing["report_date"]
     filed = filing["filing_date"]
-    candidates = [
-        er for er in er_8ks
-        if 7 <= (er["filing_date"] - report).days <= 60
-        and er["filing_date"] <= filed
-    ]
-    if not candidates:
-        return None
-    return min(
-        candidates,
-        key=lambda er: abs((filed - er["filing_date"]).days),
-    )
+    primary, grace = _er_8k_candidate_pools(filing, er_8ks)
+    if primary:
+        return min(
+            primary,
+            key=lambda er: abs((filed - er["filing_date"]).days),
+        )
+    if grace:
+        return min(
+            grace,
+            key=lambda er: (er["filing_date"] - filed).days,
+        )
+    return None
 
 
 def _quarter_tokens(report: date) -> list[str]:
@@ -608,9 +659,9 @@ def _match_8k_non202_fallback(
     Batch 101: Citi/Mettler-Toledo file 9.01-only earnings 8-Ks, Colgate
     files 8.01+9.01, GE Vernova files 2.01+9.01 — the 2.02 gate in
     _extract_er_8ks misses all of them. Only runs when _match_8k found no
-    2.02 candidate. Candidates keep the batch-97 guards (filed 7–60 days
-    after period end, not after the formal filing; nearest to the filing
-    wins) and additionally must carry a release-looking exhibit in their
+    2.02 candidate. Candidates keep the batch-97/batch-113 guards (primary
+    pre-filing pool, then the 1-3-day post-filing grace pool; nearest to the
+    filing wins within each pool) and additionally must carry a release-looking exhibit in their
     filing index — _pick_release_doc, deliberately WITHOUT the
     _lone_exhibit_fallback, so a lone non-release exhibit (an underwriting
     agreement, a segment recast) can never promote an arbitrary 9.01 8-K
@@ -637,11 +688,10 @@ def _match_8k_non202_fallback(
     """
     report = filing["report_date"]
     filed = filing["filing_date"]
-    candidates = [
-        er for er in other_8ks
-        if 7 <= (er["filing_date"] - report).days <= 60
-        and er["filing_date"] <= filed
-    ]
+    # Batch 113: same two-pool guards as _match_8k (primary pre-filing
+    # candidates, then the 1-3-day post-filing grace pool) — non-2.02
+    # filers can furnish after the formal filing too.
+    primary, grace = _er_8k_candidate_pools(filing, other_8ks)
 
     def _candidate_key(er: dict) -> tuple[int, tuple[int, int]]:
         rank = _release_name_rank(er.get("primary_doc") or "")
@@ -650,7 +700,9 @@ def _match_8k_non202_fallback(
             rank if rank is not None else (99, 99),
         )
 
-    candidates.sort(key=_candidate_key)
+    candidates = sorted(primary, key=_candidate_key) + sorted(
+        grace, key=_candidate_key
+    )
     for cand in candidates:
         url = edgar_client.filing_index_url(cand.get("src_cik") or cik, cand["accession"])
         try:
