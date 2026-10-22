@@ -2550,7 +2550,9 @@ def test_bare_masthead_name_kept_when_no_headline_follows() -> None:
     )
     assert hl is not None
     # No residue block + no later headline: the name stays (honest fallback
-    # for docs with no clear headline, e.g. UAL).
+    # for docs with no clear headline, e.g. BRK.B — batch 109: UAL's releases
+    # do have real headlines; the stored company-name headlines were stale
+    # extractions, repaired live).
     assert hl.split("\n\n")[0] == "United Airlines"
 
 
@@ -2836,3 +2838,110 @@ def test_all_caps_name_before_all_caps_headline_skipped() -> None:
 
     assert _looks_like_headline("SECOND QUARTER 2026 EARNINGS REPORT")
     assert not _looks_like_headline("Xcel Energy")
+
+
+def test_department_line_in_masthead_not_headline() -> None:
+    # Batch 109: PACCAR heads the release with "PACCAR Inc" / "Public Affairs
+    # Department" / PO box / city / "Contact:" block before the real headline.
+    # The department line is masthead residue, not the headline — and the
+    # masthead skip must stop at the contact header so the contact block is
+    # skipped by the contact-header branch (not stranded as headline
+    # candidates).
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Exhibit 99.1",
+            "PACCAR Inc",
+            "Public Affairs Department",
+            "P.O. Box 1518",
+            "Bellevue, WA 98009",
+            "Contact:",
+            "Ken Hastings",
+            "(425) 468-7530",
+            "ken.hastings@paccar.com",
+            "FOR IMMEDIATE RELEASE",
+            "PACCAR Increases Quarterly Revenues and Profits",
+            "July 28, 2026, Bellevue, Washington -- PACCAR achieved very good "
+            "revenues and increased net income in the second quarter of 2026.",
+            "Financial Highlights - Second Quarter 2026",
+            "• Consolidated net sales and revenues of $7.55 billion.",
+            "• Consolidated net income of $752.0 million.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "PACCAR Increases Quarterly Revenues and Profits"
+
+
+def test_masthead_block_skip_stops_at_contact_header() -> None:
+    # Batch 109: _skip_masthead_block consumes the address block but stops at
+    # the contact header — the contact block belongs to the headline pass's
+    # contact-header branch.
+    from src.tickerlens.data.filings import _skip_masthead_block
+
+    lines = [
+        "Public Affairs Department",
+        "P.O. Box 1518",
+        "Bellevue, WA 98009",
+        "Contact:",
+        "Ken Hastings",
+        "(425) 468-7530",
+        "PACCAR Increases Quarterly Revenues and Profits",
+    ]
+    assert _skip_masthead_block(lines, 0) == 3
+
+
+def test_department_residue_is_narrow() -> None:
+    # Batch 109: the department rule is end-anchored and word-count-guarded —
+    # a real headline mentioning a department is never masthead residue.
+    from src.tickerlens.data.filings import _looks_like_masthead_residue
+
+    assert _looks_like_masthead_residue("Public Affairs Department")
+    assert _looks_like_masthead_residue("Investor Relations Dept.")
+    assert not _looks_like_masthead_residue(
+        "Justice Department announces new antitrust rules today"
+    )
+    assert not _looks_like_masthead_residue("Department of Energy grants awarded")
+
+
+def test_semicolon_tail_headline_joins() -> None:
+    # Batch 109: a headline ending with a semicolon is a wrapped fragment
+    # (RSG: "Republic Services, Inc. Reports Fourth Quarter and Full-Year
+    # 2024 Results;" / "Provides 2025 Full-Year Financial Guidance"). A
+    # complete headline never ends with a semicolon.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Republic Services, Inc. Reports Fourth Quarter and Full-Year 2024 Results;",
+        "Provides 2025 Full-Year Financial Guidance",
+        "● Exceeded full-year guidance.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == (
+        "Republic Services, Inc. Reports Fourth Quarter and Full-Year 2024 Results; "
+        "Provides 2025 Full-Year Financial Guidance"
+    )
+    assert next_i == 2
+
+
+def test_company_name_with_ticker_parenthetical_not_headline() -> None:
+    # Batch 109: Citi heads every release with "Citigroup Inc. (NYSE: C)" +
+    # date before the real headline ("FIRST QUARTER 2024 RESULTS AND KEY
+    # METRICS"). The ticker parenthetical does not make it a headline — the
+    # company-name masthead rule still applies.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1",
+            "Exhibit 99.1",
+            "For Immediate Release",
+            "Citigroup Inc. (NYSE: C)",
+            "April 12, 2024",
+            "FIRST QUARTER 2024 RESULTS AND KEY METRICS",
+            "CEO COMMENTARY",
+            "Citi CEO Jane Fraser said, \"We had a good quarter with filler "
+            "text to pass the minimum length requirement for extraction here.\"",
+            "New York, April 12, 2024 -- Citigroup Inc. today reported net "
+            "income for the first quarter 2024 with additional filler text.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "FIRST QUARTER 2024 RESULTS AND KEY METRICS"

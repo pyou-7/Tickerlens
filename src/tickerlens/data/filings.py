@@ -417,9 +417,13 @@ _PHONE_RE = re.compile(r"\+?\d[\d.\-\s()]{7,}\d")
 # keeps the company name from becoming the headline. Anchored at line end and
 # length-guarded at the call site so a real headline that happens to mention a
 # company is never swallowed.
+#
+# Batch 109: an optional ticker parenthetical may follow the suffix
+# ("Citigroup Inc. (NYSE: C)" — Citi heads every release with it). It is still
+# a masthead name line, not a headline.
 _COMPANY_NAME_LINE_RE = re.compile(
     r",?\s*\b(Inc\.?|Incorporated|Corporation|Corp\.?|Co\.?|Company|Ltd\.?|Limited|"
-    r"LLC|PLC|Holdings|Group)\s*\.?$",
+    r"LLC|PLC|Holdings|Group)\s*\.?(\s*\([A-Za-z]+:\s*[A-Za-z.]+\))?\s*$",
     re.IGNORECASE,
 )
 
@@ -450,6 +454,14 @@ def _looks_like_masthead_residue(ln: str) -> bool:
     words = ln.split()
     if len(words) == 1:
         return True  # country line ("Switzerland")
+    if len(words) <= 4 and re.search(
+        r"\b(department|dept\.?)\s*$", ln, re.IGNORECASE
+    ):
+        return True  # department line ("Public Affairs Department" — PACCAR).
+        # Batch 109: a department line in the masthead address block is never
+        # a headline. End-anchored and word-count-guarded so a real headline
+        # mentioning a department is never swallowed; this helper only runs
+        # in masthead-skip contexts.
     if len(words) <= 4 and any(c.isdigit() for c in ln):
         return True  # street / city-postal line ("Bärengasse 32")
     return False
@@ -470,9 +482,21 @@ def _skip_masthead_block(lines: list[str], i: int) -> int:
     Bounded at 6 residue lines so a misfire can never swallow the release
     body; stops at the first non-residue line, which the headline pass then
     evaluates normally.
+
+    Batch 109: stops at a contact-header line instead of consuming it (PACCAR:
+    "PACCAR Inc" / "Public Affairs Department" / address / "Contact:" / name
+    / phone / email before the real headline). The contact block is handled by
+    the headline pass's contact-header branch, which knows how to skip its
+    detail lines; the masthead skip consuming the header stranded the detail
+    lines as headline candidates.
     """
     j = i
-    while j < len(lines) and j - i < 6 and _looks_like_masthead_residue(lines[j]):
+    while (
+        j < len(lines)
+        and j - i < 6
+        and not _CONTACT_HEADER_RE.match(lines[j])
+        and _looks_like_masthead_residue(lines[j])
+    ):
         j += 1
     return j
 
@@ -584,7 +608,12 @@ def _skip_toc(lines: list[str], i: int) -> int:
 # two lines, breaking after a conjunction or preposition ("...Results and" /
 # "Increases Guidance ..."). Joining the next line recovers the full headline.
 _HEADLINE_WRAP_TAIL_RE = re.compile(
-    r"(\b(and|or|of|for|to|with|in|on|at|the|a|an)\b|[&–—]|,\s*)\s*$", re.IGNORECASE
+    # Batch 109: a trailing semicolon joins too (RSG: "Republic Services,
+    # Inc. Reports Fourth Quarter and Full-Year 2024 Results;" / "Provides
+    # 2025 Full-Year Financial Guidance"). A complete headline never ends
+    # with a semicolon.
+    r"(\b(and|or|of|for|to|with|in|on|at|the|a|an)\b|[&–—]|[,;]\s*)\s*$",
+    re.IGNORECASE,
 )
 
 # A headline that ends with a headline verb ("Freeport Reports",
