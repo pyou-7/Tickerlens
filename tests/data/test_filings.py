@@ -3284,3 +3284,231 @@ def test_dateline_and_quarter_label_regexes_stay_narrow() -> None:
     assert not _QUARTER_EARNINGS_LABEL_RE.match(
         "Acme Schedules First Quarter Earnings Release"
     )
+
+
+# ── Batch 115: residual junk-headline sweep ───────────────────────────────────
+# A DB-wide scan found 40 quarters whose stored headline was junk the earlier
+# batches never classified: lone-punctuation lines (Truist's backtick,
+# Welltower's quote, Ross's underscore rule, Chevron's backslash),
+# image-filename tokens (Verizon's 'VZQTR20FIN'), page-header artifacts
+# (Airbnb's '1 §:)airbnb'), exchange:ticker masthead lines (Travelers'
+# 'NYSE: TRV'), section labels ('Summary Points:'), and wrapped-headline
+# fragments eaten by the contact skip (Sempra's 'Sempra Reports Third-Quarter'
+# / '2025 Results'). The fixes: a never-headline line guard, a wrapped-
+# fragment stop in _skip_contact_block, hyphenated ordinal-quarter tails with
+# year-led continuations, and bullet-marker stripping on picked headlines.
+
+
+def test_never_headline_lone_punctuation_skipped() -> None:
+    # Truist heads the exhibit with a lone backtick line (an HTML artifact)
+    # before "News Release". A line with no alphanumeric characters is never
+    # a headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "2", "ex991-pr2q26.htm", "EX-99.1",
+            "`",
+            "News Release",
+            "Truist reports second quarter 2026 results",
+            "Net income available to common shareholders of $1.5 billion, and more results follow here.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Truist reports second quarter 2026 results"
+
+
+def test_never_headline_underscore_rule_and_contact_titles_skipped() -> None:
+    # Ross Stores: an underscore rule, then a contact block whose title-only
+    # detail lines ("Executive Vice President, ...") are headline-shaped. The
+    # old code misread the rule as a bare masthead name and jumped the pick
+    # onto the title line.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "_______________________________________________________________",
+            "FOR IMMEDIATE RELEASE",
+            "Contacts: William W. Sheehan II Connie Kao",
+            "Executive Vice President, Senior Vice President, Investor Relations",
+            "Chief Financial Officer (925) 965-4668",
+            "(925) 965-4150 connie.kao@ros.com",
+            "Ross Stores Reports Robust First Quarter Sales and Earnings Results,",
+            "Significantly Exceeding Guidance",
+            "Dublin, California, May 21, 2026 -- Ross Stores, Inc. (Nasdaq: ROST) today reported results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Ross Stores Reports Robust First Quarter Sales and Earnings Results, "
+        "Significantly Exceeding Guidance"
+    )
+    assert "Executive Vice President" not in hl
+
+
+def test_never_headline_image_filename_token_skipped() -> None:
+    # Verizon's exhibit opens with the 'VZQTR20FIN' image filename token. The
+    # old code misread it as a bare masthead name and jumped the pick onto the
+    # contact detail line ("July 24, 2026 Katie Magnotta").
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "Exhibit 99",
+            "VZQTR20FIN",
+            "News Release",
+            "FOR IMMEDIATE RELEASE",
+            "Media contacts:",
+            "July 24, 2026 Katie Magnotta",
+            "201-602-9235",
+            "katie.magnotta@verizon.com",
+            "Verizon Delivers Record 2Q26 Results as Strategic Transformation Ignites Accelerated Growth",
+            "NEW YORK, NY -- Verizon Communications Inc. (NYSE: VZ) today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Verizon Delivers Record 2Q26 Results as Strategic Transformation Ignites Accelerated Growth"
+    )
+    assert "Katie Magnotta" not in hl.split("\n\n")[0]
+
+
+def test_never_headline_exchange_ticker_skipped() -> None:
+    # Travelers heads the release with a company-name masthead and address
+    # block ending in "NYSE: TRV". The old code stranded the ticker line as
+    # the headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "The Travelers Companies, Inc.",
+            "485 Lexington Avenue",
+            "New York, NY 10017-2630",
+            "www.travelers.com",
+            "NYSE: TRV",
+            "Travelers Reports Excellent Third Quarter and Year-to-Date Results",
+            "New York, October 17, 2024 -- The Travelers Companies, Inc. today reported results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Travelers Reports Excellent Third Quarter and Year-to-Date Results"
+
+
+def test_never_headline_section_label_skipped_bullet_headline() -> None:
+    # Skydance opens with a date and a "Summary Points:" section label, then
+    # bullets. The label is never a headline; the lead bullet becomes the
+    # headline with its marker stripped.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99", "Exhibit 99",
+            "May 4, 2026",
+            "Summary Points:",
+            "•Q1 revenue of $7.3 billion grew 2% year-over-year, with strength across segments.",
+            "•DTC revenue grew 11% year-over-year to $2.4 billion for the quarter.",
+            "Fellow shareholders, it has been a busy and productive start to the year.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "Q1 revenue of $7.3 billion grew 2% year-over-year, with strength across segments."
+    )
+    assert "Summary Points" not in hl
+
+
+def test_never_headline_page_header_junk_skipped() -> None:
+    # Airbnb's exhibit opens with a "1 §:)airbnb" page-header logo artifact.
+    # A page number glued to a junk token is never a headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "1 §:)airbnb",
+            "Q1 2026 Shareholder Letter Airbnb had a strong start to 2026 with revenue growth.",
+            "Revenue grew 18% year-over-year, driven by strong demand and continued pricing strength.",
+        )
+    )
+    assert hl is not None
+    assert "§:)airbnb" not in hl
+    assert hl.split("\n\n")[0].startswith("Q1 2026 Shareholder Letter")
+
+
+def test_contact_block_keeps_wrapped_headline_fragment() -> None:
+    # Sempra's contact block is followed by the wrapped headline "Sempra
+    # Reports Third-Quarter" / "2025 Results". The old _skip_contact_block ate
+    # the 3-word fragment as a detail line, leaving "2025 Results" as the
+    # headline.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "NEWS RELEASE",
+            "Media Contact: Alison Estrada",
+            "Sempra",
+            "(877) 340-8875",
+            "media@sempra.com",
+            "Financial Contact: Jenell McKay",
+            "Sempra",
+            "(877) 736-7727",
+            "investor@sempra.com",
+            "Sempra Reports Third-Quarter",
+            "2025 Results",
+            "•Advances 45% Equity Sale at Sempra Infrastructure Partners",
+            "SAN DIEGO, Nov. 5, 2025 -- Sempra (NYSE: SRE) today reported third-quarter results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Sempra Reports Third-Quarter 2025 Results"
+
+
+def test_hyphenated_quarter_tail_joins_year_led_continuation() -> None:
+    # "Sempra Reports Third-Quarter" / "2025 Results": the hyphenated
+    # ordinal-quarter tail is the same fragment shape as the batch-108
+    # bare-ordinal case, and a year-led continuation completes it.
+    from src.tickerlens.data.filings import _join_wrapped_headline
+
+    lines = [
+        "Sempra Reports Third-Quarter",
+        "2025 Results",
+        "SAN DIEGO -- the lede starts here with a period.",
+    ]
+    headline, next_i = _join_wrapped_headline(lines, 0)
+    assert headline == "Sempra Reports Third-Quarter 2025 Results"
+    assert next_i == 2
+
+
+def test_lead_bullet_marker_stripped_from_headline() -> None:
+    # When the picked headline is a lead bullet (Palantir's "• U.S. revenue
+    # grew ..."), the bullet marker is stripped — it reads as the headline,
+    # not as a list item.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99.1", "Exhibit 99.1",
+            "May 5, 2025",
+            "• U.S. revenue grew 44% year-over-year and 14% quarter-over-quarter.",
+            "• International revenue grew 15% year-over-year.",
+            "DENVER -- Palantir Technologies Inc. today announced results.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "U.S. revenue grew 44% year-over-year and 14% quarter-over-quarter."
+
+
+def test_never_headline_narrowness() -> None:
+    # The never-headline patterns must not swallow real content: short
+    # tickers ("3M"), year-led phrases ("2026 Outlook"), and ordinary
+    # company-name lines are not filename tokens, page headers, or labels.
+    from src.tickerlens.data.filings import _NEVER_HEADLINE_RE
+
+    for good in [
+        "3M",
+        "2026 Outlook",
+        "The Travelers Companies, Inc.",
+        "Q2 2026",
+        "Amphenol",
+        "Acme Reports Results",
+    ]:
+        assert not _NEVER_HEADLINE_RE.match(good), good
+    for bad in [
+        "`",
+        "'",
+        "___",
+        "\\",
+        "VZQTR20FIN",
+        "1 §:)airbnb",
+        "NYSE: TRV",
+        "Summary Points:",
+        "Highlights:",
+    ]:
+        assert _NEVER_HEADLINE_RE.match(bad), bad

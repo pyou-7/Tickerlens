@@ -515,6 +515,10 @@ def _looks_like_masthead_residue(ln: str) -> bool:
     words = ln.split()
     if len(words) == 1:
         return True  # country line ("Switzerland")
+    if re.match(r"^(NYSE|Nasdaq|AMEX)\s*:\s*[A-Z][A-Z.\-]{0,6}$", ln, re.IGNORECASE):
+        return True  # exchange:ticker masthead line ("NYSE: TRV" — Travelers).
+        # Batch 115: never a headline; lets _skip_masthead_block consume it
+        # instead of stranding it as a headline candidate.
     if len(words) <= 4 and re.search(
         r"\b(department|dept\.?)\s*$", ln, re.IGNORECASE
     ):
@@ -562,6 +566,37 @@ def _skip_masthead_block(lines: list[str], i: int) -> int:
     return j
 
 
+def _looks_like_wrapped_headline_start(ln: str, nxt: str) -> bool:
+    """True when *ln* looks like the first line of a wrapped release headline.
+
+    Sempra heads its release "Sempra Reports Third-Quarter" / "2025 Results":
+    the fragment is short (3 words / 28 chars), so _skip_contact_block eats it
+    as a contact detail line and "2025 Results" becomes the headline. A
+    contact detail line never ends on a headline wrap/verb/ordinal tail with a
+    plausible continuation on the next line — a real headline fragment does.
+    Batch 115.
+    """
+    if not (
+        _HEADLINE_WRAP_TAIL_RE.search(ln)
+        or _HEADLINE_VERB_TAIL_RE.search(ln)
+        or _HEADLINE_ORDINAL_TAIL_RE.search(ln)
+    ):
+        return False
+    if not nxt or len(nxt) > 140 or not any(c.isalpha() for c in nxt):
+        return False
+    if nxt.rstrip().endswith((".", "!", "?", ":")):
+        return False
+    if (
+        _ADMIN_LINE_RE.match(nxt)
+        or _BOILERPLATE_RE.match(nxt)
+        or _CONTACT_HEADER_RE.match(nxt)
+        or _CONTACT_LINE_RE.search(nxt)
+        or _PHONE_RE.search(nxt)
+    ):
+        return False
+    return True
+
+
 def _skip_contact_block(lines: list[str], i: int) -> int:
     """Return the index of the first line after the contact block whose header
     is at index *i*.
@@ -576,6 +611,12 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
     j = i + 1
     while j < len(lines) and j - i <= 8:
         ln = lines[j]
+        nxt = lines[j + 1] if j + 1 < len(lines) else ""
+        if _looks_like_wrapped_headline_start(ln, nxt):
+            # Wrapped-headline fragment, not contact detail (Sempra's "Sempra
+            # Reports Third-Quarter" / "2025 Results"). Stop so the headline
+            # pass picks it up and joins the continuation. Batch 115.
+            break
         words = ln.split()
         looks_like_content = (
             len(words) >= 4
@@ -713,8 +754,13 @@ _DATE_LINE_RE = re.compile(
 # is a wrapped-headline fragment, not a complete headline — the real headline
 # continues on the next line ("Quarter 2025 Highlights", "Year 2025 Results").
 # A complete release headline never ends on a bare ordinal. Batch 108.
+#
+# Batch 115: the hyphenated ordinal-quarter form is the same fragment shape
+# (Sempra's "Sempra Reports Third-Quarter" / "2025 Results"). Without it the
+# fragment is eaten as a contact detail line and "2025 Results" becomes the
+# headline.
 _HEADLINE_ORDINAL_TAIL_RE = re.compile(
-    r"\b(first|second|third|fourth|full)\s*$", re.IGNORECASE
+    r"\b(first|second|third|fourth|full)([-\s]+(quarter|year))?\s*$", re.IGNORECASE
 )
 
 # A headline ending on "{ordinal} Quarter" / "Full Year" with a bare 4-digit
@@ -722,10 +768,16 @@ _HEADLINE_ORDINAL_TAIL_RE = re.compile(
 # "2026"): the year completes the headline. The year is never a lede start,
 # so the digit-lead continuation guard is bypassed for this exact shape only.
 # Batch 108.
+#
+# Batch 115: the quarter tail may be hyphenated ("Sempra Reports
+# Third-Quarter"), and the continuation may be year-led rather than a bare
+# year ("2025 Results") — the period label still completes the fragment, and
+# a complete headline never ends on "{ordinal} Quarter".
 _HEADLINE_QUARTER_TAIL_RE = re.compile(
-    r"\b((first|second|third|fourth)\s+quarter|full\s+year)\s*$", re.IGNORECASE
+    r"\b((first|second|third|fourth)[-\s]+quarter|full[-\s]+year)\s*$", re.IGNORECASE
 )
 _HEADLINE_BARE_YEAR_RE = re.compile(r"^20\d{2}$")
+_HEADLINE_YEAR_LEAD_RE = re.compile(r"^20\d{2}\b")
 
 
 # A page-image exhibit "line" that is really a whole page starting with a run
@@ -759,6 +811,29 @@ def _wrapped_spaced_label_skip(lines: list[str], i: int) -> int:
         if joined in ("earningsrelease", "newsrelease", "pressrelease"):
             return 2
     return 0
+
+
+# Lines that are never a release headline (batch 115). Each shape was found
+# as a stored headline or as a bare-masthead-name misfire that jumped the
+# pick onto a contact-detail line:
+# - no alphanumeric characters at all: Truist's lone backtick, Welltower's
+#   lone quote, Ross's underscore rule, Chevron's lone backslash;
+# - a single alphanumeric token carrying a digit, 5+ chars: Verizon's
+#   'VZQTR20FIN' image filename (a bare masthead name is a word, not a
+#   token; short tickers like '3M' still pass);
+# - a page number glued to a single junk token: Airbnb's '1 §:)airbnb'
+#   page-header logo artifact (the token must carry a non-word character,
+#   so a real '2026 Outlook'-shaped line never matches);
+# - an exchange:ticker masthead line: Travelers' 'NYSE: TRV';
+# - a 1-4 word section label ending in a colon: Skydance's 'Summary Points:'.
+_NEVER_HEADLINE_RE = re.compile(
+    r"^[^A-Za-z0-9]*$"
+    r"|^(?=[A-Za-z0-9]{5,}$)[A-Za-z0-9]*\d[A-Za-z0-9]*$"
+    r"|^\d{1,3}\s+\S*[^\w\s]\S*$"
+    r"|^(NYSE|Nasdaq|AMEX)\s*:\s*[A-Z][A-Z.\-]{0,6}$"
+    r"|^\S+(?:\s+\S+){0,3}:\s*$",
+    re.IGNORECASE,
+)
 
 
 def _looks_like_headline(ln: str) -> bool:
@@ -827,6 +902,9 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        Year" and the next line is a bare 4-digit year ("Intercontinental
        Exchange Reports Second Quarter" / "2026"). The year is never a lede
        start, so the digit-lead guard is bypassed for this exact shape only.
+       (Batch 115) The quarter tail may be hyphenated ("Sempra Reports
+       Third-Quarter") and the continuation year-led ("2025 Results") — same
+       fragment shape, same bypass.
     """
     headline = lines[i]
     j = i + 1
@@ -834,7 +912,7 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
     while joins < 3 and j < len(lines):
         year_join = bool(
             _HEADLINE_QUARTER_TAIL_RE.search(headline)
-            and _HEADLINE_BARE_YEAR_RE.match(lines[j])
+            and _HEADLINE_YEAR_LEAD_RE.match(lines[j])
         )
         if not (
             _HEADLINE_WRAP_TAIL_RE.search(headline)
@@ -1234,6 +1312,14 @@ def extract_press_release_highlights(
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             i += 1
             continue
+        if _NEVER_HEADLINE_RE.match(ln):
+            # Never a headline (batch 115): lone punctuation, image-filename
+            # tokens, page-header junk, exchange:ticker lines, section
+            # labels. Checked before the masthead-name skip — such lines were
+            # misread as bare masthead names, jumping the pick onto a
+            # contact-detail line (Ross, Welltower, Verizon).
+            i += 1
+            continue
         wrapped_label = _wrapped_spaced_label_skip(lines, i)
         if wrapped_label:
             # Wrapped spaced-letter document label (Elevance Health Q3 2025:
@@ -1428,6 +1514,11 @@ def extract_press_release_highlights(
     # with a comma. Batch 106.
     if headline:
         headline = headline.rstrip().removesuffix(",").rstrip()
+        # A picked headline that is really a lead bullet (Palantir's
+        # "• U.S. revenue grew ...", Skydance's summary points): strip the
+        # bullet marker — it reads as the headline, not as a list item.
+        # Batch 115.
+        headline = re.sub(r"^[•\-*]\s*", "", headline).strip()
     result = f"{headline}\n\n{body}".strip() if headline else body.strip()
     if len(result) < 200:
         logger.info("Press-release highlights too short after extraction")
