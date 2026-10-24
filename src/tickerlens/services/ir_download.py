@@ -757,7 +757,12 @@ def _release_name_rank(name: str) -> tuple[int, int] | None:
     # ma06302026-exx991xearnings.htm; EOG's exh99-1...htm), a bare "991"
     # exhibit suffix (AMD's q22026991.htm = Q2 2026 99.1), "991" as an
     # infix before a quarter marker or separator (Realty Income's
-    # o-991q22026.htm = 99.1, Q2 2026), or "991" leading a letter run
+    # o-991q22026.htm = 99.1, Q2 2026), "991" before a digit-quarter token
+    # (Cincinnati Financial's exhibit9911q25.htm = 99.1, Q1 2025 — the
+    # quarter digit precedes the q marker for Q1–Q3, while Q4 uses the
+    # plain q marker, exhibit991q424.htm; the 99.2 supplements mirror it
+    # as exhibit9921q25.htm and never match since they carry 992, not
+    # 991), or "991" leading a letter run
     # (United Health's a991unherq42025.htm — the 99.1 release; the
     # lookahead's digit exclusion keeps doc9912final.htm unmatched, and
     # 99.2 supplements like q42025er992.htm deliberately never match).
@@ -768,7 +773,7 @@ def _release_name_rank(name: str) -> tuple[int, int] | None:
     # cdns07222024ex9901.htm); "02"/"03" still fail the guard. The guard
     # allows the "." of the file extension (".htm") but not ".2"/".3".
     if re.search(r"ex(?:hibit|h)?x?[^a-z0-9]?99(\.1|1|01)?(?!\d|\.\d)", name, re.IGNORECASE) or re.search(
-        r"991(?=q\d|[-_]|$|[a-z])", stem, re.IGNORECASE
+        r"991(?=q\d|[-_]|$|[a-z]|[1-4]q\d)", stem, re.IGNORECASE
     ):
         base = 0
     # Press-release naming (tier 1):

@@ -239,6 +239,26 @@ def test_991_inside_longer_number_not_matched():
     assert _pick_release_doc(links) is None
 
 
+def test_cinf_digit_quarter_991_token():
+    # Cincinnati Financial names the 99.1 exhibit exhibit9911q25.htm (99.1
+    # + digit-quarter token 1q25) for Q1–Q3, and exhibit991q424.htm for
+    # Q4; the 99.2 supplements (exhibit9921q25.htm) must lose.
+    links = [
+        "cinf-20250428.htm",
+        "exhibit9921q25.htm",
+        "exhibit9911q25.htm",
+        "R1.htm",
+    ]
+    assert _pick_release_doc(links) == "exhibit9911q25.htm"
+    links = [
+        "cinf-20250728.htm",
+        "exhibit9912q25.htm",
+        "exhibit9922q25.htm",
+        "R1.htm",
+    ]
+    assert _pick_release_doc(links) == "exhibit9912q25.htm"
+
+
 def test_amgen_truncated_earningsrelea():
     # Amgen truncates differently: amgn-20260630earningsrelea.htm.
     links = [
