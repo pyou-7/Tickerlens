@@ -344,7 +344,20 @@ def _quarter_label_for_report_date(
     stored row; None when labeling is unsafe.
     """
     if newest_end is not None and newest_label is not None:
-        walked = _walk_label(newest_label, _quarter_steps(newest_end, report_date))
+        # Batch 117: _quarter_steps is forward-only (max(1, ...) floor, built
+        # for the xbrl sequence repair which always passes earlier < later
+        # and negates explicitly). A middle-gap filing predates the newest
+        # stored row — DOW/URI landed Q3 FY2026 while Q2 was still missing,
+        # and the floored +1 step walked Q3 forward to "Q4" instead of back
+        # to Q2. Sign the steps here, mirroring the repair path's convention;
+        # _walk_label already walks predecessors for negative steps.
+        if report_date == newest_end:
+            return f"{newest_label[1]} FY{newest_label[0]}"
+        if report_date > newest_end:
+            steps = _quarter_steps(newest_end, report_date)
+        else:
+            steps = -_quarter_steps(report_date, newest_end)
+        walked = _walk_label(newest_label, steps)
         if walked is not None:
             return f"{walked[1]} FY{walked[0]}"
     if fiscal_year_end and len(fiscal_year_end) == 4 and fiscal_year_end.isdigit():
