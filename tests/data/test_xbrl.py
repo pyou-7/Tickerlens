@@ -3795,6 +3795,9 @@ def _oxy_discontinued_facts(interim_val: float) -> dict:
 
 
 def _oxy_revenue_facts() -> dict:
+    """Live OXY shape: 2025 quarters plus the 2025 10-K's restatement of
+    FY2024 Revenues ($26,725M → $22,019M, OxyChem's 2024 revenues removed)
+    — the re-presentation proof the batch-120 guard requires."""
     return {
         "Revenues": {
             "units": {
@@ -3810,6 +3813,14 @@ def _oxy_revenue_facts() -> dict:
                         "2025-01-01", "2025-12-31", 21_593_000_000, 2025, "FY",
                         filed="2026-02-18",
                     ),
+                    fact(
+                        "2024-01-01", "2024-12-31", 26_725_000_000, 2024, "FY",
+                        filed="2025-02-18",
+                    ),
+                    fact(
+                        "2024-01-01", "2024-12-31", 22_019_000_000, 2024, "FY",
+                        filed="2026-02-18",
+                    ),
                 ]
             }
         }
@@ -3817,12 +3828,17 @@ def _oxy_revenue_facts() -> dict:
 
 
 def test_discontinued_basis_break_detected() -> None:
-    """Batch 85 (live OXY case): 9M discontinued-ops income tagged 0 in the
-    10-Q but nonzero in the 10-K for the same fiscal year — the FY start is
-    a basis break."""
+    """Batch 85 (live OXY case) + batch 120: 9M discontinued-ops income
+    tagged 0 in the 10-Q but nonzero in the 10-K for the same fiscal
+    year, AND the 10-K restates a prior-year annual fact — the FY start
+    is a basis break."""
     from tickerlens.data.xbrl import _discontinued_basis_break_starts
 
-    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(0)}}
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_oxy_discontinued_facts(0), **_oxy_revenue_facts()}
+        }
+    }
     assert _discontinued_basis_break_starts(companyfacts) == {dt.date(2025, 1, 1)}
 
 
@@ -3855,7 +3871,8 @@ def test_discontinued_basis_break_skips_fabricated_q4() -> None:
 
 def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
     """The cash-flow un-cumulation (year − 9M) has the same exposure and
-    the same guard."""
+    the same guard. The fixture mirrors the OXY shape including a
+    prior-year OpCF restatement by the same 10-K."""
     us_gaap = {
         "NetCashProvidedByUsedInOperatingActivities": {
             "units": {
@@ -3863,6 +3880,10 @@ def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
                     fact("2025-01-01", "2025-09-30", 9_000_000_000, 2025, "Q3",
                          filed="2025-11-10"),
                     fact("2025-01-01", "2025-12-31", 10_000_000_000, 2025, "FY",
+                         filed="2026-02-18"),
+                    fact("2024-01-01", "2024-12-31", 11_000_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 10_500_000_000, 2024, "FY",
                          filed="2026-02-18"),
                 ]
             }
@@ -3873,6 +3894,88 @@ def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
         {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
     )
     assert all(item.fp != "Q4" for item in series)
+
+
+def _vrsk_discontinued_facts() -> dict:
+    """Mirror the live VRSK case: the Energy business (discontinued since
+    2022) tags 9M 2024 discontinued-ops income 0 in the 10-Q and a $6.8M
+    residual gain in the 2024 10-K, while the FY2023 comparatives are
+    untouched across filings — no re-presentation, so no basis break."""
+    return {
+        "IncomeLossFromDiscontinuedOperationsNetOfTax": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 0, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-12-31", 6_800_000, 2024, "FY",
+                         filed="2025-02-26"),
+                    fact("2023-01-01", "2023-12-31", -154_000_000, 2023, "FY",
+                         filed="2024-02-21"),
+                    fact("2023-01-01", "2023-12-31", -154_000_000, 2023, "FY",
+                         filed="2025-02-26"),
+                ]
+            }
+        }
+    }
+
+
+def _vrsk_revenue_facts() -> dict:
+    """Live VRSK revenue facts: standalone quarters plus the 9M and FY
+    facts, with FY2023 comparatives identical across the 2023/2024 10-Ks."""
+    return {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-03-31", 704_000_000, 2024, "Q1",
+                         filed="2024-05-01"),
+                    fact("2024-04-01", "2024-06-30", 716_800_000, 2024, "Q2",
+                         filed="2024-07-31"),
+                    fact("2024-07-01", "2024-09-30", 725_300_000, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-06-30", 1_420_800_000, 2024, "Q2",
+                         filed="2024-07-31"),
+                    fact("2024-01-01", "2024-09-30", 2_146_100_000, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-12-31", 2_881_700_000, 2024, "FY",
+                         filed="2025-02-26"),
+                    fact("2023-01-01", "2023-12-31", 2_681_400_000, 2023, "FY",
+                         filed="2024-02-21"),
+                    fact("2023-01-01", "2023-12-31", 2_681_400_000, 2023, "FY",
+                         filed="2025-02-26"),
+                ]
+            }
+        }
+    }
+
+
+def test_discontinued_basis_break_ignores_residual_gain_without_restatement() -> None:
+    """Batch 120 (live VRSK case): the 9M-zero → FY-nonzero discontinued
+    pattern alone is not a break — without a prior-year restatement by
+    the same 10-K, the item is a residual gain on an already-discontinued
+    business, not a reclassification."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_vrsk_discontinued_facts(), **_vrsk_revenue_facts()}
+        }
+    }
+    assert _discontinued_basis_break_starts(companyfacts) == set()
+
+
+def test_discontinued_basis_break_derives_vrsk_q4() -> None:
+    """End-to-end batch-120 regression: VRSK's Q4 2024 revenue derives as
+    FY − 9M = $735.6M, matching the $736M the Q4 2024 earnings release
+    reported — the quarter the old guard deleted."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_vrsk_discontinued_facts(), **_vrsk_revenue_facts()}
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(735_600_000)
+    assert by_end[dt.date(2024, 9, 30)] == 725_300_000
 
 
 def test_repair_stale_fy_wraps_mtd_shape() -> None:

@@ -399,6 +399,72 @@ def _has_discontinued_ops_facts(companyfacts: dict[str, Any]) -> bool:
     return False
 
 
+# Tags consulted for the batch-120 restatement check: a 10-K that
+# re-presents history restates a prior-year annual fact under one of
+# these primary income-statement tags (or under a discontinued-ops tag
+# itself). Revenue tags cover both the generic chain and the
+# contract-revenue chain; the list is deliberately primary-only — a
+# restatement of an obscure tag is not evidence the income statement
+# was re-presented.
+_RESTATEMENT_CHECK_TAGS: tuple[str, ...] = (
+    *_DISCONTINUED_OPS_TAGS,
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "SalesRevenueNet",
+    "SalesRevenueGoodsNet",
+    "NetIncomeLoss",
+    "EarningsPerShareBasic",
+    "EarningsPerShareDiluted",
+    "NetCashProvidedByUsedInOperatingActivities",
+)
+
+
+def _tenk_restates_prior_year(
+    companyfacts: dict[str, Any],
+    tenk_filed: dt.date,
+    break_start: dt.date,
+) -> bool:
+    """True when the 10-K filed on ``tenk_filed`` restates a prior-year
+    annual fact — i.e. it files a value for a (start, end) whose
+    earliest-filed 10-K value differs.
+
+    The comparison is per (tag, unit, start, end) so values are only
+    ever compared within one unit, and only facts filed by the 10-K in
+    question count as the restatement: a later 10-K's restatement says
+    nothing about the basis of the year under derivation. Prior-year
+    means any start earlier than the fiscal year being derived.
+    """
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    for tag in _RESTATEMENT_CHECK_TAGS:
+        for unit_items in us_gaap.get(tag, {}).get("units", {}).values():
+            facts: list[XbrlFact] = []
+            for item in unit_items:
+                if (
+                    item.get("form") != "10-K"
+                    or not item.get("end")
+                    or not item.get("start")
+                ):
+                    continue
+                try:
+                    facts.append(XbrlFact.model_validate(item))
+                except Exception:
+                    continue
+            grouped: dict[tuple[dt.date, dt.date], list[XbrlFact]] = {}
+            for f in facts:
+                if f.start is None:
+                    continue
+                if 340 <= (f.end - f.start).days <= 380:
+                    grouped.setdefault((f.start, f.end), []).append(f)
+            for (start, _end), group in grouped.items():
+                if start >= break_start:
+                    continue
+                earliest = min(group, key=lambda f: f.filed)
+                for f in group:
+                    if f.filed == tenk_filed and f.val != earliest.val:
+                        return True
+    return False
+
+
 def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.date]:
     """FY start dates whose 10-K reclassified a component to discontinued
     ops after the last 10-Q — the interim and annual income-statement facts
@@ -413,14 +479,35 @@ def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.dat
     produced a $1.75B Q4 against a real ~$5.4B. A missing Q4 is honest; a
     mixed-basis Q4 is a fabrication.
 
-    Fires only on the filer's own proof: a tagged 9M interim zero followed
-    by a tagged nonzero annual for the same fiscal year. Filers with
-    ongoing discontinued ops tag nonzero interims and never trip it;
-    filers that don't tag the interim line at all are left alone
-    (fail-safe: no worse than today). Deliberately no materiality floor —
-    the derivation is then wrong by exactly the discontinued component's
-    9M amount, which companyfacts cannot supply, so any proven break
+    Fires only on the filer's own proof, in two parts. (1) A tagged 9M
+    interim zero followed by a tagged nonzero annual for the same fiscal
+    year: filers with ongoing discontinued ops tag nonzero interims and
+    never trip it; filers that don't tag the interim line at all are left
+    alone (fail-safe: no worse than today). (2) Batch 120: the fiscal
+    year's own 10-K must also restate a prior-year annual fact under a
+    primary income-statement tag — the re-presentation that proves the
+    10-K re-presents history on a new basis. Part (1) alone over-fires:
+    Verisk's FY2024 shows the same 9M-zero → FY-$6.8M shape, but the
+    $6.8M is a residual gain on the Energy business discontinued in 2022
+    ("for all periods presented" since then), so the 2024 10-Q and 10-K
+    continuing revenues are on the SAME basis — and the Q4 2024 earnings
+    release reports revenues of $736M, exactly FY − 9M ($2,881.7M −
+    $2,146.1M = $735.6M). The 2024 10-K restated no prior-year annual fact
+    (FY2023 revenues, net income, EPS and OpCF are byte-identical across
+    the 2023/2024/2025 10-Ks), so Verisk's FY2024 is not a break and its
+    Q4 derives. OXY's 2025 10-K, by contrast, restated FY2024 Revenues
+    from $26,725M to $22,019M (OxyChem's 2024 revenues removed), so the
+    FY2025 break stands. Deliberately no materiality floor — the
+    derivation is then wrong by exactly the discontinued component's 9M
+    amount, which companyfacts cannot supply, so any proven break
     abstains.
+
+    Accepted residual risk: a component acquired and discontinued within
+    a single fiscal year leaves no prior-year comparative to restate, so
+    part (2) cannot catch it. That shape requires a same-year
+    acquire-and-dispose; every demonstrated reclassification (OXY) does
+    restate comparatives, and the fail-closed default is preserved for
+    all of those.
     """
     us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
     raw: list[XbrlFact] = []
@@ -451,7 +538,23 @@ def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.dat
                 and mf.val == 0
                 and mf.filed < af.filed
             ):
-                breaks.add(af.start)
+                # The fiscal year's own 10-K is the earliest 10-K to file
+                # an annual fact for this start (later 10-Ks file the same
+                # period only as a comparative). Its restatement of a
+                # prior-year annual fact is the re-presentation proof.
+                own_tenk_filed = min(
+                    f.filed
+                    for f in raw
+                    if f.form == "10-K"
+                    and f.start == af.start
+                    and f.start is not None
+                    and f.end is not None
+                    and 340 <= (f.end - f.start).days <= 380
+                )
+                if _tenk_restates_prior_year(
+                    companyfacts, own_tenk_filed, af.start
+                ):
+                    breaks.add(af.start)
                 break
     return breaks
 
