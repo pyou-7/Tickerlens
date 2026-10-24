@@ -4,12 +4,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tickerlens.models.database import create_tables, ensure_schema
 from tickerlens.routes import company
+from tickerlens.routes.company import resolve_renamed_ticker
 from tickerlens.services.search import get_search_entries, search_companies
 
 @asynccontextmanager
@@ -29,6 +30,34 @@ app.mount("/static", StaticFiles(directory=_BASE / "static"), name="static")
 templates = Jinja2Templates(directory=_BASE / "templates")
 
 app.include_router(company.router)
+
+
+@app.middleware("http")
+async def renamed_ticker_redirect(request: Request, call_next):
+    """Redirect retired symbols to their current ticker (batch 119).
+
+    A renamed symbol's SEC listing is gone, so /company/MMC can never
+    resolve — without this it 404s even though the company is in the DB
+    under MRSH. Only GET/HEAD are redirected: POST forms (watch/unwatch)
+    keep their own semantics, and a renamed ticker there still 404s
+    rather than silently acting on a different company. The full subpath
+    and query string are preserved, so /company/MMC/detail?granularity=
+    yearly lands on /company/MRSH/detail?granularity=yearly. 301 because
+    a ticker rename is permanent.
+    """
+    if request.method in ("GET", "HEAD"):
+        parts = request.url.path.strip("/").split("/")
+        if len(parts) >= 2 and parts[0] == "company":
+            new_ticker = resolve_renamed_ticker(parts[1])
+            if new_ticker:
+                rest = "/".join(parts[2:])
+                target = f"/company/{new_ticker}"
+                if rest:
+                    target += f"/{rest}"
+                if request.url.query:
+                    target += f"?{request.url.query}"
+                return RedirectResponse(url=target, status_code=301)
+    return await call_next(request)
 
 
 @app.exception_handler(404)

@@ -25,6 +25,23 @@ templates = Jinja2Templates(directory=Path(__file__).parent.parent / "templates"
 _svc = FinancialsService()
 
 
+# Curated renamed-symbol map (batch 119): old ticker -> current ticker.
+# Human-verified, never guessed (cf. the batch-58 DBA alias map and the
+# batch-98 CIK succession map): MMC -> MRSH was verified in batch 118 —
+# SEC company_tickers.json lists CIK 0000062709 as MRSH, and Marsh
+# adopted "Marsh" as its single brand in January 2026, retiring MMC.
+# main.py's renamed-ticker middleware redirects every /company/<old>...
+# GET to the canonical /company/<new>... URL (subpath + query preserved).
+TICKER_RENAMES: dict[str, str] = {
+    "MMC": "MRSH",
+}
+
+
+def resolve_renamed_ticker(ticker: str) -> str | None:
+    """Current ticker for a retired symbol, or None if not a known rename."""
+    return TICKER_RENAMES.get(ticker.strip().upper())
+
+
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request) -> HTMLResponse:
     _svc.warm_tracked_quotes()
