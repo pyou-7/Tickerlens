@@ -226,6 +226,15 @@ _DATELINE_RE = re.compile(
     r"^[A-Z][A-Za-z .'\-]*?,\s+[A-Za-z0-9][A-Za-z0-9 .'\-(),;]*?[–—-]\s*$"
 )
 
+# A dateline that opens a full sentence ("NEWARK, N.J. – Prudential ...
+# today reported ..."), as opposed to _DATELINE_RE's bare dateline-only
+# line. Batch 118: Prudential puts the dateline sentence between the
+# headline and the bullets, which made _leading_bullet_block return None
+# (first body line isn't a bullet) and let a "Financial Highlights" table
+# header become the whole body. The lead is all-caps location + dash, so a
+# prose line never matches it.
+_DATELINE_LEAD_RE = re.compile(r"^[A-Z][A-Z .'\-]*,\s*[A-Z][A-Z .'\-]*?\s[–—-]\s")
+
 # Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
 # EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
 # headline follows "FOR IMMEDIATE RELEASE" / the date line). Narrow: quarter
@@ -778,6 +787,13 @@ _HEADLINE_QUARTER_TAIL_RE = re.compile(
 )
 _HEADLINE_BARE_YEAR_RE = re.compile(r"^20\d{2}$")
 _HEADLINE_YEAR_LEAD_RE = re.compile(r"^20\d{2}\b")
+# A year-led results fragment ("2024 Results") — the tail of a wrapped
+# headline ("Prudential Financial, Inc. Announces" / "2024 Results"), never
+# a lede start. Batch 118: the digit-led bad-start guard below refused it,
+# stranding the fragment as the first body line (which also killed the
+# leading-bullet-block detection and let a "Financial Highlights" table
+# header become the whole body, under 200 chars -> highlights None).
+_HEADLINE_YEAR_RESULTS_RE = re.compile(r"^20\d{2}\s+Results\b", re.IGNORECASE)
 
 
 # A page-image exhibit "line" that is really a whole page starting with a run
@@ -914,6 +930,13 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        (Batch 115) The quarter tail may be hyphenated ("Sempra Reports
        Third-Quarter") and the continuation year-led ("2025 Results") — same
        fragment shape, same bypass.
+    6. (Batch 118) The picked headline ends on a headline verb and the next
+       line is a year-led results fragment ("Prudential Financial, Inc.
+       Announces" / "2024 Results"). A "YYYY Results" line is never a lede
+       start, so the digit-lead guard is bypassed for this exact shape only
+       — a bare year after a verb tail still does NOT join (batch 108's
+       "Acme Reports Results" / "2026" negative still holds: no "Results"
+       word after the year).
     """
     headline = lines[i]
     j = i + 1
@@ -923,18 +946,27 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             _HEADLINE_QUARTER_TAIL_RE.search(headline)
             and _HEADLINE_YEAR_LEAD_RE.match(lines[j])
         )
+        verb_year_results_join = bool(
+            _HEADLINE_VERB_TAIL_RE.search(headline)
+            and _HEADLINE_YEAR_RESULTS_RE.match(lines[j])
+        )
         if not (
             _HEADLINE_WRAP_TAIL_RE.search(headline)
             or _HEADLINE_VERB_TAIL_RE.search(headline)
             or _HEADLINE_ORDINAL_TAIL_RE.search(headline)
             or _HEADLINE_CONT_LEAD_RE.match(lines[j])
             or year_join
+            or verb_year_results_join
         ):
             break
         if not (
             len(lines[j]) <= 140
             and not lines[j].rstrip().endswith((".", "!", "?", ":"))
-            and (year_join or not _HEADLINE_CONT_BAD_START_RE.match(lines[j]))
+            and (
+                year_join
+                or verb_year_results_join
+                or not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
+            )
             and not _ADMIN_LINE_RE.match(lines[j])
             and not _BOILERPLATE_RE.match(lines[j])
             and not _CONTACT_HEADER_RE.match(lines[j])
@@ -1559,7 +1591,9 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     $582 million."): a non-bullet line following a bullet start is a
     continuation unless it closes the item (terminal punctuation) and the
     next line isn't a new bullet — that's the dateline paragraph starting.
-    Returns the block only when substantial — otherwise None.
+    A dateline *sentence* before the bullets (Prudential: "NEWARK, N.J. –
+    ... today reported ...") is skipped so the bullets still count as the
+    leading block. Returns the block only when substantial — otherwise None.
     """
     bullets: list[str] = []
     in_item = False  # previous line was a bullet start or continuation
@@ -1571,6 +1605,11 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
             break  # a headed section follows; it competes on its own
+        if not bullets and _DATELINE_LEAD_RE.match(ln):
+            continue  # dateline sentence before the bullets (Prudential):
+            # the bullets are still the leading block, not the dateline
+            # prose. Only before any bullet is collected; mid-block lines
+            # keep the existing continuation behavior. Batch 118.
         if ln.startswith(("•", "-", "*")):
             bullets.append(ln)
             in_item = True
