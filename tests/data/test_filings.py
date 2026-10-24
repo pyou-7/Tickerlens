@@ -3510,5 +3510,46 @@ def test_never_headline_narrowness() -> None:
         "NYSE: TRV",
         "Summary Points:",
         "Highlights:",
+        "USA",
+        "U.S.A.",
+        "U.S.",
+        "United States",
+        "U.K.",
+        "Canada",
     ]:
         assert _NEVER_HEADLINE_RE.match(bad), bad
+    for good in [
+        "USA Today Launches Fund",
+        "U.S. revenue grew 44% year-over-year.",
+        "Canada's Finest Reports Results",
+    ]:
+        assert not _NEVER_HEADLINE_RE.match(good), good
+
+
+def test_lone_country_masthead_line_skipped() -> None:
+    # Rockwell's releases head the release with "1201 S. Second Street" /
+    # "Milwaukee, WI 53204" / "USA" above the contact block; the lone
+    # country-name line became the headline for all 8 quarters.
+    hl = extract_press_release_highlights(
+        _contact_release_html(
+            "EX-99",
+            "Exhibit 99",
+            "1201 S. Second Street",
+            "Milwaukee, WI 53204",
+            "USA",
+            "News Release",
+            "Contact Ed Moreland",
+            "Media Relations",
+            "Rockwell Automation",
+            "571.296.0391 Aijana Zellner",
+            "Investor Relations",
+            "Rockwell Automation",
+            "440.289.8439",
+            "Rockwell Automation Reports Third Quarter 2026 Results",
+            "MILWAUKEE (August 4, 2026) -- Rockwell Automation, Inc. (NYSE: ROK) "
+            "today reported third quarter fiscal 2026 results.",
+            "Reported sales up 8% year over year; organic sales up 10% year over year.",
+        )
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Rockwell Automation Reports Third Quarter 2026 Results"

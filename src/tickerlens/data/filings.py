@@ -826,12 +826,21 @@ def _wrapped_spaced_label_skip(lines: list[str], i: int) -> int:
 #   so a real '2026 Outlook'-shaped line never matches);
 # - an exchange:ticker masthead line: Travelers' 'NYSE: TRV';
 # - a 1-4 word section label ending in a colon: Skydance's 'Summary Points:'.
+# - a lone country-name masthead line: Rockwell's releases put 'USA' under
+#   the street address ('1201 S. Second Street' / 'Milwaukee, WI 53204') and
+#   above the contact block, and it became the headline for all 8 quarters.
+#   Full-line anchored; a real headline is never one word, let alone a bare
+#   country name (the U.S./U.K. forms matter — the address block above the
+#   contact line is a common Donnelley masthead shape). Batch 116.
 _NEVER_HEADLINE_RE = re.compile(
     r"^[^A-Za-z0-9]*$"
     r"|^(?=[A-Za-z0-9]{5,}$)[A-Za-z0-9]*\d[A-Za-z0-9]*$"
     r"|^\d{1,3}\s+\S*[^\w\s]\S*$"
     r"|^(NYSE|Nasdaq|AMEX)\s*:\s*[A-Z][A-Z.\-]{0,6}$"
-    r"|^\S+(?:\s+\S+){0,3}:\s*$",
+    r"|^\S+(?:\s+\S+){0,3}:\s*$"
+    r"|^u\.?s\.?(?:a\.?)?\.?$|^united\s+states$|^u\.?k\.?$|^united\s+kingdom$"
+    r"|^canada$|^mexico$|^germany$|^france$|^japan$|^ireland$|^netherlands$"
+    r"|^switzerland$|^australia$|^singapore$|^india$|^brazil$",
     re.IGNORECASE,
 )
 
