@@ -1011,6 +1011,11 @@ def _wrapped_spaced_label_skip(lines: list[str], i: int) -> int:
 #   Full-line anchored; a real headline is never one word, let alone a bare
 #   country name (the U.S./U.K. forms matter — the address block above the
 #   contact line is a common Donnelley masthead shape). Batch 116.
+# - a slide-deck title line: Bank of America's deck releases open with a
+#   "1 2Q26 Financial Highlights ... Business Segment Highlights ... Consumer
+#   Banking" title (page number + quarter token + "Financial Highlights").
+#   It is a slide title, never a headline — without this the split
+#   bullet-run's first piece became the headline. Batch 125.
 _NEVER_HEADLINE_RE = re.compile(
     r"^[^A-Za-z0-9]*$"
     r"|^(?=[A-Za-z0-9]{5,}$)[A-Za-z0-9]*\d[A-Za-z0-9]*$"
@@ -1019,7 +1024,8 @@ _NEVER_HEADLINE_RE = re.compile(
     r"|^\S+(?:\s+\S+){0,3}:\s*$"
     r"|^u\.?s\.?(?:a\.?)?\.?$|^united\s+states$|^u\.?k\.?$|^united\s+kingdom$"
     r"|^canada$|^mexico$|^germany$|^france$|^japan$|^ireland$|^netherlands$"
-    r"|^switzerland$|^australia$|^singapore$|^india$|^brazil$",
+    r"|^switzerland$|^australia$|^singapore$|^india$|^brazil$"
+    r"|^\d+\s+\S+\s+Financial Highlights",
     re.IGNORECASE,
 )
 
@@ -1453,6 +1459,35 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     return best_section
 
 
+_BULLET_RUN_SPLIT_RE = re.compile(r"\s+•\s+")
+
+
+def _split_bullet_runs(lines: list[str]) -> list[str]:
+    """Split bullet-run mega-lines into one pseudo-line per bullet.
+
+    Slide-deck releases (Bank of America) flatten a whole highlights slide
+    into a single line — the bullets are joined by " • " with no line
+    breaks, so the headline loop, section extraction, and lede all see one
+    giant line and the batch-105 page-line guard discards the release
+    entirely (BAC: 8/8 quarters blank). Only lines longer than the headline
+    cap with at least two bullet separators are split, so ordinary prose
+    and single-bullet lines are untouched. Continuation pieces keep a "• "
+    prefix so downstream bullet logic (the lede, the batch-115
+    bullet-headline strip) treats them as bullets. Batch 125.
+    """
+    out: list[str] = []
+    for ln in lines:
+        if len(ln) > _MAX_HEADLINE_CHARS and ln.count("•") >= 2 and " • " in ln:
+            pieces = [p.strip() for p in _BULLET_RUN_SPLIT_RE.split(ln)]
+            pieces = [p for p in pieces if p]
+            if len(pieces) > 1:
+                out.append(pieces[0])
+                out.extend(f"• {p}" for p in pieces[1:])
+                continue
+        out.append(ln)
+    return out
+
+
 def extract_press_release_highlights(
     document_html: str, max_chars: int = 4000
 ) -> str | None:
@@ -1475,6 +1510,10 @@ def extract_press_release_highlights(
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     if not lines:
         return None
+
+    # Slide-deck bullet runs collapse into mega-lines (batch 125): split
+    # them before any headline/section/lede logic sees them.
+    lines = _split_bullet_runs(lines)
 
     if _is_shareholder_letter(lines):
         # Shareholder-letter mode (batch 94): metric-table "Highlights"

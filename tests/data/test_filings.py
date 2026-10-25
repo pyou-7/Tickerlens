@@ -3485,6 +3485,52 @@ def test_lead_bullet_marker_stripped_from_headline() -> None:
     assert hl.split("\n\n")[0] == "U.S. revenue grew 44% year-over-year and 14% quarter-over-quarter."
 
 
+def test_bullet_run_mega_line_splits_into_bullets() -> None:
+    # Slide-deck releases (Bank of America) flatten a whole highlights slide
+    # into one mega-line joined by " • " — before batch 125 the headline
+    # loop saw a single >300-char line, picked no headline, and the
+    # page-line guard discarded the release (BAC: 8/8 quarters blank). The
+    # mega-line splits into one pseudo-line per bullet; the deck-title
+    # first piece is never a headline, so the lead bullet becomes the
+    # headline (Palantir precedent) and the remaining bullets are the body.
+    from src.tickerlens.data.filings import _split_bullet_runs
+
+    mega = (
+        "1 2Q26 Financial Highlights3(B) 2Q26 Business Segment Highlights1,3,4(B) "
+        "Consumer Banking • Net income of $3.3 billion • Revenue of $11.3 billion, up 5% "
+        "• Average deposits of $957 billion were up 1% • Average loans and leases of "
+        "$321 billion, up $2 billion, or 1% • #1 Small Business Lender for 20 consecutive "
+        "quarters5 • Combined credit / debit card spend of $266 billion, up 9%"
+    )
+    assert len(mega) > 300
+    pieces = _split_bullet_runs([mega])
+    assert pieces[0].startswith("1 2Q26 Financial Highlights")
+    assert pieces[1] == "• Net income of $3.3 billion"
+    assert pieces[-1].startswith("• Combined credit")
+    # Short lines and single-separator lines are untouched.
+    assert _split_bullet_runs(["Revenue up 5% • margins steady"]) == [
+        "Revenue up 5% • margins steady"
+    ]
+
+    hl = extract_press_release_highlights(
+        _contact_release_html("EX-99.1", "Exhibit 99.1", mega)
+    )
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Net income of $3.3 billion"
+    assert "Revenue of $11.3 billion, up 5%" in hl
+    assert "Business Segment Highlights" not in hl
+
+
+def test_never_headline_deck_title_line() -> None:
+    # A slide-deck title line (page number + quarter token + "Financial
+    # Highlights") is never a headline; ordinary quarter labels still pass.
+    from src.tickerlens.data.filings import _NEVER_HEADLINE_RE
+
+    assert _NEVER_HEADLINE_RE.match("1 2Q26 Financial Highlights3(B)")
+    assert not _NEVER_HEADLINE_RE.match("Q2 2026")
+    assert not _NEVER_HEADLINE_RE.match("Financial Highlights: record quarter")
+
+
 def test_never_headline_narrowness() -> None:
     # The never-headline patterns must not swallow real content: short
     # tickers ("3M"), year-led phrases ("2026 Outlook"), and ordinary
