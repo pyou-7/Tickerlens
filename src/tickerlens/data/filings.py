@@ -330,6 +330,17 @@ def _looks_like_table_fragment(ln: str) -> bool:
 # that endnote boilerplate fill the lede and get stored as highlights.
 _LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
 
+# A footnote-definition legend line is never a headline (batch 126): the
+# marker is a single letter/digit in parentheses ("(B)Crude oil ..."). The
+# single-character bound is load-bearing: "(NYSE: ACME)" and "(2026)"
+# parentheticals are not footnote markers (the character after the first is
+# not ")"), so exchange-prefixed and year-prefixed headlines are untouched.
+_FOOTNOTE_HEADLINE_RE = re.compile(r"^\([A-Za-z0-9]\)")
+
+# A table-of-contents entry: section title + trailing page number
+# ("Income Statements 13"). Batch 126.
+_TOC_ENTRY_RE = re.compile(r"^.+ \d{1,3}$")
+
 
 # Footnote-definition legend lines (GEV's Workiva ex-99 opens with
 # "1 Defined as remaining performance obligation (RPO)" /
@@ -1787,6 +1798,27 @@ def extract_press_release_highlights(
         # Batch 105.
         logger.info("Press-release highlights are page-lines without a headline")
         return None
+    if headline and _FOOTNOTE_HEADLINE_RE.match(headline):
+        # Supplement-only packet (EOG): the headline loop's best pick is a
+        # table footnote definition ("(B)Crude oil ..."), which means the
+        # document has no narrative headline — its release text lives in
+        # image pages and only the supplement tables are text. A footnote
+        # definition is never a headline; returning it as one presents
+        # table notes as highlights. Batch 126.
+        logger.info("Press-release headline is a footnote definition")
+        return None
+    if headline:
+        # Same packet, other shape (EOG Q3 FY2024): the TOC subtitle became
+        # the headline and the lede is just the TOC entries. A table of
+        # contents is not highlights. The all-lines bound is load-bearing:
+        # a real lede never consists entirely of title + page-number lines.
+        # Batch 126.
+        _body_parts = [p.strip() for p in result.split("\n\n")[1:] if p.strip()]
+        if len(_body_parts) >= 2 and all(
+            _TOC_ENTRY_RE.match(p) for p in _body_parts
+        ):
+            logger.info("Press-release body is only a table of contents")
+            return None
     if len(result) > max_chars:
         result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
     return result
