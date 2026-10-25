@@ -466,6 +466,11 @@ _CONTACT_HEADER_RE = re.compile(
     # Batch 111: the colon variant made every BlackRock quarter's headline
     # the contact header.
     r"|^(investor relations|corporate communications|media relations):?$"
+    # Doubled role labels from a flattened two-column contact table
+    # (Akamai Q4: "Media Relations Investor Relations" — media contact in
+    # one column, investor contact in the other). A doubled label row is a
+    # contact header, never a headline or lede. Batch 123.
+    r"|^(?:(?:investor relations|corporate communications|media relations|press relations|public relations)\s+){1,}(?:investor relations|corporate communications|media relations|press relations|public relations):?$"
     # Company-name-prefixed header without the word "Company" (Qualcomm:
     # "Qualcomm Contact:"). Full-line anchored and length-capped; a real
     # headline never ends with "Contact(s):". Batch 111.
@@ -646,6 +651,111 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
                 break
         j += 1
     return j
+
+
+def _is_repeated_phrase(ln: str) -> bool:
+    """True when a line repeats one phrase twice ("Akamai Technologies Akamai
+    Technologies") — the flattened two-column form of a single table cell.
+    A real headline never repeats its whole phrase. Batch 123."""
+    words = ln.split()
+    if len(words) < 2 or len(words) % 2:
+        return False
+    half = len(words) // 2
+    return words[:half] == words[half:]
+
+
+# Words a contact-name row never contains but a real headline almost always
+# does; keeps the contact-table skip from ever firing on a genuine headline
+# that happens to precede a role-label line. Batch 123.
+_CONTACT_TABLE_NON_NAME_WORDS = frozenset(
+    {
+        "reports",
+        "report",
+        "announces",
+        "announce",
+        "announced",
+        "results",
+        "quarter",
+        "fiscal",
+        "earnings",
+        "revenue",
+        "revenues",
+    }
+)
+
+
+def _skip_contact_table(lines: list[str], i: int) -> int | None:
+    """Return the index of the real headline after a flattened two-column
+    contact table, or None when the lines at *i* are not one.
+
+    Shape (Akamai Q4 releases, which put the contact table before the title
+    while Q1-Q3 put the title first): a names row ("Christine Simeone Mark
+    Stoutenberg" — two contacts side by side), a role-label row ("Media
+    Relations Investor Relations"), a company row ("Akamai Technologies
+    Akamai Technologies"), then the real headline, wrapped ("AKAMAI REPORTS
+    FOURTH QUARTER 2024 AND" / "FULL-YEAR 2024 FINANCIAL RESULTS"). The
+    names row is 4 words and headline-shaped, so no existing skip catches
+    it: there is no contact-header line for the header branch (the roles row
+    is a doubled label, not a header), and _skip_bare_masthead_name requires
+    <=3 words and a non-headline-shaped line.
+
+    Guards, all required: the next line is a role-label row (single or
+    doubled — a real headline is never followed by one); the names row is
+    short (<=6 words), has no terminal punctuation, and contains no
+    headline word; the table rows after the roles row are consumed only
+    while they look like table continuation (repeated phrase, company-name
+    line, admin/contact line, or a short label line); and a headline-shaped
+    line must appear within 8 lines, otherwise nothing is skipped — so a
+    genuine headline followed by a stray role line keeps its headline, and
+    a table whose headline never arrives never swallows body text.
+    """
+    ln = lines[i]
+    if i + 1 >= len(lines):
+        return None
+    if not (
+        _CONTACT_HEADER_RE.match(lines[i + 1])
+        or _CONTACT_TABLE_ROLE_RE.match(lines[i + 1])
+    ):
+        return None
+    words = ln.split()
+    if len(words) > 6 or re.search(r"[.!?;:]\\s*$", ln):
+        return None
+    if any(
+        w.strip(".,;:").lower() in _CONTACT_TABLE_NON_NAME_WORDS for w in words
+    ):
+        return None
+    j = i + 2
+    while j < len(lines) and j - i <= 8:
+        cand = lines[j]
+        if (
+            _is_repeated_phrase(cand)
+            or _COMPANY_NAME_LINE_RE.search(cand)
+            or _ADMIN_LINE_RE.match(cand)
+            or _CONTACT_LINE_RE.search(cand)
+            or _CONTACT_HEADER_RE.match(cand)
+        ):
+            j += 1
+            continue
+        if _looks_like_headline(cand):
+            return j
+        if len(cand.split()) <= 4 and not re.search(r"[.!?]\\s*$", cand):
+            j += 1  # short label line inside the table block
+            continue
+        return None
+    return None
+
+
+# A role-label row of a flattened two-column contact table, as its own
+# pattern (the _CONTACT_HEADER_RE alternative above covers the same shape
+# for the header branch; this one is the lookahead the table skip uses).
+# Full-line anchored: one or more role labels run together, optional colon.
+_CONTACT_TABLE_ROLE_RE = re.compile(
+    r"^(?:(?:investor relations|corporate communications|media relations|"
+    r"press relations|public relations)\s+)*"
+    r"(?:investor relations|corporate communications|media relations|"
+    r"press relations|public relations):?$",
+    re.IGNORECASE,
+)
 
 # A "TABLE OF CONTENTS" heading opens a combined release+supplement packet
 # (SPG): cover lines, then section-title / page-number pairs, then the real
@@ -1495,6 +1605,13 @@ def extract_press_release_highlights(
             # real headline a few lines down past the address block.
             # Batch 107.
             i = masthead_skip
+            continue
+        table_headline = _skip_contact_table(lines, i)
+        if table_headline is not None:
+            # Flattened two-column contact table (Akamai Q4): the names row
+            # precedes the role row, so no header branch fires on it — skip
+            # the table and let the loop pick the real headline. Batch 123.
+            i = table_headline
             continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             if _DATELINE_RE.match(ln):
