@@ -987,7 +987,10 @@ def _repair_stale_fy_wraps(rows: list[QuarterlyFinancials]) -> list[QuarterlyFin
 # coarser risks mistaking an accounting restatement for a split.
 # 8: GE's 1-for-8 reverse split (2021-07-30); 25: BKNG's 25-for-1 split
 # (2026-04) — both multi-corroborated in live companyfacts (batch 51).
-_SPLIT_RATIOS = (2, 3, 4, 5, 8, 10, 20, 25, 100)
+# 7: AAPL's 7-for-1 split (2014-06-09) — 10 corroborating restatements at
+# 1/7 in live companyfacts (batch 122); without it only the 2020 4:1
+# event fired and pre-2014 facts rescaled by 4x instead of 28x.
+_SPLIT_RATIOS = (2, 3, 4, 5, 7, 8, 10, 20, 25, 100)
 _SPLIT_RATIO_TOLERANCE = 0.03
 # A lone (start, end) pair at a split-like ratio could be a data correction,
 # so an event needs corroboration from a second duration (e.g. the quarterly
@@ -1303,7 +1306,11 @@ def _detect_split_events(facts: list[XbrlFact]) -> list[_SplitEvent]:
     report values differing by ~a split ratio casts one vote for the later
     filing's date. An event fires only with enough corroborating groups (a
     lone split-like ratio could be a data correction), and duplicate events
-    on the same filing date collapse to their median scale.
+    on the same filing date collapse to their median scale. The
+    corroborating votes must also agree on the ratio: a real split restates
+    every comparative at one ratio, so votes that disagree with the median
+    (CRM's Aug-2018 10-Q restated its Q2 quarterly EPS 3x but its 6M EPS
+    7x — no split happened) are not corroboration.
     """
     by_period: dict[tuple[dt.date | None, dt.date], dict[dt.date, set[float]]] = {}
     for fact in facts:
@@ -1339,7 +1346,23 @@ def _detect_split_events(facts: list[XbrlFact]) -> list[_SplitEvent]:
             continue
         ratios = sorted(ratio for ratio, _ in corroborated)
         scale = ratios[len(ratios) // 2]
-        period_ends = {end for _, end in corroborated}
+        # A real split restates every comparative at one ratio: keep only
+        # the votes agreeing with the median scale. Mixed ratios (CRM's
+        # Aug-2018 10-Q: quarterly EPS restated 3x, 6M EPS 7x) are not a
+        # split, and the median of a mixed set would fabricate one.
+        agreeing = [
+            (ratio, end)
+            for ratio, end in corroborated
+            if abs(ratio - scale) / scale <= _SPLIT_RATIO_TOLERANCE
+        ]
+        if len(agreeing) < _SPLIT_MIN_CORROBORATING_GROUPS:
+            logger.info(
+                "skipping split-like ratios on %s: corroborating ratios disagree",
+                event_date,
+            )
+            continue
+        scale = sorted(ratio for ratio, _ in agreeing)[len(agreeing) // 2]
+        period_ends = {end for _, end in agreeing}
         logger.warning(
             "stock split detected: restated %s, rescaling earlier per-share facts by %s",
             event_date, scale,

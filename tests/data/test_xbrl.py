@@ -7,6 +7,7 @@ from tickerlens.data.xbrl import (
     PeriodMetric,
     UnsupportedFilerError,
     XbrlFact,
+    _detect_split_events,
     _reconcile_eps_basic_diluted,
     _split_share_restatements,
     balance_sheet_metric,
@@ -2893,6 +2894,85 @@ def test_stock_split_25_to_1_forward_detected_and_rescaled() -> None:
     assert by_end[dt.date(2025, 3, 31)] == 0.40
     assert by_end[dt.date(2025, 6, 30)] == 1.10
     assert by_end[dt.date(2026, 3, 31)] == 1.36
+
+
+def test_stock_split_7_to_1_forward_detected_and_rescaled() -> None:
+    # Mirror the live AAPL case (batch 122): a 7-for-1 split in 2014-06.
+    # The 7x ratio was missing from _SPLIT_RATIOS, so only the 2020 4:1
+    # event ever fired and pre-2014 facts rescaled 4x instead of 28x.
+    # The FY2014 10-K (filed 2014-10-27) restated Q1/Q2 FY2014 diluted EPS
+    # at exactly 1/7 (14.50 -> 2.07, 11.62 -> 1.66); Q4 FY2013 was never
+    # restated and must rescale via classification, like GE's Q4-2020.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2013-06-30", "2013-09-28", 8.26, 2013, "Q4", filed="2013-10-30"),
+                            fact("2013-09-29", "2013-12-28", 14.50, 2014, "Q1", filed="2014-01-28"),
+                            fact("2013-12-29", "2014-03-29", 11.62, 2014, "Q2", filed="2014-04-24"),
+                            fact("2013-09-29", "2013-12-28", 2.07, 2014, "Q1", filed="2014-10-27"),
+                            fact("2013-12-29", "2014-03-29", 1.66, 2014, "Q2", filed="2014-10-27"),
+                            fact("2014-06-29", "2014-09-27", 1.42, 2014, "Q4", filed="2014-10-27"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "0926")
+    by_end = {item.end: item.value for item in series}
+    # Never-restated pre-split quarter rescales 7x to the post-split basis.
+    assert abs(by_end[dt.date(2013, 9, 28)] - 8.26 / 7) < 0.05
+    # Restated and native post-split facts sit on the latest basis already.
+    assert by_end[dt.date(2013, 12, 28)] == 2.07
+    assert by_end[dt.date(2014, 3, 29)] == 1.66
+    assert by_end[dt.date(2014, 9, 27)] == 1.42
+
+
+def _split_fact(start: str, end: str, val: float, filed: str) -> XbrlFact:
+    return XbrlFact(
+        start=dt.date.fromisoformat(start),
+        end=dt.date.fromisoformat(end),
+        val=val,
+        filed=dt.date.fromisoformat(filed),
+        form="10-Q",
+    )
+
+
+def test_split_detection_rejects_disagreeing_corroboration() -> None:
+    # Mirror the live CRM case (batch 122): the Aug-2018 10-Q restated
+    # Q2 quarterly basic EPS 0.02 -> 0.06 (3x) and 6M basic EPS
+    # 0.01 -> 0.07 (7x). No split happened — a real split restates every
+    # comparative at one ratio — so the two disagreeing votes must not
+    # fabricate a 7x event (which had inflated CRM's 2008-2011 EPS 7x).
+    facts = [
+        _split_fact("2017-05-01", "2017-07-31", 0.02, "2017-08-25"),
+        _split_fact("2017-05-01", "2017-07-31", 0.06, "2018-08-31"),
+        _split_fact("2017-02-01", "2017-07-31", 0.01, "2017-08-25"),
+        _split_fact("2017-02-01", "2017-07-31", 0.07, "2018-08-31"),
+    ]
+    assert _detect_split_events(facts) == []
+
+
+def test_split_detection_keeps_agreeing_cluster_despite_stray_vote() -> None:
+    # Two groups restated at 1/7 by one filing, plus a stray group
+    # restated 3x by the same filing: the event still fires at the
+    # agreeing scale, and the stray period is not marked pre-split.
+    facts = [
+        _split_fact("2013-09-29", "2013-12-28", 14.50, "2014-01-28"),
+        _split_fact("2013-09-29", "2013-12-28", 2.07, "2014-10-27"),
+        _split_fact("2013-12-29", "2014-03-29", 11.62, "2014-04-24"),
+        _split_fact("2013-12-29", "2014-03-29", 1.66, "2014-10-27"),
+        _split_fact("2014-03-30", "2014-06-28", 0.50, "2014-07-22"),
+        _split_fact("2014-03-30", "2014-06-28", 1.50, "2014-10-27"),
+    ]
+    events = _detect_split_events(facts)
+    assert len(events) == 1
+    assert events[0].date == dt.date(2014, 10, 27)
+    assert abs(events[0].scale - 1 / 7) < 0.01
+    assert events[0].period_ends == {dt.date(2013, 12, 28), dt.date(2014, 3, 29)}
 
 
 def test_reverse_split_8_to_1_detected_and_rescaled() -> None:
