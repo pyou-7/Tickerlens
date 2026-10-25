@@ -745,6 +745,59 @@ def _skip_contact_table(lines: list[str], i: int) -> int | None:
     return None
 
 
+
+
+# A "Exhibit 99.1" / "EXHIBIT 99.1" marker line inside the document, as
+# its own pattern for the compound-title lookahead below (the admin regex
+# also matches it, but it matches page numbers and filenames too, which
+# would make the lookahead fire on the wrong lines).
+_EXHIBIT_MARKER_RE = re.compile(
+    r"^exhibit[\s\-]*99(\.1)?\b|^ex-?99(\.1)?\b",
+    re.IGNORECASE,
+)
+
+
+def _is_compound_earnings_title(lines: list[str], i: int) -> bool:
+    """True when the line at *i* is a compound earnings-release document
+    title, not the release headline.
+
+    Shape (lululemon Q3 releases, which combine the earnings release with
+    a stock-repurchase announcement in one 8-K): the exhibit document
+    title (EARNINGS RELEASE & STOCK REPURCHASE PROGRAM) sits before
+    Exhibit 99.1, and the real release headline follows the marker
+    (LULULEMON ATHLETICA INC. ANNOUNCES THIRD QUARTER FISCAL 2024
+    RESULTS). The bare EARNINGS RELEASE title is already skipped by
+    the label branch below, but the compound form was picked as the
+    headline instead, so both Q3 quarters stored the document title.
+
+    Guards, all required: the line carries earnings release followed
+    by & or and (a compound title, not a bare label and not a
+    results headline); an exhibit-marker line appears within the next 2
+    lines; and the line immediately after that marker is a headline-shaped
+    line carrying a headline verb (announces/reports). The verb guard is
+    what keeps JPMorgan stored headline safe: its EARNINGS RELEASE -
+    THIRD QUARTER 2025 RESULTS title is also followed by an exhibit
+    marker, but the line after the marker is the company name/address
+    block, not a verb headline, and XOM 3Q 2025 Earnings Release
+    title is preceded by (not followed by) its marker, so it never fires
+    either. A compound title with no marker after it, or with prose
+    (not a verb headline) after the marker, keeps the old behavior.
+    """
+    ln = lines[i]
+    if not re.search(r"earnings\s+release\s+(&|and\b)", ln, re.IGNORECASE):
+        return False
+    for k in (i + 1, i + 2):
+        if k >= len(lines):
+            return False
+        if _EXHIBIT_MARKER_RE.match(lines[k]):
+            nxt = lines[k + 1] if k + 1 < len(lines) else ""
+            return bool(
+                _looks_like_headline(nxt)
+                and re.search(r"\b(announces?|reports?)\b", nxt, re.IGNORECASE)
+            )
+    return False
+
+
 # A role-label row of a flattened two-column contact table, as its own
 # pattern (the _CONTACT_HEADER_RE alternative above covers the same shape
 # for the header branch; this one is the lookahead the table skip uses).
@@ -1547,6 +1600,13 @@ def extract_press_release_highlights(
             # Cover title block (GS): the real headline follows the banner.
             headline, body_start = cover
             break
+        if _is_compound_earnings_title(lines, i):
+            # Compound earnings-release document title (lululemon Q3:
+            # "EARNINGS RELEASE & STOCK REPURCHASE PROGRAM") before the
+            # "Exhibit 99.1" marker; the real headline follows the marker.
+            # Batch 124.
+            i += 1
+            continue
         if ln.lower() == "earnings release" or _QUARTER_EARNINGS_LABEL_RE.match(ln):
             # "Earnings Release" document label (Mastercard, Amgen, Northrop
             # Grumman) and quarter-prefixed variants ("FIRST QUARTER 2026
