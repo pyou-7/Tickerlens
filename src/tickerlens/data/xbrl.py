@@ -1739,9 +1739,23 @@ def _cash_flow_series_for_tag(
         # Batch 85: same discontinued-ops basis-break guard as the income
         # path — a 10-K reclassification between the 10-Q and the 10-K
         # leaves the YTD and annual cash-flow facts on different bases.
+        # Batch 121: same derivation-vintage rule as _derive_q4_income —
+        # a later 10-K's restatement of a prior-year annual must not pair
+        # with the year's 9M fact; use the own-10-K contemporaneous leg,
+        # but only when the 9M itself was not restated (same refinement).
         if year and m9 and not (basis_break_starts and start in basis_break_starts):
+            year_val = year.val
+            own_val = _own_tenk_annual_value(facts, start)
+            own_m9 = _own_ytd_value(facts, m9.end)
+            m9_restated = own_m9 is not None and _values_differ(own_m9, m9.val)
+            if (
+                own_val is not None
+                and _values_differ(own_val, year.val)
+                and not m9_restated
+            ):
+                year_val = own_val
             results.append(
-                _metric_value(metric, source_tag, fy, "Q4", year.end, year.val - m9.val)
+                _metric_value(metric, source_tag, fy, "Q4", year.end, year_val - m9.val)
             )
 
     return sorted(results, key=lambda item: item.end)
@@ -2468,6 +2482,73 @@ def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:
     raise AssertionError("unreachable: a year-end always falls after the anchor")
 
 
+def _own_tenk_annual_value(facts: list[XbrlFact], start: dt.date) -> float | None:
+    """Earliest-filed 10-K annual value for a fiscal-year start — the year's
+    own 10-K number, on the basis the year's 10-Qs used.
+
+    Batch 121: a later 10-K may restate a prior-year annual fact onto a new
+    basis (OXY's 2025 10-K restated FY2024 Revenues $26,725M → $22,019M,
+    OxyChem removed) while the year's 9M 10-Q fact stays on the old basis —
+    so the latest-wins FY value paired with the 9M fact fabricates Q4
+    ($2,054M vs the as-reported $6,760M). The own-10-K value is the
+    contemporaneous leg: same basis as the 9M fact, so FY − 9M derives the
+    as-reported Q4. Returns None when no 10-K annual fact exists for the
+    start (no vintage evidence — the caller keeps current behavior).
+    """
+    candidates = [
+        f
+        for f in facts
+        if f.form == "10-K"
+        and f.start == start
+        and f.end is not None
+        and 340 <= (f.end - f.start).days <= 380
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: f.filed).val
+
+
+def _own_ytd_value(facts: list[XbrlFact], end: dt.date) -> float | None:
+    """Earliest-filed 9M fact for a 9M period end — the 10-Q's own number.
+
+    Batch 121 (refined): a later 10-Q comparative may itself restate the
+    9M fact onto a new basis (AAPL's 2014 10-Q restated 9M FY2013 EPS
+    31.67 → 4.52 on the post-split basis). When the 9M was restated, the
+    latest legs already pair consistently and the annual must NOT be
+    substituted — pairing an own-10-K annual with a restated 9M mixes
+    bases in the other direction. Returns None only when no 9M fact
+    exists for the end (impossible for a caller holding that fact).
+    """
+    candidates = [
+        f
+        for f in facts
+        if f.end == end
+        and f.start is not None
+        and 240 <= (f.end - f.start).days <= 290
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: f.filed).val
+
+
+def _values_differ(a: float, b: float) -> bool:
+    """True when two filed values genuinely differ — not filing-rounding noise.
+
+    A split restatement re-expresses the same economics at a new scale, and
+    after the split rescale the own-10-K value sits a rounding step away
+    from the filed latest value (NFLX: 7.19/10 = 0.719 vs filed 0.72).
+    Rounding both to the coarser filing precision collapses that noise; a
+    real restatement (OXY FY2024 Revenues $26,725M → $22,019M) survives it.
+    The blind spot is bounded by half the coarser precision unit (≤5¢ for
+    EPS, $0 for integer-dollar values) — immaterial next to the
+    derivation, and the latest value is the corrected one there anyway.
+    """
+    if a == b:
+        return False
+    places = min(_decimals(a), _decimals(b))
+    return round(a, places) != round(b, places)
+
+
 def _derive_q4_income(
     facts: list[XbrlFact],
     source_tag: str,
@@ -2491,6 +2572,7 @@ def _derive_q4_income(
     # lacks — the primary tag's annual fact always wins.
     fallback_by_start: dict[dt.date, XbrlFact] = {}
     fallback_tag: str | None = None
+    fallback_facts: list[XbrlFact] = []
     if eps_annual_fallback is not None:
         fallback_tag, fallback_facts = eps_annual_fallback
         fallback_by_start = {
@@ -2526,7 +2608,50 @@ def _derive_q4_income(
         if annual_fact is None:
             continue
         fy = _fact_fy(annual_fact)
-        value = annual_fact.val - ytd.val
+        # Batch 121: derivation-vintage rule. When a later filing restated
+        # this year's annual fact onto a new basis, the latest-wins value
+        # no longer pairs with the year's 9M fact — derive from the
+        # contemporaneous pair (own-10-K FY − 9M 10-Q) instead. The break
+        # years themselves never reach this code (basis_break_starts skips
+        # them above: there the own 10-K is already on the new basis, so
+        # no contemporaneous pair exists and abstention stays correct).
+        # Refined: substitute ONLY when the annual was restated and the
+        # 9M was not. If the 9M was restated too (a later 10-Q comparative
+        # on the new basis — AAPL FY2013), the latest legs already pair
+        # consistently and substitution would mix bases the other way.
+        # The NI annual gets the same per-pair substitution so the EPS
+        # share-implied path stays on one basis. When no 10-K annual fact
+        # exists for the start there is no vintage evidence and the
+        # derivation is unchanged.
+        annual_calc = annual_fact
+        ni_calc = ni_lookup.get(start)
+        source_facts = fallback_facts if from_fallback else facts
+        own_val = _own_tenk_annual_value(source_facts, start)
+        own_ytd = _own_ytd_value(facts, ytd.end)
+        ytd_restated = own_ytd is not None and _values_differ(own_ytd, ytd.val)
+        if (
+            own_val is not None
+            and _values_differ(own_val, annual_fact.val)
+            and not ytd_restated
+        ):
+            annual_calc = annual_fact.model_copy(update={"val": own_val})
+            if ni_calc is not None and ni_facts:
+                ni_own = _own_tenk_annual_value(ni_facts, start)
+                ni_ytd_own = _own_ytd_value(ni_facts, ni_calc[1].end)
+                ni_ytd_restated = (
+                    ni_ytd_own is not None
+                    and _values_differ(ni_ytd_own, ni_calc[1].val)
+                )
+                if (
+                    ni_own is not None
+                    and _values_differ(ni_own, ni_calc[0].val)
+                    and not ni_ytd_restated
+                ):
+                    ni_calc = (
+                        ni_calc[0].model_copy(update={"val": ni_own}),
+                        ni_calc[1],
+                    )
+        value = annual_calc.val - ytd.val
         if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
             # Per-share values must not be un-cumulated by subtraction: the
             # annual and 9M figures divide by different share counts, so
@@ -2534,7 +2659,7 @@ def _derive_q4_income(
             # basic/diluted ranking, as it did for DUOL's FY2025 Q4
             # ($0.94 diluted vs $0.88 basic, arithmetically impossible).
             # Derive Q4 from net income and implied share counts instead.
-            ni_pair = ni_lookup.get(start)
+            ni_pair = ni_calc
             if from_fallback:
                 # The fallback annual is continuing-operations EPS while
                 # the 9M and NI pairs are totals. The derivation is only
@@ -2544,7 +2669,7 @@ def _derive_q4_income(
                 # plain-subtraction fallback would mix the two bases.
                 # Fail closed: reject the substitute rather than derive.
                 if ni_pair is None or not _shares_coherent(
-                    annual_fact.val,
+                    annual_calc.val,
                     ytd.val,
                     ni_pair[0].val,
                     ni_pair[1].val,
@@ -2552,7 +2677,7 @@ def _derive_q4_income(
                     require_positive=True,
                 ):
                     continue
-                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                implied = _implied_q4_eps(annual_calc, ytd, ni_pair)
                 if implied is None:
                     continue
                 value = implied
@@ -2568,16 +2693,16 @@ def _derive_q4_income(
                 # while any scale error diverges ~100%. Loss years abstain
                 # (non-positive inputs) and keep the existing behavior.
                 if ni_pair is not None and not _shares_coherent(
-                    annual_fact.val,
+                    annual_calc.val,
                     ytd.val,
                     ni_pair[0].val,
                     ni_pair[1].val,
                     _PRIMARY_SHARES_TOLERANCE,
                 ):
                     continue
-                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                implied = _implied_q4_eps(annual_calc, ytd, ni_pair)
                 value = implied if implied is not None else _round_like_inputs(
-                    annual_fact.val, ytd.val, value
+                    annual_calc.val, ytd.val, value
                 )
         results.append(
             _metric_value(
