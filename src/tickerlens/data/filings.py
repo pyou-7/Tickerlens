@@ -809,6 +809,57 @@ def _is_compound_earnings_title(lines: list[str], i: int) -> bool:
     return False
 
 
+# An abbreviated quarter earnings-release document title (ExxonMobil:
+# "3Q 2024 Earnings Release"), as its own pattern for the lookbehind
+# below — the spelled-out label regex above covers "FIRST QUARTER 2026
+# EARNINGS RELEASE" but not the abbreviated form.
+_QUARTER_ABBR_EARNINGS_TITLE_RE = re.compile(
+    r"^[1234]q \d{4} earnings release$",
+    re.IGNORECASE,
+)
+
+
+def _is_quarter_earnings_title(lines: list[str], i: int) -> bool:
+    """True when the line at *i* is an abbreviated quarter earnings-release
+    document title, not the release headline.
+
+    Shape (ExxonMobil, all 8 stored quarters): the exhibit header ends
+    with "EXHIBIT 99.1", then the document title ("3Q 2024 Earnings
+    Release"), then a "FOR IMMEDIATE RELEASE <date>" admin line, then
+    the real headline ("ExxonMobil Announces Third-Quarter 2024
+    Results"). The title is short and headline-shaped, so the loop
+    picked it and all 8 XOM quarters stored the document title.
+
+    Guards, all required: the line is exactly "<digit>Q <year> Earnings
+    Release" (full-line anchored, so JPMorgan's genuine "JPMORGAN CHASE
+    & CO. EARNINGS RELEASE - THIRD QUARTER 2024 RESULTS" headlines never
+    match); an exhibit-marker line appears within the previous 3 lines
+    (the mirror of the compound-title rule, where the marker follows
+    the title — here it precedes it); and the next non-admin line after
+    the title is a headline-shaped line carrying a headline verb
+    (announces/reports). The verb guard is what keeps a release whose
+    only title is the quarter label on old behavior: with no verb
+    headline after it, the title is kept rather than skipped into
+    bullets or a table row.
+    """
+    if not _QUARTER_ABBR_EARNINGS_TITLE_RE.match(lines[i]):
+        return False
+    if not any(
+        _EXHIBIT_MARKER_RE.match(lines[k]) for k in range(max(0, i - 3), i)
+    ):
+        return False
+    j = i + 1
+    while j < len(lines) and _ADMIN_LINE_RE.match(lines[j]):
+        j += 1
+    if j >= len(lines):
+        return False
+    nxt = lines[j]
+    return bool(
+        _looks_like_headline(nxt)
+        and re.search(r"\b(announces?|reports?)\b", nxt, re.IGNORECASE)
+    )
+
+
 # A role-label row of a flattened two-column contact table, as its own
 # pattern (the _CONTACT_HEADER_RE alternative above covers the same shape
 # for the header branch; this one is the lookahead the table skip uses).
@@ -1655,6 +1706,13 @@ def extract_press_release_highlights(
             # "EARNINGS RELEASE & STOCK REPURCHASE PROGRAM") before the
             # "Exhibit 99.1" marker; the real headline follows the marker.
             # Batch 124.
+            i += 1
+            continue
+        if _is_quarter_earnings_title(lines, i):
+            # Abbreviated quarter earnings-release document title
+            # (ExxonMobil: "3Q 2024 Earnings Release") after the
+            # "EXHIBIT 99.1" marker; the real headline follows a
+            # "FOR IMMEDIATE RELEASE" admin line. Batch 127.
             i += 1
             continue
         if ln.lower() == "earnings release" or _QUARTER_EARNINGS_LABEL_RE.match(ln):
