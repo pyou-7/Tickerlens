@@ -885,6 +885,21 @@ def _is_dated_press_release_label(ln: str) -> bool:
     return len(ln) <= 140 and bool(_DATED_PRESS_RELEASE_LABEL_RE.match(ln))
 
 
+# A slide-deck title page (U.S. Bancorp/USB, all 8 stored quarters):
+# "<NQ>YY Key Financial Data" heads the deck, and the highlights
+# section heading ("<NQ>YY (Financial) Highlights") follows
+# immediately. The title page is never the headline — the section
+# heading is — and the body starts AT the heading so the section
+# extractor still finds its content (batch 130). Without the
+# body_start-at-heading, the section anchor is lost: the body would
+# fall back to a later business section and the financial bullets
+# would be lost. Full-line anchored: a genuine headline is never
+# exactly a quarter token plus "Key Financial Data" (Lam Research's
+# "Key Financial Data for the Quarters Ended ..." prose heading is a
+# different shape and is untouched).
+_DECK_KEY_FINANCIAL_DATA_RE = re.compile(r"^[1234]Q\d{2}\s+Key Financial Data$")
+
+
 # A role-label row of a flattened two-column contact table, as its own
 # pattern (the _CONTACT_HEADER_RE alternative above covers the same shape
 # for the header branch; this one is the lookahead the table skip uses).
@@ -1112,7 +1127,8 @@ _NEVER_HEADLINE_RE = re.compile(
     r"|^u\.?s\.?(?:a\.?)?\.?$|^united\s+states$|^u\.?k\.?$|^united\s+kingdom$"
     r"|^canada$|^mexico$|^germany$|^france$|^japan$|^ireland$|^netherlands$"
     r"|^switzerland$|^australia$|^singapore$|^india$|^brazil$"
-    r"|^\d+\s+\S+\s+Financial Highlights",
+    r"|^\d+\s+\S+\s+Financial Highlights"
+    r"|^[1234]Q\d{2}\s+Key Financial Data$",
     re.IGNORECASE,
 )
 
@@ -1642,6 +1658,17 @@ def extract_press_release_highlights(
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             i += 1
             continue
+        if _DECK_KEY_FINANCIAL_DATA_RE.match(ln):
+            # Deck-title page (U.S. Bancorp): the title is never the
+            # headline; the highlights section heading that follows it
+            # is, and the body starts AT the heading so the section
+            # extractor still finds its content. Batch 130. When no
+            # highlights heading follows, fall through to the
+            # never-headline skip below instead.
+            nxt = lines[i + 1] if i + 1 < len(lines) else ""
+            if nxt and len(nxt) <= 120 and _HIGHLIGHTS_HEADING_RE.search(nxt):
+                headline, body_start = nxt, i + 1
+                break
         if _NEVER_HEADLINE_RE.match(ln):
             # Never a headline (batch 115): lone punctuation, image-filename
             # tokens, page-header junk, exchange:ticker lines, section
