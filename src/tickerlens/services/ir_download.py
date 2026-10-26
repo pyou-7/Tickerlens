@@ -762,9 +762,15 @@ def _release_name_rank(name: str) -> tuple[int, int] | None:
     # quarter digit precedes the q marker for Q1–Q3, while Q4 uses the
     # plain q marker, exhibit991q424.htm; the 99.2 supplements mirror it
     # as exhibit9921q25.htm and never match since they carry 992, not
-    # 991), or "991" leading a letter run
+    # 991), "991" before a 6–8-digit date run (Cognizant's
+    # exhibit9916302026.htm = 99.1, 6/30/2026 — the month digit follows
+    # the 99.1 "1" directly, so the tier-0 first regex's digit guard
+    # rejects it and only this date-run alternative rescues it; the
+    # 99.2/99.3 supplements exhibit992/9936302026.htm never match since
+    # they carry 992/993, not 991), or "991" leading a letter run
     # (United Health's a991unherq42025.htm — the 99.1 release; the
-    # lookahead's digit exclusion keeps doc9912final.htm unmatched, and
+    # lookahead's digit exclusion keeps doc9912final.htm unmatched — its
+    # digit run is 1 digit, not 6–8 — and
     # 99.2 supplements like q42025er992.htm deliberately never match).
     # The (?!\d|\.\d) guard keeps 99.2/99.3+ supplements (BAC's
     # bac-09302026ex993.htm, MET's ex992qfsq325.htm) out of tier 0 — the
@@ -773,7 +779,7 @@ def _release_name_rank(name: str) -> tuple[int, int] | None:
     # cdns07222024ex9901.htm); "02"/"03" still fail the guard. The guard
     # allows the "." of the file extension (".htm") but not ".2"/".3".
     if re.search(r"ex(?:hibit|h)?x?[^a-z0-9]?99(\.1|1|01)?(?!\d|\.\d)", name, re.IGNORECASE) or re.search(
-        r"991(?=q\d|[-_]|$|[a-z]|[1-4]q\d)", stem, re.IGNORECASE
+        r"991(?=q\d|[-_]|$|[a-z]|[1-4]q\d|\d{6,8}($|[-_.]))", stem, re.IGNORECASE
     ):
         base = 0
     # Press-release naming (tier 1):
