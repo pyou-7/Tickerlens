@@ -860,6 +860,31 @@ def _is_quarter_earnings_title(lines: list[str], i: int) -> bool:
     )
 
 
+# A dated press-release document label (Altria/MO, all 8 stored quarters):
+# "<COMPANY NAME> (EARNINGS) PRESS RELEASE, DATED <Month DD, YYYY>".
+# The label sits between the exhibit header and the "Exhibit 99.1"
+# marker, ahead of the real headline ("ALTRIA REPORTS 2024
+# THIRD-QUARTER ..."), and the loop picked it because it is short and
+# headline-shaped. A genuine headline never ends with "DATED <full
+# date>", so the date anchor is the whole discriminator — no marker
+# lookbehind/lookahead is needed (unlike batches 124/127, the label
+# here precedes its marker, and the marker follows it in both MO
+# variants). The 140-char bound keeps a prose sentence that happens
+# to end "... press release, dated <date>" out of the rule.
+_DATED_PRESS_RELEASE_LABEL_RE = re.compile(
+    r"^.+?\b(earnings\s+)?press\s+release,?\s+dated\s+"
+    r"(january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|"
+    r"oct|nov|dec)\.?\s+\d{1,2},?\s+\d{4}$",
+    re.IGNORECASE,
+)
+
+
+def _is_dated_press_release_label(ln: str) -> bool:
+    """True when *ln* is a dated press-release document label, not a headline."""
+    return len(ln) <= 140 and bool(_DATED_PRESS_RELEASE_LABEL_RE.match(ln))
+
+
 # A role-label row of a flattened two-column contact table, as its own
 # pattern (the _CONTACT_HEADER_RE alternative above covers the same shape
 # for the header branch; this one is the lookahead the table skip uses).
@@ -1713,6 +1738,13 @@ def extract_press_release_highlights(
             # (ExxonMobil: "3Q 2024 Earnings Release") after the
             # "EXHIBIT 99.1" marker; the real headline follows a
             # "FOR IMMEDIATE RELEASE" admin line. Batch 127.
+            i += 1
+            continue
+        if _is_dated_press_release_label(ln):
+            # Dated press-release document label (Altria/MO: "ALTRIA
+            # GROUP, INC. EARNINGS PRESS RELEASE, DATED OCTOBER 31,
+            # 2024") ahead of the real headline; the label is never the
+            # headline. Batch 129.
             i += 1
             continue
         if ln.lower() == "earnings release" or _QUARTER_EARNINGS_LABEL_RE.match(ln):
