@@ -1059,6 +1059,26 @@ _HEADLINE_CONT_BAD_START_RE = re.compile(r"^[•\-\d\"“]")
 # of the wrap-tail case above. Batch 107.
 _HEADLINE_CONT_LEAD_RE = re.compile(r"^(and|or|but)\b", re.IGNORECASE)
 
+# A continuation line that opens with "for" + a period designator ("FOR
+# THIRD QUARTER 2024" after "MOODY'S CORPORATION REPORTS RESULTS", "for
+# Fourth Quarter Fiscal 2025" after "FICO Announces Earnings of $7.40 per
+# Share", "for 2026" after "... Announces Guidance"): the headline was
+# wrapped mid-phrase with the period phrase leading the second line. Batch
+# 136. Narrow on purpose — a bare "for" lead is NOT a trigger, because a
+# lede "For ..." line is common, and it always starts "For the ..." ("For
+# the three months ended ...:", "For the full year:") or is an admin line
+# ("For 6:00 a.m. ET Release", caught by _ADMIN_LINE_RE). So the rule
+# requires an ordinal quarter ("Third Quarter", "Fourth Quarter and Fiscal
+# 2024") or a bare year standing alone ("for 2026" — the $-anchor means
+# "For 2026, the company expects ..." never matches), and the (?!the\b)
+# guard is belt-and-braces for a "For the ..." line that somehow lost its
+# colon. A genuine period phrase never starts a lede sentence.
+_HEADLINE_FOR_LEAD_RE = re.compile(
+    r"^for\s+(?!the\b)"
+    r"(?:(?:first|second|third|fourth)[-\s]+quarter|20\d{2}\s*$)",
+    re.IGNORECASE,
+)
+
 # A release-date line ("July 30, 2026", "July 30, 2026 Minneapolis, MN
 # 55401", or "10/31/2024 Minneapolis, MN 55401"): never headline material.
 # Used by the masthead-residue skip to recognize address+date+name masthead
@@ -1318,6 +1338,13 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        completing an "Up" fragment or an "and" wrap. The digit-lead guard
        is bypassed for this exact shape only — a digit-led line after a
        verb or ordinal tail is still refused (metric-table rows).
+
+    9. (Batch 136) The next line is "for"-led with a period designator
+       ("FOR THIRD QUARTER 2024", "for Fourth Quarter Fiscal 2025", "for
+       2026"): the period phrase completing a wrapped headline. A bare
+       "for" lead is not a trigger — lede "For the ..." lines and admin
+       "For 6:00 a.m. ET Release" lines never match the period-designator
+       shape (see _HEADLINE_FOR_LEAD_RE).
     """
     headline = lines[i]
     j = i + 1
@@ -1346,6 +1373,7 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             or _HEADLINE_VERB_TAIL_RE.search(headline)
             or _HEADLINE_ORDINAL_TAIL_RE.search(headline)
             or _HEADLINE_CONT_LEAD_RE.match(lines[j])
+            or _HEADLINE_FOR_LEAD_RE.match(lines[j])
             or year_join
             or verb_year_results_join
             or fragment_join
