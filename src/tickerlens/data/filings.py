@@ -885,6 +885,32 @@ def _is_dated_press_release_label(ln: str) -> bool:
     return len(ln) <= 140 and bool(_DATED_PRESS_RELEASE_LABEL_RE.match(ln))
 
 
+# An address dateline (M&T Bank/MTB, all 8 stored quarters): "One M&T
+# Plaza, Buffalo, NY 14203 July 15, 2026" — the head-office address plus
+# the release date on one line, ahead of the real headline ("M&T Bank
+# Corporation (NYSE:MTB) announces second quarter 2026 results"). The
+# loop picked it because no skip matched it: it is 49 chars (over the
+# 48-char masthead-residue bound, 9 words over the 4-word guard), it
+# ends with a date rather than a dash (so _DATELINE_RE misses it), and
+# it does not start with a date (so _DATE_LINE_RE misses it). A genuine
+# headline never ends "<ZIP> <full month date>" — the ZIP+date ending
+# is the whole discriminator, so no lookahead is needed. The 120-char
+# bound keeps a prose sentence that happens to end with a ZIP+date out
+# of the rule. Batch 133.
+_ADDRESS_DATELINE_RE = re.compile(
+    r"^.+?\b\d{5}(-\d{4})?\s+"
+    r"(january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|"
+    r"oct|nov|dec)\.?\s+\d{1,2},\s+\d{4}$",
+    re.IGNORECASE,
+)
+
+
+def _is_address_dateline(ln: str) -> bool:
+    """True when *ln* is an address+date dateline, not a headline."""
+    return len(ln) <= 120 and bool(_ADDRESS_DATELINE_RE.match(ln))
+
+
 # A slide-deck title page (U.S. Bancorp/USB, all 8 stored quarters):
 # "<NQ>YY Key Financial Data" heads the deck, and the highlights
 # section heading ("<NQ>YY (Financial) Highlights") follows
@@ -1772,6 +1798,12 @@ def extract_press_release_highlights(
             # GROUP, INC. EARNINGS PRESS RELEASE, DATED OCTOBER 31,
             # 2024") ahead of the real headline; the label is never the
             # headline. Batch 129.
+            i += 1
+            continue
+        if _is_address_dateline(ln):
+            # Address dateline (M&T Bank/MTB: "One M&T Plaza, Buffalo,
+            # NY 14203 July 15, 2026") ahead of the real headline; the
+            # dateline is never the headline. Batch 133.
             i += 1
             continue
         if ln.lower() == "earnings release" or _QUARTER_EARNINGS_LABEL_RE.match(ln):
