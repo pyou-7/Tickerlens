@@ -1140,10 +1140,36 @@ _HEADLINE_YEAR_RESULTS_RE = re.compile(r"^20\d{2}\s+Results\b", re.IGNORECASE)
 # "Reports P&C" is a fragment of "P&C Combined Ratio"). The continuation
 # guards still apply, so a genuine short headline ending on one of these
 # words followed by a sentence-terminated lede never joins.
+#
+# Batch 137: two more Chubb wrap points. "Insurance" — the Q4 2024 headline
+# wraps after "Life Insurance" onto "Up 15.7%; P&C Combined Ratio of
+# 86.6%", and that tail clause drops out of the stored text entirely (the
+# old headline stopped at "Insurance" and the section extractor skipped
+# the orphan line, so the stored body never contained it). "Income" is
+# NOT a bare fragment word, despite the Q3 2024 wrap after "Net
+# Investment Income" onto "Both Up Double-Digit; ...": the old-vs-new
+# blast showed a bare "Income" tail over-joins genuine headlines —
+# Carnival's "NET INCOME" headlines are followed by subhead lines
+# ("Accelerates shareholder returns ...", "Record bookings provide ...")
+# and PSEG's "$3.54 PER SHARE NET INCOME" by a sibling metric line
+# ("$3.68 PER SHARE NON-GAAP OPERATING EARNINGS"). So "Income" joins
+# only conjunctively, with a "Both"-led continuation (see
+# _HEADLINE_INCOME_TAIL_RE / _HEADLINE_BOTH_LEAD_RE below): "Both" is a
+# pronoun referring back to the two income figures, never a subhead or a
+# sibling metric line, and a sentence-terminated "Both ..." lede is still
+# refused by the continuation guards.
 _HEADLINE_FRAGMENT_TAIL_RE = re.compile(
-    r"\b(core|record|consolidated|life|net|operating|combined|prior|p&c|up)\s*$",
+    r"\b(core|record|consolidated|life|net|operating|combined|prior|p&c|up|insurance)\s*$",
     re.IGNORECASE,
 )
+
+# Batch 137 conjunctive wrap rule (see comment above): a headline ending
+# on "Income" continues only onto a "Both"-led line ("Net Investment
+# Income" / "Both Up Double-Digit; ..."). Either half alone is not a
+# trigger — Carnival/PSEG prove "Income" alone over-joins, and a "Both"
+# lead after any other tail is a lede/subhead, not a wrap.
+_HEADLINE_INCOME_TAIL_RE = re.compile(r"\bincome\s*$", re.IGNORECASE)
+_HEADLINE_BOTH_LEAD_RE = re.compile(r"^both\b", re.IGNORECASE)
 
 # A percentage-led continuation ("34.6%, and Record ...", "21.7%;") — the
 # figure completing an "Up" fragment, or the second figure of an "and"
@@ -1345,6 +1371,16 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        "for" lead is not a trigger — lede "For the ..." lines and admin
        "For 6:00 a.m. ET Release" lines never match the period-designator
        shape (see _HEADLINE_FOR_LEAD_RE).
+
+    10. (Batch 137) The picked headline ends on "Insurance" (new
+       _HEADLINE_FRAGMENT_TAIL_RE word): Chubb's paragraph headline
+       wraps after "Life Insurance" ("Up 15.7%; P&C Combined Ratio of
+       86.6%"). Same fragment-tail guards as batch 135. "Income" is
+       narrower: it joins only onto a "Both"-led continuation
+       ("Net Investment Income" / "Both Up Double-Digit; ...") — a bare
+       "Income" tail over-joins Carnival subheads and PSEG sibling metric
+       lines, so the conjunctive rule (income tail AND both lead) is the
+       whole trigger; a "Both" lead after any other tail never joins.
     """
     headline = lines[i]
     j = i + 1
@@ -1359,6 +1395,10 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             and _HEADLINE_YEAR_RESULTS_RE.match(lines[j])
         )
         fragment_join = bool(_HEADLINE_FRAGMENT_TAIL_RE.search(headline))
+        income_both_join = bool(
+            _HEADLINE_INCOME_TAIL_RE.search(headline)
+            and _HEADLINE_BOTH_LEAD_RE.match(lines[j])
+        )
         pct_join = bool(
             _HEADLINE_PCT_LEAD_RE.match(lines[j])
             and (
@@ -1366,7 +1406,8 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             )
         )
         fresh_headline_block = bool(
-            fragment_join and _HEADLINE_FRESH_HEADLINE_RE.match(lines[j])
+            (fragment_join or income_both_join)
+            and _HEADLINE_FRESH_HEADLINE_RE.match(lines[j])
         )
         if not (
             _HEADLINE_WRAP_TAIL_RE.search(headline)
@@ -1377,6 +1418,7 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             or year_join
             or verb_year_results_join
             or fragment_join
+            or income_both_join
         ):
             break
         if not (
