@@ -1107,6 +1107,50 @@ _HEADLINE_YEAR_LEAD_RE = re.compile(r"^20\d{2}\b")
 # header become the whole body, under 200 chars -> highlights None).
 _HEADLINE_YEAR_RESULTS_RE = re.compile(r"^20\d{2}\s+Results\b", re.IGNORECASE)
 
+# A headline ending on a fragment word (Chubb/CB, batch 135): the release
+# headline is a whole paragraph wrapped at arbitrary points, and the wrap
+# lands mid-phrase on a word that cannot end a complete headline — a
+# modifier awaiting its head noun ("Net Income and Core" / "Operating
+# Income", "P&C Up 10.6% and Life" / "Insurance", "Respectively;
+# Consolidated" / "Net Premiums Written", "P&C Combined" / "Ratio",
+# "Excluding Catastrophe Losses and Prior" / "Period Development") or
+# the preposition "Up" awaiting its figure ("Net Income of $7.35, Up" /
+# "34.6%"). Each word is load-bearing: a complete headline never ends on
+# one of them ("Reports Record" is a fragment of "Record ... Income";
+# "Reports P&C" is a fragment of "P&C Combined Ratio"). The continuation
+# guards still apply, so a genuine short headline ending on one of these
+# words followed by a sentence-terminated lede never joins.
+_HEADLINE_FRAGMENT_TAIL_RE = re.compile(
+    r"\b(core|record|consolidated|life|net|operating|combined|prior|p&c|up)\s*$",
+    re.IGNORECASE,
+)
+
+# A percentage-led continuation ("34.6%, and Record ...", "21.7%;") — the
+# figure completing an "Up" fragment, or the second figure of an "and"
+# wrap ("Up 78.8% and" / "85.2%;"). The digit-led bad-start guard below
+# refused these, stranding the figure as the first body line and leaving
+# the headline ending on "Up"/"and". Allowed only when the headline ends
+# on a fragment tail or a wrap tail (a headline never ends with a comma,
+# semicolon, or conjunction either) — never for verb/ordinal tails, where
+# a digit-led line is a metric-table row, not a headline completion.
+_HEADLINE_PCT_LEAD_RE = re.compile(r"^\d[\d,]*(\.\d+)?\s*%")
+
+# A continuation line that is itself a complete headline ("Danaher
+# Reports Third Quarter 2024 Results" after Danaher's cover slogan
+# "Innovation at the speed of life"): the slogan line ends on a fragment
+# word ("life"), but the next line is a fresh headline, not a wrap
+# continuation — joining them would build a Franken-headline. Blocks
+# fragment-tail joins only: stronger triggers (a wrap comma, a verb
+# tail) keep their existing behavior — Merck's "Merck & Co., Inc.,
+# Rahway, N.J.," / "USA Announces ..." wrap must still join, and there
+# the continuation is the verb half of the same headline, not a new one.
+_HEADLINE_FRESH_HEADLINE_RE = re.compile(
+    r"^\S+\s+(reports?|announces?|delivers?|posts?|declares?|names?|"
+    r"elects?|approves?|raises?|beats?|tops?|reaffirms?|launches?|"
+    r"completes?|acquires?)\b",
+    re.IGNORECASE,
+)
+
 
 # A page-image exhibit "line" that is really a whole page starting with a run
 # of social-media URLs (Ford: "1 https://ford.to/facebook https://x.com/ford
@@ -1256,11 +1300,29 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
        — a bare year after a verb tail still does NOT join (batch 108's
        "Acme Reports Results" / "2026" negative still holds: no "Results"
        word after the year).
+
+    7. (Batch 135) The picked headline ends on a fragment word (see
+       _HEADLINE_FRAGMENT_TAIL_RE): a mid-phrase wrap on a modifier or on
+       "Up" ("... and Core" / "Operating Income ...", "... and Life" /
+       "Insurance ..."). Chubb's paragraph headlines wrap 5-11 times, so
+       the join cap rises from 3 to 12 — every join still requires a
+       trigger plus all continuation guards, so the higher cap cannot run
+       away into the lede: a runaway would need 12 consecutive
+       fragment-shaped lines. One exception: a fragment-tail join is
+       blocked when the continuation is itself a fresh headline (Danaher's
+       cover slogan "Innovation at the speed of life" / "Danaher Reports
+       ..." — the slogan is the stored headline today, and joining would
+       build a Franken-headline, not a repair).
+    8. (Batch 135) The next line is percentage-led ("34.6%, ...", "21.7%;")
+       and the headline ends on a fragment tail or a wrap tail: the figure
+       completing an "Up" fragment or an "and" wrap. The digit-lead guard
+       is bypassed for this exact shape only — a digit-led line after a
+       verb or ordinal tail is still refused (metric-table rows).
     """
     headline = lines[i]
     j = i + 1
     joins = 0
-    while joins < 3 and j < len(lines):
+    while joins < 12 and j < len(lines):
         year_join = bool(
             _HEADLINE_QUARTER_TAIL_RE.search(headline)
             and _HEADLINE_YEAR_LEAD_RE.match(lines[j])
@@ -1269,6 +1331,16 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             _HEADLINE_VERB_TAIL_RE.search(headline)
             and _HEADLINE_YEAR_RESULTS_RE.match(lines[j])
         )
+        fragment_join = bool(_HEADLINE_FRAGMENT_TAIL_RE.search(headline))
+        pct_join = bool(
+            _HEADLINE_PCT_LEAD_RE.match(lines[j])
+            and (
+                fragment_join or _HEADLINE_WRAP_TAIL_RE.search(headline)
+            )
+        )
+        fresh_headline_block = bool(
+            fragment_join and _HEADLINE_FRESH_HEADLINE_RE.match(lines[j])
+        )
         if not (
             _HEADLINE_WRAP_TAIL_RE.search(headline)
             or _HEADLINE_VERB_TAIL_RE.search(headline)
@@ -1276,6 +1348,7 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             or _HEADLINE_CONT_LEAD_RE.match(lines[j])
             or year_join
             or verb_year_results_join
+            or fragment_join
         ):
             break
         if not (
@@ -1284,12 +1357,14 @@ def _join_wrapped_headline(lines: list[str], i: int) -> tuple[str, int]:
             and (
                 year_join
                 or verb_year_results_join
+                or pct_join
                 or not _HEADLINE_CONT_BAD_START_RE.match(lines[j])
             )
             and not _ADMIN_LINE_RE.match(lines[j])
             and not _BOILERPLATE_RE.match(lines[j])
             and not _CONTACT_HEADER_RE.match(lines[j])
             and not _CONTACT_LINE_RE.search(lines[j])
+            and not fresh_headline_block
         ):
             break
         headline = f"{headline} {lines[j]}"
