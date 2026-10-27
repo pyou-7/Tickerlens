@@ -514,6 +514,27 @@ _COMPANY_NAME_LINE_RE = re.compile(
 )
 
 
+def _is_subsidiary_list(ln: str) -> bool:
+    """True for a flattened subsidiary-list masthead line (Cincinnati
+    Financial: its exhibit header flattens the subsidiary table into one
+    line per table row, " n " joining the columns — "The Cincinnati
+    Insurance Company n The Cincinnati Indemnity Company").
+
+    Narrow by construction: the line must split on " n " into at least two
+    segments, and every segment must end with a company suffix (via
+    _COMPANY_NAME_LINE_RE) and stay within 80 chars. A prose line that
+    happens to contain " n " fails the suffix rule on at least one segment,
+    and a real headline never consists solely of " n "-joined company
+    names. Batch 134.
+    """
+    parts = ln.split(" n ")
+    if len(parts) < 2:
+        return False
+    return all(
+        0 < len(p) <= 80 and _COMPANY_NAME_LINE_RE.search(p) for p in parts
+    )
+
+
 def _looks_like_masthead_residue(ln: str) -> bool:
     """True for head-office address-block lines that follow a company-name
     masthead (Chubb: "Bärengasse 32", "CH-8001 Zurich", "Switzerland",
@@ -1724,6 +1745,17 @@ def extract_press_release_highlights(
             if j > i:
                 i = j
                 continue
+        if _is_subsidiary_list(ln):
+            # Flattened subsidiary-list masthead (Cincinnati Financial):
+            # the exhibit header flattens its subsidiary table into
+            # " n "-joined company names, one line per table row, ahead of
+            # the contact block and the real headline. The second row
+            # (90 chars) escapes the company-name masthead branch's 80-char
+            # bound and was picked as the headline, dragging the remaining
+            # rows, the real headline, and the dateline into the lede.
+            # Skip the line; the loop finds the real headline. Batch 134.
+            i += 1
+            continue
         if len(ln) <= 80 and _COMPANY_NAME_LINE_RE.search(ln):
             # Company masthead (CHD): skip the name plus a following
             # head-office address block (Chubb, Humana) so a street or
