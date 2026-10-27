@@ -321,6 +321,31 @@ def _looks_like_table_fragment(ln: str) -> bool:
     return False
 
 
+def _is_lede_heading_fragment(ln: str) -> bool:
+    """True for a lone all-caps word in the lede — the tail of a section
+    heading flattened out of a table ("QUARTER" from a "Fourth Quarter"
+    heading, "YEAR" from "Full Year"). A single all-caps word is never
+    narrative prose, so it never belongs in the lede; left in, it consumes
+    one of the 6 lede lines and truncates a real bullet (Chubb Q4 2024:
+    the "QUARTER" line plus the leading "●" left bullet 2 cut mid-item).
+    Batch 138.
+    """
+    words = ln.split()
+    return len(words) == 1 and ln.isupper() and any(c.isalpha() for c in ln)
+
+
+def _is_lone_bullet_marker(ln: str) -> bool:
+    """True for a line that is only a bullet glyph ("●", "•", "-", "*").
+
+    Chubb's bullet lists flatten each marker onto its own line; a marker
+    before any collected lede line carries no content — the bullet's text
+    follows on the next lines — so it must not consume a lede slot. Mid-
+    lede markers are kept: they are the only separators between bullets
+    in the rendered paragraphs. Batch 138.
+    """
+    return ln in ("●", "•", "-", "*")
+
+
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
 # are never narrative highlights. Distinct from _FOOTNOTE_LINE_RE (digits-only,
 # used by the shareholder-letter table parser) — exhibits also letter their
@@ -2095,6 +2120,12 @@ def extract_press_release_highlights(
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
                 continue  # contact blocks some filers put before the headline
+            if _is_lede_heading_fragment(ln):
+                i += 1
+                continue  # section-heading tail ("QUARTER", "YEAR") — never prose
+            if not lede and _is_lone_bullet_marker(ln):
+                i += 1
+                continue  # leading marker with no item yet — carries no content
             if _BOILERPLATE_RE.match(ln):
                 break
             lede.append(ln)
