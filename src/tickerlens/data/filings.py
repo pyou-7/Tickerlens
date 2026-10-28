@@ -237,6 +237,49 @@ _DATELINE_RE = re.compile(
 # Batch 141.
 _PAGE_PREFIX_RE = re.compile(r"^page\s+\d+(?:\s+of\s+\d+)?\s+", re.IGNORECASE)
 
+# A "Page N of M" marker glued to a body line ("Page 2 of 16 business,
+# with ..." — UnitedHealth's page-image exhibits flatten each page into
+# one line, so page 2+ markers land mid-paragraph, ahead of a bullet, or
+# ahead of prose). Stripped from body lines only, and only in the full
+# "of M" form: the headline loop keeps its own batch-141 guard (a bare
+# fragment remainder must not become the headline), and a bare "Page N"
+# without "of M" is left alone — a prose sentence like "Page 2 of the
+# report ..." must never be beheaded into "of the report ...". Batch 142.
+_BODY_PAGE_PREFIX_RE = re.compile(
+    r"^page\s+\d+\s+of\s+\d+\s+", re.IGNORECASE
+)
+
+# A "view online" trailer glued onto a bullet (UnitedHealth: the outlook
+# bullet carries "To view this information in a different format,
+# including graphics, published on our website, click here: <url>" plus
+# flattened following prose). The www. in the URL tripped _CONTACT_LINE_RE
+# and dropped the whole bullet — the earnings outlook — from the
+# leading-bullet block, the section, and the lede. Cut at the trailer
+# start; the prefix is the bullet. The glued prose after the URL is
+# dropped with the trailer: it was dropped with the whole line before,
+# and keeping it would bloat the bullet item and push metric bullets
+# past the 14-line block cap. Batch 142.
+_VIEW_ONLINE_TRAILER_RE = re.compile(
+    r"\s*To view this information in a different format\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_body_line(ln: str) -> str:
+    """Strip a page marker / view-online trailer glued onto a body line."""
+    m = _BODY_PAGE_PREFIX_RE.match(ln)
+    if m:
+        rest = ln[m.end():].strip()
+        if rest:
+            ln = rest
+    m = _VIEW_ONLINE_TRAILER_RE.search(ln)
+    if m:
+        prefix = ln[: m.start()].rstrip()
+        if prefix:
+            ln = prefix
+    return ln
+
+
 # A dateline that opens a full sentence ("NEWARK, N.J. – Prudential ...
 # today reported ..."), as opposed to _DATELINE_RE's bare dateline-only
 # line. Batch 118: Prudential puts the dateline sentence between the
@@ -2135,6 +2178,13 @@ def extract_press_release_highlights(
         break
 
     body_lines = lines[body_start:]
+
+    # Batch 142: page markers glued to body lines and view-online
+    # trailers glued to bullets are cleaned here — after headline
+    # selection, so the headline loop's batch-141 page-prefix guard is
+    # untouched. Every body consumer (leading-bullet block, sections,
+    # lede) reads body_lines, so one cleaning covers all three paths.
+    body_lines = [_clean_body_line(ln) for ln in body_lines]
 
     section = _extract_highlights_section(body_lines)
     if section is not None:
