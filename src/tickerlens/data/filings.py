@@ -341,9 +341,12 @@ def _is_lone_bullet_marker(ln: str) -> bool:
     before any collected lede line carries no content — the bullet's text
     follows on the next lines — so it must not consume a lede slot. Mid-
     lede markers are kept: they are the only separators between bullets
-    in the rendered paragraphs. Batch 138.
+    in the rendered paragraphs. Batch 138; batch 139 adds Chubb's other
+    two flattened markers, the middle dot ("·", Q3 2024) and the white
+    circle ("○", Q3 2024 sub-bullets) — both were counted as content
+    lines, which is what starved the Q3 2024 lede.
     """
-    return ln in ("●", "•", "-", "*")
+    return ln in ("●", "•", "·", "○", "-", "*")
 
 
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
@@ -2098,6 +2101,23 @@ def extract_press_release_highlights(
         # budget with cell fragments and starve the real bullets (batch 97).
         lede_lines = _drop_table_fragment_runs(body_lines)
         lede: list[str] = []
+        # Batch 139: the 6-line budget counts content lines only. A lone
+        # bullet marker is a separator, not content — counting it (as the
+        # old code did for every marker, and for "·"/"○" which were not
+        # even recognized) starved Chubb Q3 2024 after bullet 2, although
+        # the lede holds 8 bullets. The finish-the-item rule below applies
+        # ONLY to marker-delimited ledes: once the budget is reached in a
+        # lede that has separators, the current item is finished rather
+        # than cut mid-item (up to 4 continuation lines, and a marker at
+        # the boundary ends collection without being appended — no
+        # dangling marker). A marker-less prose lede keeps the old hard
+        # 6-line cap: without item delimiters "finish the item" is
+        # undefined, and the ungated version changed 109/232 blast
+        # quarters — mostly prose extensions up to the 4000-char cap —
+        # for no defect. The gate is what keeps this fix narrow.
+        content_lines = 0
+        overrun = 0
+        marker_seen = False
         i = 0
         while i < len(lede_lines):
             ln = lede_lines[i]
@@ -2123,14 +2143,29 @@ def extract_press_release_highlights(
             if _is_lede_heading_fragment(ln):
                 i += 1
                 continue  # section-heading tail ("QUARTER", "YEAR") — never prose
-            if not lede and _is_lone_bullet_marker(ln):
+            if _is_lone_bullet_marker(ln):
+                if not lede:
+                    i += 1
+                    continue  # leading marker with no item yet — carries no content
+                if content_lines >= 6:
+                    break  # budget reached at an item boundary — stop clean
+                lede.append(ln)
+                marker_seen = True
                 i += 1
-                continue  # leading marker with no item yet — carries no content
+                continue  # separator between bullets — never consumes budget
             if _BOILERPLATE_RE.match(ln):
                 break
+            if content_lines >= 6:
+                if not marker_seen:
+                    break  # prose lede: the 6-line cap is the bound
+                if overrun >= 4:
+                    break  # finishing cap: at most 4 lines past the budget
+                lede.append(ln)
+                overrun += 1
+                i += 1
+                continue
             lede.append(ln)
-            if len(lede) >= 6:
-                break
+            content_lines += 1
             i += 1
         body = "\n\n".join(lede)
 
