@@ -340,17 +340,106 @@ _TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
 
 _BULLET_LEAD_RE = re.compile(r"^[•●\-–—]\s")
 
+# A units parenthetical in words, anchored at line start (batch 143):
+# "(In millions, except earnings per share)" (FedEx), "(in thousands,
+# except per share data)" (AutoZone), "(In billions)" (Elevance). The
+# batch-97 _TABLE_UNITS_RE only matches "(Dollars|USD|$", so these
+# tables slipped through. Anchored so a mid-sentence "(in millions)"
+# in narrative prose never fires.
+_TABLE_WORD_UNITS_RE = re.compile(
+    r"^\(\s*in\s+(millions|thousands|billions)\b", re.IGNORECASE
+)
+
+# A "Percent Change" column header in words (batch 143): FedEx's tables
+# spell the header out, so the batch-97 "% change" check never fires.
+# Full-line (possibly repeated for multi-period headers) so a prose
+# "percent change" inside a sentence never fires.
+_PERCENT_CHANGE_WORDS_RE = re.compile(r"^(percent change\s*)+$", re.IGNORECASE)
+
+# One flattened table cell on its own line (batch 143): a lone "$", a
+# bare number ("1,757,093", "(1,371,420 )", "2024"), or a period header
+# ("Three Months Ended", "12 Weeks Ended 12 Weeks Ended"). Simon's
+# "Financial Highlights" table splits every cell across lines, so no
+# line carries both $ and % and no units line exists at all.
+_BARE_CELL_RE = re.compile(r"^(\$|\(?[\d,\s]+\)?)$")
+_PERIOD_HEADER_RE = re.compile(
+    r"^(((three|six|nine|twelve)\s+months\s+ended\s*)+"
+    r"|(\d+\s+weeks\s+ended\s*)+"
+    r"|(\d+\s+months\s+ended\s*)+)$",
+    re.IGNORECASE,
+)
+
+# Header-only table stubs (batch 143, second pass): FedEx FY2026 Q2/Q3
+# flatten their multi-period headers onto single lines ("Three Months
+# Ended Six Months Ended", "November 30, 2025 November 30, 2024
+# Percent" / "Change ..."), so the section that survives the first
+# pass is six header lines and no data rows. Its lines are all header
+# fragments: a standalone "(Unaudited)" annotation, a doubled period
+# header, date lines ending in "Percent", and a lone "Change" line.
+_STANDALONE_PAREN_RE = re.compile(r"^\(.{1,30}\)$")
+# A lone "Change"/"Percent" header word (batch 143): the trailing
+# " Percent" branch is case-sensitive on purpose — a wrapped narrative
+# line ending in lowercase "percent" is prose, while the capitalized
+# "Percent" at a line end is a split column header.
+_HEADER_WORD_RE = re.compile(r"^(change|percent)$", re.IGNORECASE)
+
+# A count row: a short label ending in two or more bare numbers
+# ("Beginning stores 6,627 6,432", "Stores opened 39 23") — AutoZone's
+# "Store Count" table has no $ or % anywhere. Month-name lines are
+# excluded: a doubled date header ("November 22, 2025 November 23,
+# 2024") also ends in two numbers but is a header, not a row, and a
+# prose dateline inside a section would false-fire the same way.
+_MONTH_NAME_RE = re.compile(
+    r"\b(january|february|march|april|may|june|july|august|september|"
+    r"october|november|december)\b",
+    re.IGNORECASE,
+)
+_COUNT_ROW_RE = re.compile(r"(?:^|\s)[\d,]+\s+[\d,]+$")
+
+
+def _looks_like_table_cell(ln: str) -> bool:
+    """True for one flattened cell line: lone $, bare number, period header."""
+    if _BULLET_LEAD_RE.match(ln):
+        return False
+    if _BARE_CELL_RE.match(ln):
+        return True
+    if _PERIOD_HEADER_RE.match(ln):
+        return True
+    if _STANDALONE_PAREN_RE.match(ln):
+        return True
+    if _HEADER_WORD_RE.match(ln) or ln.endswith(" Percent"):
+        return True
+    if (
+        len(ln) <= 60
+        and not ln.rstrip().endswith((".", "!", "?", ":"))
+        and "$" not in ln
+        and "%" not in ln
+        and not _MONTH_NAME_RE.search(ln)
+        and _COUNT_ROW_RE.search(ln)
+    ):
+        return True
+    return False
+
 
 def _looks_like_financial_table(lines: list[str]) -> bool:
     """True when a collected "Highlights" section is a data table, not prose."""
     strong = False
     data_rows = 0
+    cells = 0
     for ln in lines:
         if _TABLE_UNITS_RE.search(ln) or re.search(r"% change", ln, re.IGNORECASE):
             strong = True
         elif not _BULLET_LEAD_RE.match(ln) and "$" in ln and "%" in ln:
             data_rows += 1
-    return strong or data_rows >= 4
+        # Batch 143: flattened-cell tables. The new strong signals and
+        # the cell count apply to non-bullet lines only, keeping the
+        # batch-107 bullet guard: narrative bullets never count.
+        if not _BULLET_LEAD_RE.match(ln):
+            if _TABLE_WORD_UNITS_RE.match(ln) or _PERCENT_CHANGE_WORDS_RE.match(ln):
+                strong = True
+            if _looks_like_table_cell(ln):
+                cells += 1
+    return strong or data_rows >= 4 or cells >= 3
 
 
 def _looks_like_table_fragment(ln: str) -> bool:
