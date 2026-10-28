@@ -226,6 +226,17 @@ _DATELINE_RE = re.compile(
     r"^[A-Z][A-Za-z .'\-]*?,\s+[A-Za-z0-9][A-Za-z0-9 .'\-(),;]*?[–—-]\s*$"
 )
 
+# Leading page marker glued to headline text ("Page 1 of 16 UnitedHealth
+# Group Reports ..." — UnitedHealth's page-image exhibits flatten page 1
+# into one bullet-run line, and _split_bullet_runs leaves the marker on the
+# first piece). The bare-page admin guard is $-anchored, so it never fires
+# when headline text follows the marker, and the headline loop picks the
+# marker + headline verbatim. Stripped only in the headline loop, and only
+# when the remainder is headline-shaped (see the pick branch) — a
+# page-prefixed prose line is not this defect and falls through unchanged.
+# Batch 141.
+_PAGE_PREFIX_RE = re.compile(r"^page\s+\d+(?:\s+of\s+\d+)?\s+", re.IGNORECASE)
+
 # A dateline that opens a full sentence ("NEWARK, N.J. – Prudential ...
 # today reported ..."), as opposed to _DATELINE_RE's bare dateline-only
 # line. Batch 118: Prudential puts the dateline sentence between the
@@ -2085,6 +2096,32 @@ def extract_press_release_highlights(
             # the table and let the loop pick the real headline. Batch 123.
             i = table_headline
             continue
+        page_prefix = _PAGE_PREFIX_RE.match(ln)
+        if page_prefix:
+            # Page-image exhibit (UnitedHealth, batch 141): the page marker
+            # is glued to the headline — "Page 1 of 16 UnitedHealth Group
+            # Reports First Quarter 2026 Results" — because the bare-page
+            # admin guard is $-anchored and never fires when headline text
+            # follows. Strip the marker and run the remainder through the
+            # wrap joiner, as the single-word-fragment branch does, so a
+            # wrapped remainder ("Page 1 of 16 UnitedHealth Group Reports"
+            # / "2025 Results and Issues 2026 Outlook") still joins. The
+            # JOINED result must be headline-shaped and must not itself be
+            # a dateline — a bare fragment remainder with no continuation
+            # ("UnitedHealth Group Reports" alone, 3 words) fails the shape
+            # test, so it falls through to the existing pick unchanged and
+            # the wrap join happens on the unstripped line instead.
+            rest = ln[page_prefix.end():].strip()
+            if rest:
+                joined, rel_next = _join_wrapped_headline(
+                    [rest] + lines[i + 1:], 0
+                )
+                if _looks_like_headline(joined) and not _DATELINE_RE.match(
+                    joined
+                ):
+                    headline = joined
+                    body_start = i + rel_next
+                    break
         if len(ln) <= _MAX_HEADLINE_CHARS:
             if _DATELINE_RE.match(ln):
                 # Dateline reached with no headline found (Berkshire's
