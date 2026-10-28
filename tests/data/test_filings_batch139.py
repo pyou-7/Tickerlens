@@ -69,17 +69,17 @@ def test_cb_q3_2024_markers_do_not_consume_budget_and_final_item_completes() -> 
     assert hl is not None
     parts = hl.split("\n\n")
     assert parts[0] == "Chubb Reports Third Quarter Results"
-    # The lead "·" is skipped; bullets 1-4 complete with separators;
-    # bullet 5 (after the boundary marker) is never reached.
+    # The lead "·" is skipped; bullets 1-4 complete WITHOUT separator
+    # paragraphs — batch 140 supersedes batch 139's keep-as-separator
+    # choice: paragraphs are already blank-line separated, so a lone
+    # marker paragraph renders as a junk glyph line. Bullet 5 (after the
+    # boundary marker) is never reached.
     assert parts[1:] == [
         "Net income was $2.32 billion, up 13.8%, and core operating income was $2.33 billion, up 14.3%. For the",
         "nine months, net income and core operating income were a record $6.70 billion and $6.75 billion, up 16.9% and 13.8%, respectively. On a per share basis,",
         "year-to-date net income and core operating income of $16.38 and $16.50 were records and up 18.8% and 15.6%.",
-        "·",
         "Consolidated net premiums written were up 5.5%, or 6.6% in constant dollars.",
-        "·",
         "P&C net premiums written were up 5.4%, or 6.1% in constant dollars.",
-        "○",
         "Global P&C net premiums written, which excludes Agriculture, were up 7.6%, or 8.5% in constant dollars, with",
         "commercial insurance up 8.1% and consumer insurance up 9.4%.",
         "up 4.9%, or 7.5% in constant dollars, with growth of 8.5% in consumer insurance and 6.7% in commercial insurance.",
@@ -112,10 +112,8 @@ def test_marker_at_budget_boundary_does_not_dangle() -> None:
     assert parts[1:] == [
         "Bullet one reports net income of $1.21 billion, up 14 percent.",
         "Bullet one continues with core operating income up 9 percent.",
-        "•",
         "Bullet two reports net premiums written of $4.8 billion, up 6 percent.",
         "Bullet two continues with a combined ratio of 87.2 percent.",
-        "•",
         "Bullet three reports book value per share of $142.18, up 11 percent.",
         "Bullet three continues with tangible book value up 13 percent.",
     ]
@@ -150,10 +148,8 @@ def test_finishing_cap_bounds_long_wrapped_item() -> None:
         "Alpha bullet opens with net income of $1.21 billion, up 14 percent.",
         "Alpha bullet continues with core operating income up 9 percent.",
         "Alpha bullet closes with a combined ratio of 87.2 percent.",
-        "•",
         "Beta bullet opens with net premiums written of $4.8 billion.",
         "Beta bullet continues with commercial lines up 8 percent.",
-        "•",
         "Gamma bullet opens with book value per share of $142.18.",
         "Gamma bullet second line reports tangible book value up 13 percent.",
         "Gamma bullet third line reports ROE of 14.7 percent annualized.",

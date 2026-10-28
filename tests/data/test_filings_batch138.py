@@ -54,8 +54,11 @@ def test_cb_q4_2024_lede_skips_heading_tail_and_leading_marker() -> None:
     assert "on a pre-tax basis, respectively." in body
     assert "Global P&C net premiums written were up 6.7%" in body
     assert "and consumer insurance up 7.5%." in body
-    # The mid-lede marker separating the bullets is kept.
-    assert "\n\n●\n\n" in body
+    # The mid-lede marker separating the bullets is NOT kept: batch
+    # 140 supersedes batch 138's keep-as-separator choice — paragraphs
+    # are already blank-line separated, so a lone marker paragraph
+    # renders as a junk glyph line.
+    assert "\n\n●\n\n" not in body
 
 
 def test_mid_lede_heading_fragment_skipped() -> None:

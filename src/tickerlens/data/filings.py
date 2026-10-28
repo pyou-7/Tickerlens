@@ -340,13 +340,21 @@ def _is_lone_bullet_marker(ln: str) -> bool:
     Chubb's bullet lists flatten each marker onto its own line; a marker
     before any collected lede line carries no content — the bullet's text
     follows on the next lines — so it must not consume a lede slot. Mid-
-    lede markers are kept: they are the only separators between bullets
-    in the rendered paragraphs. Batch 138; batch 139 adds Chubb's other
+    lede markers were kept as separators through batch 139, on the theory
+    that they separate bullets in the rendered paragraphs. Batch 140
+    drops that: paragraphs are already separated by blank lines, so a
+    lone marker paragraph renders as a junk glyph line and adds no
+    separation. Markers are now never stored — in either path — but they
+    still delimit items for the lede finish rule (marker_seen), so the
+    budget behavior is unchanged. Batch 138; batch 139 adds Chubb's other
     two flattened markers, the middle dot ("·", Q3 2024) and the white
     circle ("○", Q3 2024 sub-bullets) — both were counted as content
-    lines, which is what starved the Q3 2024 lede.
+    lines, which is what starved the Q3 2024 lede. Batch 140 adds the
+    last two glyphs the DB audit found standing alone: the black small
+    square ("▪", PNC's lists) and the en dash ("–", Simon's lists) —
+    the hyphen-minus was already covered, the en dash was not.
     """
-    return ln in ("●", "•", "·", "○", "-", "*")
+    return ln in ("●", "•", "·", "○", "▪", "-", "–", "*")
 
 
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
@@ -2149,7 +2157,11 @@ def extract_press_release_highlights(
                     continue  # leading marker with no item yet — carries no content
                 if content_lines >= 6:
                     break  # budget reached at an item boundary — stop clean
-                lede.append(ln)
+                # Batch 140: a mid-lede marker is a separator, never stored.
+                # Paragraphs are already blank-line separated, so appending
+                # it produced a junk glyph paragraph in 42 stored rows
+                # (SPG/NUE/CB/CI/SNPS/...). marker_seen is still set: the
+                # marker still delimits items for the finish rule below.
                 marker_seen = True
                 i += 1
                 continue  # separator between bullets — never consumes budget
@@ -2263,7 +2275,12 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
         if len(bullets) >= 14:
             break
     if len("\n".join(bullets)) >= 150:
-        return bullets
+        # Batch 140: drop lone-marker lines AFTER qualification, so the
+        # 150-char floor and the item-close logic above see the same
+        # lines as before — only the junk glyph lines disappear. A
+        # flattened bullet list ("•" alone, then the item text) otherwise
+        # stores a glyph line per item.
+        return [ln for ln in bullets if not _is_lone_bullet_marker(ln)]
     return None
 
 
@@ -2293,6 +2310,12 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         if len("\n".join(collected)) >= 150:
             if _looks_like_financial_table(collected):
                 continue  # table, not narrative highlights — try later headings
+            # Batch 140: drop lone-marker lines AFTER qualification, so the
+            # 12-line cap and the 150-char floor see the same lines as
+            # before — only the junk glyph lines disappear. Flattened
+            # bullet lists (Nucor: "•" on its own line before each item)
+            # otherwise store a glyph line per item.
+            collected = [ln for ln in collected if not _is_lone_bullet_marker(ln)]
             sections.append(collected)
             continue
         break  # heading found but section too thin — don't try later headings
