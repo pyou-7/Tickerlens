@@ -1151,6 +1151,20 @@ _TOC_PAGE_RE = re.compile(r"^\d{1,3}\s*[–-]\s*\d{1,3}$|^\d{1,3}$")
 # the real discrimination, so this bound only needs to exclude genuine prose.
 _TOC_TITLE_MAX_CHARS = 140
 
+# A narrative line inside a TOC's unanchored tail: a headline verb plus a
+# results topic, with no terminal sentence punctuation (batch 148). TOC tails
+# are section labels ("Overview", "EARNINGS RELEASE") and footnote markers
+# ("(1)"), never verb+topic lines; a footnote sentence ("Includes
+# reconciliation of consolidated net income to FFO ...") carries no headline
+# verb, and a prose lede ("Acme reports fourth quarter results today.") is
+# excluded by its terminal period — so the signal is headline-shaped, not
+# merely prose-shaped.
+_NARRATIVE_TAIL_RE = re.compile(
+    r"\b(reports?|announces?|delivers?|posts?|declares?|names?|elects?)\b"
+    r".*\b(results?|quarter|earnings|year|revenue|guidance|outlook)\b",
+    re.IGNORECASE,
+)
+
 
 def _skip_toc(lines: list[str], i: int) -> int:
     """Return the index of the first narrative line after a table of contents.
@@ -1166,17 +1180,25 @@ def _skip_toc(lines: list[str], i: int) -> int:
     packet's mini-TOC ("TABLE OF CONTENTS" / "EARNINGS RELEASE" / "Contacts:")
     without swallowing a real headline that directly follows the TOC.
 
+    The tail after the last page number is bounded (batch 148): a tail line
+    that is headline-shaped (headline verb + results topic, no terminal
+    sentence punctuation) means the narrative already started, so the skip
+    rolls back to that line instead of swallowing the headline and ledes.
+    A tail with no headline-shaped line keeps the old return.
+
     Requires at least 2 page-number lines: a stray "table of contents" mention
     in a normal release must never trigger the skip. Returns *i* unchanged when
     the lines don't look like a TOC.
     """
     j = i + 1
     pages = 0
+    last_page_end = i + 1
     while j < len(lines):
         ln = lines[j]
         if _TOC_PAGE_RE.match(ln):
             pages += 1
             j += 1
+            last_page_end = j
             continue
         if (
             _CONTACT_HEADER_RE.match(ln)
@@ -1190,6 +1212,22 @@ def _skip_toc(lines: list[str], i: int) -> int:
         break
     if pages < 2:
         return i
+    # Bounded tail (batch 148): lines after the last page number are
+    # unanchored — no page number vouches for them — and the loop above
+    # consumes them as titles without limit, so a packet whose narrative
+    # follows the TOC directly (short headline + short ledes, no Contacts:
+    # block, no >140-char line) loses its headline and ledes and the whole
+    # release extracts as None. When the tail's first headline-shaped line
+    # appears, the narrative already started: roll back to it so the
+    # headline pass sees the real headline (a leading footnote marker is
+    # skipped with the tail, never landed on — it would trip the
+    # footnote-headline guard and lose the release). A tail with no such
+    # line is TOC material (SPG's "(1)" + footnote + mini-TOC tail) and
+    # keeps the old return, so SPG is byte-identical.
+    for k in range(last_page_end, j):
+        ln = lines[k]
+        if _NARRATIVE_TAIL_RE.search(ln) and not re.search(r"[.!?]\s*$", ln):
+            return k
     # Trailing mini-TOC: only skip ahead when a narrative marker is close.
     k = j
     while k < len(lines) and k - j <= 4:

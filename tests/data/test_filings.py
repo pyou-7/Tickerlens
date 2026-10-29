@@ -634,6 +634,110 @@ def test_skip_toc_stops_at_release_banner() -> None:
     assert _skip_toc(lines, 0) == 5
 
 
+def test_skip_toc_rolls_back_to_headline_after_last_page() -> None:
+    # Batch-148: a packet whose narrative follows the TOC directly (short
+    # headline + short ledes, no Contacts: block, no >140-char line) used to
+    # lose its headline — the skip ate headline+ledes as "titles" and stopped
+    # at the first long line, which the headline loop then picked as the
+    # headline. The bounded tail rolls back to the first headline-shaped
+    # line (headline verb + results topic, no terminal sentence punctuation).
+    from src.tickerlens.data.filings import _skip_toc
+
+    lines = [
+        "TABLE OF CONTENTS",
+        "Earnings Release",
+        "2–11",
+        "Overview",
+        "12",
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+        "Acme beat expectations on strong demand.",
+        "Revenue rose 10 percent year over year.",
+        "x" * 150,
+    ]
+    assert _skip_toc(lines, 0) == 5
+
+
+def test_skip_toc_rolls_back_past_footnote_marker() -> None:
+    # Batch-148: a footnote marker ahead of the headline is skipped with the
+    # tail, never landed on — landing on "(1)" would trip the footnote-
+    # headline guard and lose the whole release.
+    from src.tickerlens.data.filings import _skip_toc
+
+    lines = [
+        "TABLE OF CONTENTS",
+        "Earnings Release",
+        "2–11",
+        "Overview",
+        "12",
+        "(1)",
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+        "Acme beat expectations on strong demand.",
+    ]
+    assert _skip_toc(lines, 0) == 6
+
+
+def test_skip_toc_keeps_spg_tail() -> None:
+    # Batch-148: SPG's tail — footnote marker + footnote sentence, a page
+    # pair, mini-TOC headings, then Contacts: — carries no headline-shaped
+    # line, so the old return (the Contacts: index) stands byte-identical.
+    # The footnote sentence is not a signal: it carries no headline verb,
+    # and a prose lede is excluded by its terminal period anyway.
+    from src.tickerlens.data.filings import _skip_toc
+
+    lines = [
+        "TABLE OF CONTENTS",
+        "Earnings Release",
+        "2–11",
+        "Overview",
+        "12",
+        "(1)",
+        "Includes reconciliation of consolidated net income to FFO and Real Estate FFO.",
+        "2Q 2026 SUPPLEMENTAL",
+        "1",
+        "TABLE OF CONTENTS",
+        "EARNINGS RELEASE",
+        "Contacts:",
+        "Tom Ward",
+    ]
+    assert _skip_toc(lines, 0) == 11
+
+
+def test_extract_press_release_highlights_toc_then_narrative() -> None:
+    # Batch-148 end-to-end: old code stored the first medium-length prose
+    # sentence as the headline (the real headline was swallowed by the TOC
+    # skip); the bounded tail recovers the real headline.
+    filler = (
+        "The company also noted broad-based strength across its segments, "
+        "with management commenting on sustained demand, disciplined cost "
+        "control, and continued investment in capacity and new product "
+        "development during the quarter. "
+    )
+    medium = (
+        "Management highlighted broad-based strength in leasing and occupancy "
+        "across the portfolio, with renewal spreads improving and new leases "
+        "signed at rates well above expiring rents during the period."
+    )
+    lines = [
+        "TABLE OF CONTENTS",
+        "Earnings Release",
+        "2–11",
+        "Overview",
+        "12",
+        "Acme Corp Reports Fourth Quarter 2025 Results",
+        "Acme beat expectations on strong demand.",
+        "Revenue rose 10 percent year over year.",
+        medium,
+        filler,
+        filler,
+    ]
+    html = "<html><body>" + "".join(f"<p>{ln}</p>" for ln in lines) + "</body></html>"
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.split("\n\n")[0] == "Acme Corp Reports Fourth Quarter 2025 Results"
+    assert "Acme beat expectations on strong demand." in hl
+    assert medium in hl  # prose sentence stays in the body, not the headline
+
+
 def test_join_wrapped_headline_joins_conjunction_break() -> None:
     # Batch-91: a headline broken after a conjunction joins its continuation.
     from src.tickerlens.data.filings import _join_wrapped_headline
