@@ -798,6 +798,16 @@ def _seed_time_enrichment(db: Session, cik: str, ticker: str) -> None:
             logger.warning("seed-time quote fetch failed for %s", ticker, exc_info=True)
 
 
+def _is_blank_disclosure(value: str | None) -> bool:
+    """True when a stored disclosure field holds no content (batch 149).
+
+    None or whitespace-only both count as missing: an empty string is not
+    a previously-good value, so the enrichment fill and its triggers must
+    treat it exactly like None, or the row can never self-heal.
+    """
+    return value is None or not value.strip()
+
+
 class FinancialsService:
     """Financial statement extraction, persistence, and enrichment service."""
 
@@ -1225,6 +1235,12 @@ class FinancialsService:
         so the budget fills the most valuable rows first (latest quarter =
         AI-briefing context + detail default view); the remaining NULLs are
         picked up by the next lazy trigger. ``None`` means unbounded.
+
+        Batch 149: "missing" means blank (None or whitespace-only), not just
+        None — a stored empty string is not a value, and the old ``is None``
+        checks let exactly one such row (PCAR Q1 FY2026, stored '') sit
+        unfillable forever: the lazy trigger fired on its NULL guidance,
+        but the highlights fill skipped it because '' is not None.
         """
         rows: list[QuarterlyFinancial] = (
             db.execute(
@@ -1238,9 +1254,9 @@ class FinancialsService:
             (
                 r
                 for r in rows
-                if r.press_release_highlights is None
-                or r.management_guidance is None
-                or r.transcript_excerpts is None
+                if _is_blank_disclosure(r.press_release_highlights)
+                or _is_blank_disclosure(r.management_guidance)
+                or _is_blank_disclosure(r.transcript_excerpts)
             ),
             key=lambda r: r.period_end,
             reverse=True,
@@ -1278,13 +1294,14 @@ class FinancialsService:
             hl, hl_src, gd, gd_src, ex, ex_src = self._fetch_press_release_disclosures(cik, period)
             # Never overwrite a previously-good value — only fill fields that
             # are still missing (a transient failure never wipes good data).
-            if hl is not None and row.press_release_highlights is None:
+            # Batch 149: blank ('' / whitespace) counts as missing, not good.
+            if hl is not None and _is_blank_disclosure(row.press_release_highlights):
                 row.press_release_highlights = hl
                 row.press_release_source = hl_src
-            if gd is not None and row.management_guidance is None:
+            if gd is not None and _is_blank_disclosure(row.management_guidance):
                 row.management_guidance = gd
                 row.management_guidance_source = gd_src
-            if ex is not None and row.transcript_excerpts is None:
+            if ex is not None and _is_blank_disclosure(row.transcript_excerpts):
                 row.transcript_excerpts = ex
                 row.transcript_source = ex_src
 
@@ -2306,9 +2323,9 @@ class FinancialsService:
             # extractor fix); a highlights-only trigger would never backfill
             # them.
             if any(
-                r.press_release_highlights is None
-                or r.management_guidance is None
-                or r.transcript_excerpts is None
+                _is_blank_disclosure(r.press_release_highlights)
+                or _is_blank_disclosure(r.management_guidance)
+                or _is_blank_disclosure(r.transcript_excerpts)
                 for r in all_rows
             ):
                 try:

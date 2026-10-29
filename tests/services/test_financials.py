@@ -1017,6 +1017,45 @@ def test_enrich_highlights_deadline_fills_latest_first(session: Session) -> None
     assert filled[dt.date(2025, 6, 28)] is None
 
 
+def test_enrich_highlights_empty_string_counts_as_missing(session: Session) -> None:
+    """Batch 149: a stored empty-string highlights field is missing, not good.
+
+    PCAR Q1 FY2026 sat at '' forever: the lazy trigger fired on its NULL
+    guidance, but the old ``is None`` fill check skipped highlights because
+    '' is not None. An empty row must fill like a NULL row, and a row with
+    real highlights must still never be overwritten.
+    """
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    blank = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                 fiscal_period="Q3", revenue=40_100)
+    blank.press_release_highlights = ""
+    good = _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                fiscal_period="Q2", revenue=38_000)
+    good.press_release_highlights = "Existing highlights worth keeping"
+    session.add_all([good, blank])
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    periods = [
+        _er_period(period_end=dt.date(2025, 6, 28), label="Q2 FY2025"),
+        _er_period(period_end=dt.date(2025, 9, 28), label="Q3 FY2025"),
+    ]
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, periods)
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc._enrich_press_release_highlights(
+            session, "AAPL", cik, deadline=time.monotonic() + 10.0)
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    filled = _highlights_by_period(session, cik)
+    assert filled[dt.date(2025, 9, 28)]
+    assert filled[dt.date(2025, 9, 28)] != ""
+    assert filled[dt.date(2025, 6, 28)] == "Existing highlights worth keeping"
+
+
 def test_enrich_company_applies_disclosure_budget(session: Session) -> None:
     """Batch 89: enrich_company time-boxes the disclosure crawl by default."""
     cik = "0000320193"
