@@ -1997,6 +1997,12 @@ def extract_press_release_highlights(
         metric = _extract_shareholder_letter_highlights(lines, max_chars)
         if metric is not None:
             return metric
+        # Batch 146: flattened summary-table mode (Airbnb style) — a
+        # "Key Financial/Business Measures" table with no Highlights
+        # heading. Also falls back on any parse failure.
+        flat = _extract_flat_summary_table_highlights(lines, max_chars)
+        if flat is not None:
+            return flat
 
     headline: str | None = None
     body_start = 0
@@ -2784,6 +2790,221 @@ def _extract_shareholder_letter_highlights(lines: list[str], max_chars: int) -> 
     to the standard press-release path.
     """
     entries = _parse_metric_highlights(lines)
+    if entries is None:
+        return None
+    headline = _shareholder_letter_headline(lines)
+    body = "\n".join(entries)
+    result = f"{headline}\n\n{body}".strip()
+    if len(result) > max_chars:
+        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    return result
+
+
+# --- Batch 146: flattened summary-table mode for shareholder letters ---------
+#
+# Airbnb's shareholder letter opens with a summary table ("Key Financial
+# Measures" / "Key Business Metrics") that text extraction flattens into
+# run-on lines: group-header words split around the first metric's value
+# ("Revenue Key Financial $3.6B Measures"), wrapped labels split around
+# their value ("Free Cash $1.3B Flow ("FCF")*"), and Q4 letters carry two
+# value columns (quarter + full year). The batch-94 metric mode needs a
+# "Highlights" heading line, which this table never has, so the standard
+# path served the flattened table as headline + prose — gibberish.
+#
+# The flat-table mode parses the token stream between value tokens:
+#   label value [change ...] label value [change ...]
+# where a change phrase is "%" + ("Y/Y" ["(ex-FX)"] | words ending in
+# "margin"). A piece between two values splits into a label continuation
+# (before the first % — or, with no %, up to the first parenthetical),
+# change phrases, and the next label. Anything that does not fit that
+# grammar fails the whole parse (returns None) so the old behavior is
+# preserved — in particular the Q3/Q4 2024 letters, whose table cells
+# interleave with narrative sentences ("Q3 revenue of $3.7 billion
+# increased 10% compared to..."), fail on the first prose change phrase
+# instead of emitting junk labels.
+
+# A summary-table value: "$3.6B", "$816M", "148.3M". The B/M suffix keeps
+# years ("2025") and bare counts out of the value stream.
+_FLAT_VALUE_RE = re.compile(r"\$?[\d,]+(?:\.\d+)?[BM]\b")
+
+_FLAT_PCT_RE = re.compile(r"\d[\d.,]*%")
+
+_FLAT_MARGIN_RE = re.compile(r"\s*((?:\S+\s+){0,5}?[Mm]argin)\b")
+
+_FLAT_GROUP_RE = re.compile(
+    r"Key Financial Measures|Key Business Metrics|Key Financial|Key Business",
+    re.IGNORECASE,
+)
+
+
+def _split_flat_piece(
+    piece: str, is_tail: bool
+) -> tuple[str, list[str], str | None] | None:
+    """Split one between-values piece into (continuation, changes, next-label).
+
+    The continuation is the previous metric's wrapped-label tail: the text
+    before the first % token, or — when the piece has no % at all (a metric
+    with no change phrases, e.g. Q1 2025 FCF) — the text up to and
+    including the first parenthetical. Change phrases are then consumed
+    strictly: "%" + "Y/Y" [ "(ex-FX)" ], or "%" + words ending in "margin".
+    A % token the grammar cannot consume, a % left in the remainder, or a
+    missing/extra label fails the piece — and with it the whole parse.
+    """
+    pct = _FLAT_PCT_RE.search(piece)
+    if pct is None:
+        paren = re.search(r"\([^)]*\)", piece)
+        if paren is None:
+            return None
+        end = paren.end()
+        if piece[end : end + 1] == "*":
+            end += 1  # footnote star belongs to the continuation, not the label
+        continuation = piece[:end].strip()
+        rest = piece[end:].strip()
+        changes: list[str] = []
+    else:
+        continuation = piece[: pct.start()].strip()
+        rest = piece[pct.start() :].strip()
+        changes = []
+        while rest:
+            m = _FLAT_PCT_RE.match(rest)
+            if m is None:
+                break
+            after = rest[m.end() :]
+            ym = re.match(r"\s*Y/Y(?:\s*\(ex-FX\))?", after)
+            if ym:
+                changes.append(rest[: m.end() + ym.end()].strip())
+                rest = after[ym.end() :].strip()
+                continue
+            mm = _FLAT_MARGIN_RE.match(after)
+            if mm:
+                changes.append(rest[: m.end() + mm.end()].strip())
+                rest = after[mm.end() :].strip()
+                continue
+            return None
+    if "%" in rest or "$" in rest or _FLAT_VALUE_RE.search(rest):
+        return None
+    if len(continuation) > 40 or any(c.isdigit() for c in continuation):
+        return None
+    if is_tail:
+        if rest:
+            return None
+        return continuation, changes, None
+    if not rest or len(rest) > 60 or any(c.isdigit() for c in rest):
+        return None
+    return continuation, changes, rest
+
+
+def _parse_flat_summary_table(lines: list[str]) -> list[str] | None:
+    """Parse a flattened "Key Financial/Business Measures" summary table.
+
+    Returns rendered lines (optional dual-column header + bullets), or
+    None when the shape is absent or any piece fails the grammar.
+    """
+    # The header fragment alone starts the table: in most quarters it is
+    # split around the first metric's value ("Revenue Key Financial $3.6B
+    # Measures"), so the full phrase never appears on one line.
+    start: int | None = None
+    for i, ln in enumerate(lines[:30]):
+        low = ln.lower()
+        if "key financial" in low or "key business" in low:
+            start = i
+            break
+    if start is None:
+        return None
+    run: list[str] = []
+    for ln in lines[start : start + 9]:
+        if "reconciliation of non-gaap" in ln.lower():
+            idx = ln.lower().find("reconciliation of non-gaap")
+            head = re.sub(r"\*?\s*A\s*$", "", ln[:idx])
+            run.append(head)
+            break
+        run.append(ln)
+    else:
+        return None  # no reconciliation trailer within the window
+    stream = re.sub(r"\s+", " ", " ".join(run)).strip()
+    stream = _FLAT_GROUP_RE.sub("", stream)
+    stream = re.sub(r"\bMeasures\b|\bMetrics\b", "", stream)
+    stream = re.sub(r"\s+", " ", stream).strip()
+    # Leading quarter labels are the table's column headers ("Q4 2025
+    # FY 2025"); the section title repeats the quarter label, so dedupe.
+    columns: list[str] = []
+    while True:
+        m = re.match(r"(Q[1-4]|FY)\s+(\d{4})\s+", stream)
+        if not m:
+            break
+        label = f"{m.group(1)} {m.group(2)}"
+        if label not in columns:
+            columns.append(label)
+        stream = stream[m.end() :]
+    stream = re.sub(r"^Highlights\s+", "", stream)
+    if "shareholder letter" in stream.lower():
+        return None
+    vals = list(_FLAT_VALUE_RE.finditer(stream))
+    if len(vals) < 2:
+        return None
+    # Group consecutive values (whitespace only between them) into one
+    # metric's multi-column values: Q4 letters carry quarter + full year.
+    groups: list[tuple[list[str], int, int]] = []
+    for m in vals:
+        if groups and stream[groups[-1][2] : m.start()].strip() == "":
+            groups[-1][0].append(m.group(0))
+            groups[-1] = (groups[-1][0], groups[-1][1], m.end())
+        else:
+            groups.append(([m.group(0)], m.start(), m.end()))
+    if len(columns) == 2:
+        if any(len(g[0]) != 2 for g in groups):
+            return None
+    elif any(len(g[0]) != 1 for g in groups):
+        return None
+    first_label = stream[: groups[0][1]].strip()
+    if (
+        not first_label
+        or len(first_label) > 60
+        or any(c.isdigit() or c in "%$" for c in first_label)
+    ):
+        return None
+    bullets: list[str] = []
+    label = first_label
+    for k, (values, _gs, ge) in enumerate(groups):
+        piece = (
+            stream[ge : groups[k + 1][1]]
+            if k + 1 < len(groups)
+            else stream[ge:]
+        ).strip()
+        split = _split_flat_piece(piece, is_tail=(k + 1 == len(groups)))
+        if split is None:
+            return None
+        continuation, changes, next_label = split
+        if continuation:
+            label = f"{label} {continuation}".strip()
+        clean_label = label.rstrip("*").strip()
+        if not clean_label or len(clean_label) > 90:
+            return None
+        detail = "; ".join(values)
+        if changes:
+            detail += f" ({'; '.join(changes)})"
+        bullets.append(f"- {clean_label}: {detail}")
+        if next_label is None:
+            break
+        label = next_label
+    if len(bullets) < 3:
+        return None
+    out: list[str] = []
+    if len(columns) == 2:
+        out.append("; ".join(columns))
+    out.extend(bullets)
+    return out
+
+
+def _extract_flat_summary_table_highlights(
+    lines: list[str], max_chars: int
+) -> str | None:
+    """Shareholder-letter mode: flattened summary-table highlights.
+
+    Returns None when no flat summary table parses, so the caller can
+    fall back to the standard press-release path.
+    """
+    entries = _parse_flat_summary_table(lines)
     if entries is None:
         return None
     headline = _shareholder_letter_headline(lines)
