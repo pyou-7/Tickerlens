@@ -855,7 +855,20 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
             # contact detail when an unambiguous contact line (email or phone)
             # follows within the next two lines — a real headline is never
             # followed by an email address. Batch 105.
-            following = lines[j + 1 : j + 3]
+            # Batch 151: admin lines do not consume a lookahead slot.
+            # Crown Castle's block runs "Contacts: Sunit Patel, CFO" /
+            # "Kris Hinson, VP Corp Finance & Treasurer" / "FOR IMMEDIATE
+            # RELEASE" / "Crown Castle Inc." / "713-570-3050" — the phone
+            # is three raw lines after the name line, so the old lookahead
+            # stopped at the name line and the headline loop then picked
+            # it as the headline. Skipping admin lines when gathering the
+            # following lines finds the phone within two non-admin lines.
+            following: list[str] = []
+            k = j + 1
+            while k < len(lines) and len(following) < 2:
+                if not _ADMIN_LINE_RE.match(lines[k]):
+                    following.append(lines[k])
+                k += 1
             if not any(
                 _CONTACT_LINE_RE.search(f) or _PHONE_RE.search(f) for f in following
             ):

@@ -2159,6 +2159,64 @@ def test_skip_contact_block_lookahead_unit() -> None:
     assert _skip_contact_block(lines2, 0) == 1
 
 
+def test_skip_contact_block_lookahead_skips_admin_lines() -> None:
+    # Batch 151: Crown Castle's block runs "Contacts: Sunit Patel, CFO" /
+    # "Kris Hinson, VP Corp Finance & Treasurer" / "FOR IMMEDIATE RELEASE"
+    # / "Crown Castle Inc." / "713-570-3050" — the phone is three raw
+    # lines after the name line, so the old two-line lookahead stopped at
+    # the name line and the headline loop picked it as the headline.
+    # Admin lines do not consume a lookahead slot, so the phone is found
+    # within two non-admin lines and the block runs to the real headline.
+    from tickerlens.data.filings import _skip_contact_block
+
+    lines = [
+        "Contacts: Sunit Patel, CFO",
+        "Kris Hinson, VP Corp Finance & Treasurer",
+        "FOR IMMEDIATE RELEASE",
+        "Crown Castle Inc.",
+        "713-570-3050",
+        "CROWN CASTLE REPORTS FIRST QUARTER 2025 RESULTS",
+    ]
+    assert _skip_contact_block(lines, 0) == 5
+
+    # And the negative still holds with an admin line in between: a
+    # content-shaped line followed by admin + narrative (no contact
+    # evidence) still ends the block.
+    lines2 = [
+        "Investor Contact:",
+        "Paul Trussell Sandra Carreon-John",
+        "FOR IMMEDIATE RELEASE",
+        "NIKE, INC. REPORTS FISCAL 2027 FIRST QUARTER RESULTS",
+    ]
+    assert _skip_contact_block(lines2, 0) == 1
+
+
+def test_contact_block_admin_gap_headline_not_contact_name() -> None:
+    # Batch 151 end-to-end: the CCI-shaped head must yield the real
+    # headline, with no contact name, company line, or phone in the output.
+    from tickerlens.data.filings import extract_press_release_highlights
+
+    html = """<html><body>
+    <p>EX-99.1</p><p>2</p><p>q12025earningsrelease.htm</p><p>EX-99.1</p>
+    <p>Exhibit 99.1</p><p>NEWS RELEASE</p><p>April 30, 2025</p>
+    <p>Contacts: Sunit Patel, CFO</p>
+    <p>Kris Hinson, VP Corp Finance &amp; Treasurer</p>
+    <p>FOR IMMEDIATE RELEASE</p><p>Crown Castle Inc.</p><p>713-570-3050</p>
+    <p>CROWN CASTLE REPORTS FIRST QUARTER 2025 RESULTS AND MAINTAINS OUTLOOK FOR FULL YEAR 2025</p>
+    <p>April 30, 2025 - HOUSTON, TEXAS - Crown Castle Inc. (NYSE: CCI) ("Crown Castle") today reported results for the first quarter ended March 31, 2025 and maintains its full year 2025 Outlook, as reflected in the table below.</p>
+    <p>This is a real prose paragraph about the quarter with enough words to look like narrative and it keeps going for a while, describing results in full sentences.</p>
+    <p>Another real prose paragraph that continues the story of the quarter in full sentences and adds further detail about the business.</p>
+    </body></html>"""
+    hl = extract_press_release_highlights(html)
+    assert hl is not None
+    assert hl.split("\n\n")[0] == (
+        "CROWN CASTLE REPORTS FIRST QUARTER 2025 RESULTS AND MAINTAINS "
+        "OUTLOOK FOR FULL YEAR 2025"
+    )
+    assert "Kris Hinson" not in hl
+    assert "713-570-3050" not in hl
+
+
 def test_contact_header_bare_role_no_colon() -> None:
     # RTX: bare "Media Contact" / "Investor Contact" with no colon head the
     # same block shape. The old regex required the colon, so the phone number
