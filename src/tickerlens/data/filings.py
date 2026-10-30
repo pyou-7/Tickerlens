@@ -465,16 +465,262 @@ def _looks_like_table_fragment(ln: str) -> bool:
 
 
 def _is_lede_heading_fragment(ln: str) -> bool:
-    """True for a lone all-caps word in the lede — the tail of a section
-    heading flattened out of a table ("QUARTER" from a "Fourth Quarter"
-    heading, "YEAR" from "Full Year"). A single all-caps word is never
-    narrative prose, so it never belongs in the lede; left in, it consumes
-    one of the 6 lede lines and truncates a real bullet (Chubb Q4 2024:
-    the "QUARTER" line plus the leading "●" left bullet 2 cut mid-item).
-    Batch 138.
+    """True for an all-caps section-heading fragment in the lede — a lone
+    all-caps word ("QUARTER" from a "Fourth Quarter" heading, "YEAR" from
+    "Full Year") or a short all-caps heading ("RESULTS FOR THE QUARTER").
+    An all-caps line is never narrative prose, so it never belongs in the
+    lede; left in, it consumes one of the 6 lede lines and truncates a real
+    bullet (Chubb Q4 2024: the "QUARTER" line plus the leading "●" left
+    bullet 2 cut mid-item). Batch 138; batch 153 extends the single word
+    to short headings (<=4 words).
     """
     words = ln.split()
-    return len(words) == 1 and ln.isupper() and any(c.isalpha() for c in ln)
+    return (
+        len(words) <= 4
+        and ln.isupper()
+        and any(c.isalpha() for c in ln)
+    )
+
+
+# Table residue in the lede (batch 153): Crown Castle's releases open with
+# the outlook table directly after the dateline paragraph ("...as reflected
+# in the table below."), so the old lede loop filled its 6-line budget with
+# the table itself — unit line, outlook-table headings, header lines, data
+# rows — and the real highlights bullets after the table starved. Table
+# lines are now skipped in the lede loop: they neither consume budget nor
+# get stored, so the prose after the table is collected instead.
+#
+# The predicates are deliberately strict about wrapped prose: _html_to_text
+# keeps literal newlines inside block elements, so a long paragraph arrives
+# as unterminated mid-sentence fragments — "fiscal 2026 second quarter
+# results with total revenue of $16.0 billion, up 8% in" looks exactly
+# like an unterminated $-carrying line. A wrapped fragment is therefore
+# never skipped on $/%/unterminated alone: figure-carrying lines must be
+# figure-dense (at most 3 non-figure words), header lines must be pure
+# header vocabulary, and label lines must be short. Terminated lines and
+# bullets are never table lines.
+_LEDE_HEADING_WORDS = frozenset(
+    [
+        "current", "previous", "full", "year", "quarter", "outlook",
+        "midpoint", "guidance", "summary", "financial", "compared",
+        "growth", "rate", "actual", "estimate", "change", "percent",
+        "first", "second", "third", "fourth", "half", "to", "vs",
+        "fiscal", "annual", "q1", "q2", "q3", "q4",
+    ]
+)
+_LEDE_PERIOD_TOKEN_RE = re.compile(
+    r"^(q[1-4]|full|year|quarter|half|first|second|third|fourth|actual|"
+    r"estimate|outlook|change|percent|growth|rate|compared|to|midpoint|vs|"
+    r"%|\(\w\)|\d{4})$",
+    re.IGNORECASE,
+)
+_LEDE_DATA_ROW_RE = re.compile(r"\$[\d(]")
+_LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
+# Figure tokens for the data-row density rule. The bare-number branch
+# must start with a digit (a bare "[\d,]+" also matches a lone comma, and
+# "13.8%" must match as one token, not "13" + "8%") — otherwise wrapped
+# prose fragments score as figure-dense and get skipped as table rows.
+# A standalone "%" counts too: spaced-out tables write "67 %" as two
+# tokens, and without it a 3-figure row scores under the density bar.
+_LEDE_FIGURE_RE = re.compile(r"\$[\d,().]+|\d[\d,.]*%|\(\w\)|\bN/A\b|\d[\d,.]*|%")
+
+
+def _is_sentence_terminated(ln: str) -> bool:
+    """True when a line ends with sentence punctuation, modulo trailing
+    closing quotes/parens (a CEO quote ends '...value."' — punctuated
+    prose, not an unterminated fragment)."""
+    s = ln.rstrip().rstrip("”\"'’)]}")
+    return s.endswith((".", "!", "?", ":", "…"))
+
+
+def _is_lede_table_heading(ln: str) -> bool:
+    """True for an outlook/guidance table title: every word is header
+    vocabulary (footnote markers and trailing footnote digits stripped)
+    and the line names an outlook or guidance table. A prose clause that
+    merely mentions the outlook ("we raised the full year 2025 outlook
+    midpoint") fails on its verbs and pronouns."""
+    low = ln.lower()
+    if "outlook" not in low and "guidance" not in low:
+        return False
+    norm = re.sub(r"\(\w\)", " ", ln)
+    words: list[str] = []
+    for w in norm.split():
+        if re.fullmatch(r"\d", w):
+            continue  # standalone footnote digit ("Summary 2")
+        if re.fullmatch(r"[Qq][1-4]", w):
+            words.append(w.lower())
+        elif re.fullmatch(r"\d{4}", w):
+            words.append(w)
+        elif re.fullmatch(r"[A-Za-z]+[^A-Za-z]*", w):
+            # Trailing footnote digits and punctuation ("Summary2",
+            # "Summary:2") are stripped; the word itself must be vocab.
+            words.append(re.sub(r"[^A-Za-z]+$", "", w).lower())
+        else:
+            words.append(w.lower())
+    if not words or len(words) > 12:
+        return False
+    return all(
+        w in _LEDE_HEADING_WORDS or (w.isdigit() and len(w) == 4)
+        for w in words
+    )
+
+
+def _is_lede_period_header(ln: str) -> bool:
+    """True for a flattened period header: every word is a period token
+    and a year is present ("Full Year 2025 Actual", "Q2 2026 Q2 2025 (c)",
+    "Full Year 2024 Actual % Change"). Any real prose word breaks it."""
+    words = ln.split()
+    return (
+        len(words) <= 10
+        and any(re.fullmatch(r"\d{4}", w) for w in words)
+        and all(_LEDE_PERIOD_TOKEN_RE.match(w) for w in words)
+    )
+
+
+# One token of a flattened date header ("Quarter Ended September 30, Nine
+# Months Ended September 30,"): period words, month names, and day/year
+# numbers, with trailing commas stripped. The all-words-must-match rule
+# is the guard — a prose fragment ("for the quarter ended September 30")
+# carries "for"/"the" and never qualifies.
+_LEDE_DATE_TOKEN_RE = re.compile(
+    r"^(quarter|quarters|month|months|ended|three|six|nine|twelve|"
+    r"january|february|march|april|may|june|july|august|september|"
+    r"october|november|december|\d{1,4})$",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_date_header(ln: str) -> bool:
+    """True for a flattened table date header: every word is a date
+    token and a month name or "ended" is present. AppLovin's tables
+    flatten their period headers onto one line, and the line otherwise
+    survives every table predicate (no $/%, no year-word, too long to
+    be a label)."""
+    words = [w.rstrip(",") for w in ln.split()]
+    if not words or len(words) > 12:
+        return False
+    low = ln.lower()
+    if "ended" not in low and not _MONTH_NAME_RE.search(ln):
+        return False
+    return all(_LEDE_DATE_TOKEN_RE.match(w) for w in words)
+
+
+def _is_lede_data_row(ln: str) -> bool:
+    """True for a table data row: carries at least 2 figures and figures
+    are at least 40% of its tokens ("Net income (loss) per share—diluted
+    $0.65 $(3,903) N/A $0.55 $0.10" -> 5 of 10 tokens). A wrapped prose
+    fragment with a $ figure is figure-sparse, so it never qualifies; a
+    lone value line ("$50.2 billion", one figure) is a metric value, not
+    a row, so it is kept."""
+    if not _LEDE_DATA_ROW_RE.search(ln):
+        return False
+    figures = _LEDE_FIGURE_RE.findall(ln)
+    if len(figures) < 2:
+        return False
+    tokens = ln.split()
+    return len(figures) / max(len(tokens), 1) >= 0.4
+
+
+def _is_lede_table_line(ln: str) -> bool:
+    """True for a lede line that is table residue, not narrative."""
+    if _BULLET_LEAD_RE.match(ln):
+        return False
+    if _is_sentence_terminated(ln):
+        return False
+    # Anchored unit lines (a mid-sentence "(dollars ...)" parenthetical
+    # is prose, not a unit line) and vocabulary-gated headings/headers
+    # carry their own strictness, so they have no length gate.
+    if _TABLE_UNITS_RE.match(ln) or _TABLE_WORD_UNITS_RE.match(ln):
+        return True
+    if _is_lede_table_heading(ln) or _is_lede_period_header(ln):
+        return True
+    if _is_lede_date_header(ln):
+        return True
+    # A data row's wordy label plus 4-5 figures can run past 60 chars, so
+    # it is exempt from the length gate below — its density rule (2+
+    # figures, >=40% of tokens) is the guard that keeps wrapped prose out.
+    if _is_lede_data_row(ln):
+        return True
+    if len(ln) > 60:
+        return False
+    words = ln.split()
+    # Short label lines — but never a $-carrying value line: "$50.2
+    # billion" is a metric value the batch-100 rule keeps, not a label.
+    if "$" not in ln:
+        if len(words) <= 2:
+            return True
+        if len(words) <= 4 and "(" in ln:
+            return True
+    if _looks_like_table_cell(ln):
+        return True
+    if len(words) <= 6 and _LEDE_FOOTNOTE_TAIL_RE.search(ln):
+        return True
+    return False
+
+
+def _is_lede_table_tail_continuation(ln: str) -> bool:
+    """True for a line inside a trailing table run: short, unterminated,
+    and figure/marked/label-shaped. A wrapped prose fragment is longer
+    than 2 words and carries no figure or marker, so it stops the walk."""
+    if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
+        return False
+    if len(ln) > 60:
+        return False
+    return (
+        any(c.isdigit() for c in ln)
+        or "$" in ln
+        or "%" in ln
+        or "(" in ln
+        or len(ln.split()) <= 2
+    )
+
+
+def _is_bare_highlights_heading(ln: str) -> bool:
+    """True for a dangling section heading at the lede tail ("Additional
+    Financial Highlights:") — the heading whose bullets the budget never
+    reached. A prose sentence that merely contains "highlights" is
+    terminated with a period and never qualifies; a colon is a heading
+    terminator, not a sentence one, so it does not disqualify."""
+    if len(ln) > 120:
+        return False
+    s = ln.rstrip().rstrip("”\"'’)]}")
+    if s.endswith((".", "!", "?", "…")):
+        return False
+    return bool(_HIGHLIGHTS_HEADING_RE.search(ln))
+
+
+def _trim_lede_table_tail(lede: list[str]) -> list[str]:
+    """Drop a trailing run of table residue from a collected lede.
+
+    The lede-loop skip above catches table lines before collection, but a
+    shape it misses still lands at the tail (a period-header orphan whose
+    data rows were skipped, leaving the header behind). The run starts
+    only at a strong table signal — the last line itself must be a lede
+    table line — then walks backward through continuation lines and stops
+    at the first bullet, terminated, or long line, so real prose is never
+    eaten. A trailing bare highlights heading ("Additional Financial
+    Highlights:") is dropped the same way: its bullets never arrived, so
+    the heading dangles. The trim applies only when the remaining lede
+    still holds >=200 chars; otherwise the original is kept, since a wart
+    is better than dropping the row to None. Batch 153.
+    """
+    end = len(lede)
+    if end == 0:
+        return lede
+    if _is_lede_table_line(lede[-1]):
+        end -= 1
+        while end > 0 and _is_lede_table_tail_continuation(lede[end - 1]):
+            end -= 1
+    trimmed = lede[:end]
+    while (
+        trimmed
+        and _is_bare_highlights_heading(trimmed[-1])
+        and len("\n\n".join(trimmed[:-1])) >= 200
+    ):
+        trimmed = trimmed[:-1]
+    if trimmed and len("\n\n".join(trimmed)) >= 200:
+        return trimmed
+    return lede
 
 
 def _is_lone_bullet_marker(ln: str) -> bool:
@@ -2400,6 +2646,11 @@ def extract_press_release_highlights(
                 continue  # separator between bullets — never consumes budget
             if _BOILERPLATE_RE.match(ln):
                 break
+            if _is_lede_table_line(ln):
+                i += 1
+                continue  # table residue (unit lines, outlook-table
+                # headings/headers, data rows) never consumes lede budget
+                # and never gets stored — batch 153
             if content_lines >= 6:
                 if not marker_seen:
                     break  # prose lede: the 6-line cap is the bound
@@ -2412,6 +2663,7 @@ def extract_press_release_highlights(
             lede.append(ln)
             content_lines += 1
             i += 1
+        lede = _trim_lede_table_tail(lede)
         body = "\n\n".join(lede)
 
     # A trailing comma means the headline's continuation was too long to join
@@ -2500,6 +2752,18 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             in_item = True
         elif in_item:
             nxt = lines[idx + 1] if idx + 1 < n else ""
+            if (
+                _TABLE_UNITS_RE.match(ln)
+                or _TABLE_WORD_UNITS_RE.match(ln)
+                or _is_lede_table_heading(ln)
+                or _is_lede_period_header(ln)
+            ):
+                break  # a table starts where the bullets end (AppLovin's
+                # "First Quarter 2026 Financial Guidance Summary" heading
+                # after the bullets): the block ends here, the heading is
+                # not a bullet continuation. Only the strong heading shapes
+                # break — data rows and labels stay out, so a figure-dense
+                # bullet continuation is never cut. Batch 153.
             bullets.append(ln)
             if re.search(r"[.!?;]\s*$", ln) and not nxt.startswith(("•", "-", "*")):
                 break  # item closed and prose follows (dateline)
@@ -2530,6 +2794,7 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         if not _HIGHLIGHTS_HEADING_RE.search(ln) or len(ln) > 120:
             continue
         collected: list[str] = []
+        hit_table = False
         for follow in lines[i + 1:]:
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
@@ -2537,9 +2802,25 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 break
             if follow.isupper() and len(follow) <= 80:
                 break
+            if (
+                _TABLE_UNITS_RE.match(follow)
+                or _TABLE_WORD_UNITS_RE.match(follow)
+                or _is_lede_table_heading(follow)
+                or _is_lede_period_header(follow)
+            ):
+                hit_table = True
+                break  # a table starts where the highlights end (AppLovin's
+                # guidance-summary heading after the bullets): the section
+                # ends here, the heading is not highlights. Only the strong
+                # heading shapes break — data rows stay out, so a section
+                # whose bullets are figure-dense is never cut. Batch 153.
             collected.append(follow)
             if len(collected) >= 12:
                 break
+        if hit_table and len("\n".join(collected)) < 150:
+            continue  # table-headed section too thin — try later headings,
+            # as the financial-table rejection below does; without this a
+            # thin table-led section would block every later heading
         if len("\n".join(collected)) >= 150:
             if _looks_like_financial_table(collected):
                 continue  # table, not narrative highlights — try later headings

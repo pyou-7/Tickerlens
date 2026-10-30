@@ -1401,6 +1401,182 @@ long-standing commitment to returning capital to shareholders.</p>
     assert "Income $1.22" not in result
 
 
+# ── Lede table-line skip + tail trim (batch 153) ─────────────────────────────
+# Crown Castle's releases open with the outlook table directly after the
+# dateline paragraph, so the lede budget filled with the table itself and
+# the real highlights bullets after the table starved. Table lines must
+# neither consume budget nor get stored; terminated prose that merely
+# mentions the outlook must survive.
+from tickerlens.data.filings import _trim_lede_table_tail  # noqa: E402
+
+
+def test_lede_skips_outlook_table_lines() -> None:
+    html = """<html><body>
+<h1>CROWN CASTLE REPORTS SECOND QUARTER 2025 RESULTS AND INCREASES OUTLOOK FOR FULL YEAR 2025</h1>
+<p>July 23, 2025 - HOUSTON, TEXAS - Crown Castle Inc. (NYSE: CCI) ("Crown Castle") today reported results for the second quarter ended June 30, 2025 and updated its full year 2025 Outlook, as reflected in the table below.</p>
+<p>(dollars in millions, except per share amounts) Current Full Year 2025 Outlook Midpoint(a)</p>
+<p>Full Year 2024 Actual % Change</p>
+<p>Previous Full Year 2025 Outlook(b)</p>
+<p>Current Compared to Previous Outlook</p>
+<p>Site rental revenues(c)</p>
+<p>Net income (loss) $205 $(3,903) $4,108 N/A</p>
+<p>Net income (loss) per share—diluted $0.65 $(8.98) N/A $0.55 $0.10</p>
+<p>Midpoint Growth Rate Compared to Full Year 2025 Actual</p>
+<p>RESULTS FOR THE QUARTER</p>
+<p>"We delivered solid operational results in the second quarter, and we raised the full year 2025 outlook midpoint."</p>
+<p>&#8226; Site rental revenues. Organic Contribution to Site Rental Billings was $45 million, or 4.7% organic growth from second quarter 2024, excluding an unfavorable $51 million impact from Sprint Cancellations.</p>
+<p>&#8226; Net income grew to $205 million, or $0.47 per diluted share, reflecting strong tower demand.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("CROWN CASTLE REPORTS SECOND QUARTER 2025 RESULTS")
+    assert "today reported results for the second quarter" in result
+    # The prose after the table is collected, not starved by it.
+    assert "Site rental revenues. Organic Contribution" in result
+    assert "Net income grew to $205 million" in result
+    # Terminated prose mentioning the outlook midpoint is prose, not a table line.
+    assert "we raised the full year 2025 outlook midpoint" in result
+    # No table residue survives.
+    assert "Outlook Midpoint(a)" not in result
+    assert "Previous Full Year 2025 Outlook" not in result
+    assert "Current Compared to Previous Outlook" not in result
+    assert "Site rental revenues(c)" not in result
+    assert "Full Year 2024 Actual" not in result
+    assert "$(3,903)" not in result
+    assert "$(8.98)" not in result
+    assert "Midpoint Growth Rate Compared to Full Year 2025 Actual" not in result
+    assert "RESULTS FOR THE QUARTER" not in result
+    assert "dollars in millions, except per share amounts" not in result
+
+
+def test_highlights_section_ends_at_guidance_heading() -> None:
+    # AppLovin Q4 2025 live: the "Financial Highlights" section's bullets
+    # are followed by the guidance-summary heading — the section collector
+    # used to swallow it as section content.
+    html = """<html><body>
+<h1>AppLovin Announces Fourth Quarter and Full Year 2025 Financial Results</h1>
+<p>Fourth Quarter and Full Year 2025 Financial Highlights:</p>
+<p>&#8226; Net cash from operating activities was $1.31 billion and $3.97 billion, and Free Cash Flow was $1.31 billion and $3.95 billion for the fourth quarter and full year 2025, respectively, reflecting strong collections and disciplined cost management across the platform.</p>
+<p>&#8226; During the fourth quarter and full year 2025, we repurchased and withheld 0.8 million and 6.4 million of our Class A common stock, for a total cost of $481.7 million and $2.58 billion, respectively, under our ongoing share repurchase program.</p>
+<p>&#8226; Basic and Diluted earnings per share were $3.57 and $3.56, respectively, for the fourth quarter 2025, compared with $1.73 and $1.72 for the fourth quarter 2024, driven by higher advertising revenue and operating leverage.</p>
+<p>First Quarter 2026 Financial Guidance Summary2</p>
+<p>Additional Financial Highlights:</p>
+<p>&#8226; Net cash from operating activities was $869.0 million for the second quarter 2026.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Net cash from operating activities was $1.31 billion" in result
+    assert "Basic and Diluted earnings per share were $3.57" in result
+    assert "Financial Guidance Summary" not in result
+
+
+def test_lede_table_line_predicates() -> None:
+    # Direct predicate checks for the shapes the end-to-end tests cover
+    # only indirectly: spaced-out percent data rows, flattened date
+    # headers, and the wrapped-prose negatives that must never fire.
+    from tickerlens.data.filings import _is_lede_table_line  # noqa: E402
+
+    # Spaced-out percent data row (AppLovin tables write "67 %").
+    assert _is_lede_table_line(
+        "Net Income from Continuing Operations $1,206 $724 67 %"
+    )
+    # Flattened date header (AppLovin tables, one line per period pair).
+    assert _is_lede_table_line(
+        "Quarter Ended September 30, Nine Months Ended September 30,"
+    )
+    assert _is_lede_table_line("Quarter Ended March 31,")
+    # Negatives: wrapped prose fragments and lone value lines stay.
+    assert not _is_lede_table_line(
+        "fiscal 2026 second quarter results with total revenue of "
+        "$16.0 billion, up 8% in"
+    )
+    assert not _is_lede_table_line(
+        "Net income was $2.32 billion, up 13.8%, and core operating "
+        "income was $2.33 billion, up 14.3%. For the"
+    )
+    assert not _is_lede_table_line("$50.2 billion")
+    assert not _is_lede_table_line("Record net revenue of $7,712 million")
+    assert not _is_lede_table_line(
+        "for the quarter ended September 30, 2025, revenue grew"
+    )
+    assert not _is_lede_table_line(
+        "We raised the full year 2025 outlook midpoint."
+    )
+
+
+def test_leading_bullet_block_ends_at_guidance_heading() -> None:
+    # AppLovin Q4 2025 live: the bullets lead and the guidance-summary
+    # heading follows them — the leading-bullet block used to swallow it
+    # as a bullet continuation. The block must end at the table heading.
+    html = """<html><body>
+<h1>AppLovin Announces Fourth Quarter and Full Year 2025 Financial Results</h1>
+<p>&#8226; Net cash from operating activities was $1.31 billion and $3.97 billion, and Free Cash Flow was $1.31 billion and $3.95 billion for the fourth quarter and full year 2025, respectively, reflecting strong collections and disciplined cost management across the platform.</p>
+<p>&#8226; During the fourth quarter and full year 2025, we repurchased and withheld 0.8 million and 6.4 million of our Class A common stock, for a total cost of $481.7 million and $2.58 billion, respectively, under our ongoing share repurchase program.</p>
+<p>&#8226; Basic and Diluted earnings per share were $3.57 and $3.56, respectively, for the fourth quarter 2025, compared with $1.73 and $1.72 for the fourth quarter 2024, driven by higher advertising revenue and operating leverage.</p>
+<p>First Quarter 2026 Financial Guidance Summary2</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Net cash from operating activities was $1.31 billion" in result
+    assert "Basic and Diluted earnings per share were $3.57" in result
+    assert "Financial Guidance Summary" not in result
+
+
+def test_lede_skips_guidance_summary_tail() -> None:
+    # AppLovin's bullets end with a bare guidance-summary heading line —
+    # the table title with no table following (budget ran out on it).
+    html = """<html><body>
+<h1>AppLovin Announces Fourth Quarter and Full Year 2025 Financial Results</h1>
+<p>PALO ALTO, Calif. - AppLovin Corporation (NASDAQ: APP) today announced financial results for the fourth quarter and full year ended December 31, 2025, with total revenue growing 44% year over year on continued strength in advertising and AI-driven performance marketing across its global platform.</p>
+<p>&#8226; Net cash from operating activities was $1.31 billion and $3.97 billion, and Free Cash Flow was $1.31 billion and $3.95 billion for the fourth quarter and full year 2025, respectively.</p>
+<p>&#8226; During the fourth quarter and full year 2025, we repurchased and withheld 0.8 million and 6.4 million of our Class A common stock, for a total cost of $481.7 million and $2.58 billion, respectively.</p>
+<p>First Quarter 2026 Financial Guidance Summary2</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "Net cash from operating activities was $1.31 billion" in result
+    assert "Financial Guidance Summary" not in result
+
+
+def test_trim_lede_table_tail_walks_through_header_orphans() -> None:
+    prose = (
+        "Site rental revenues declined $56 million, or 5.3% from second "
+        "quarter 2024 to second quarter 2025. The following table outlines "
+        "the components of Organic Contribution to Site Rental Billings, "
+        "excluding the impact of Sprint Cancellations, and the respective "
+        "percentage of prior period site rental billings."
+    )
+    lede = [
+        prose,
+        "($ in millions; totals may not sum due to rounding)",
+        "Current Full Year 2025 Outlook Midpoint (a)",
+        "Full Year 2025 Actual",
+        "Full Year 2024 Actual",
+        "Change",
+        "% Change",
+        "Core leasing activity (a)",
+        "$118 3.0% $110 2.9% $8 0.1%",
+    ]
+    assert _trim_lede_table_tail(lede) == [prose]
+    # A short lede keeps its wart rather than dropping below the floor:
+    # a wart is better than returning None for the row.
+    short = ["Brief quarter summary line with real content here.", "$118 3.0%"]
+    assert _trim_lede_table_tail(short) == short
+    # A prose tail is never trimmed, even after table lines were skipped.
+    assert _trim_lede_table_tail([prose, "The pathway to possible."]) == [
+        prose,
+        "The pathway to possible.",
+    ]
+    # A dangling highlights heading (its bullets never arrived) drops too.
+    assert _trim_lede_table_tail(
+        [prose, "Additional Financial Highlights:"]
+    ) == [prose]
+    # ...but a prose sentence that merely mentions highlights stays.
+    assert _trim_lede_table_tail(
+        [prose, "Highlights from the quarter include record revenue."]
+    ) == [prose, "Highlights from the quarter include record revenue."]
+
+
 # ── Cover title-block skip (batch 100) ──────────────────────────────────────
 # Goldman Sachs opens its ex-99.1 with a cover page (quarter-period title +
 # "Earnings Results", inline media/investor contacts, masthead + address,
