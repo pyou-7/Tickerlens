@@ -1577,6 +1577,153 @@ def test_trim_lede_table_tail_walks_through_header_orphans() -> None:
     ) == [prose, "Highlights from the quarter include record revenue."]
 
 
+# ── Space-less bullets are bullets too (batch 154) ──────────────────────────
+# Flattened exhibits emit "•Site rental revenues." with the text glued to
+# the glyph, and the old _BULLET_LEAD_RE required a following space — so
+# those bullets missed every bullet guard. Crown Castle Q3 2024 proved it:
+# 3 space-less $+%-carrying bullets plus a $+%-carrying quote tripped
+# the data_rows >= 4 threshold, the genuine 7-bullet Highlights section
+# was rejected as a financial table, and the lede fallback served the
+# outlook table instead. The hyphen stays strict (space required):
+# "-$1,234" is a negative table value, not a bullet.
+def test_spaceless_bullet_section_is_not_a_table() -> None:
+    # CCI Q3 2024 shape: outlook + results tables ahead of the Highlights
+    # section, space-less bullets, and a $+%-carrying quote after them.
+    html = """<html><body>
+<p>EX-99.1</p><p>Exhibit 99.1</p>
+<p>NEWS RELEASE</p>
+<p>October 16, 2024</p>
+<p>Contacts: Dan Schlanger, CFO</p>
+<p>FOR IMMEDIATE RELEASE</p>
+<p>Crown Castle Inc.</p>
+<p>713-570-3050</p>
+<h1>CROWN CASTLE REPORTS THIRD QUARTER 2024 RESULTS</h1>
+<p>October 16, 2024 - HOUSTON, TEXAS - Crown Castle Inc. (NYSE: CCI) ("Crown Castle") today reported results for the third quarter ended September 30, 2024 and maintained its full year 2024 Outlook.</p>
+<p>(dollars in millions, except per share amounts) Current Full Year 2024 Outlook(a)</p>
+<p>Full Year 2023 Actual</p>
+<p>% Change</p>
+<p>Previous Full Year 2024 Outlook(b)</p>
+<p>Current Compared to Previous Outlook</p>
+<p>Site rental revenues $6,340 $6,532 (3)% $6,340 —%</p>
+<p>Adjusted EBITDA(c)</p>
+<p>$4,168 $4,415 (6)% $4,168 —%</p>
+<p>(a)Reflects midpoint of full year 2024 Outlook as issued on October 16, 2024.</p>
+<p>“In the third quarter, we achieved solid operating and financial performance across our businesses,” stated Steven Moskowitz, Chief Executive Officer of Crown Castle.</p>
+<p>The pathway to possible.</p>
+<p>CrownCastle.com</p>
+<p>News Release continued: Page 2</p>
+<p>RESULTS FOR THE QUARTER</p>
+<p>The table below sets forth select financial results for the quarters ended September 30, 2024 and September 30, 2023.</p>
+<p>(dollars in millions, except per share amounts) Q3 2024</p>
+<p>Q3 2023</p>
+<p>Change % Change</p>
+<p>Site rental revenues $1,593 $1,577 $16 1%</p>
+<p>Net income (loss) $303 $265 $38 14%</p>
+<p>Adjusted EBITDA(a)</p>
+<p>$1,075 $1,047 $28 3%</p>
+<p>(a)See "Non-GAAP Measures and Other Information" for further information.</p>
+<p>HIGHLIGHTS FROM THE QUARTER</p>
+<p>&#8226;Site rental revenues. Site rental revenues grew 1%, or $16 million, from third quarter 2023 to third quarter 2024.</p>
+<p>&#8226;Net income. Net income for the third quarter 2024 was $303 million compared to $265 million for the third quarter 2023, an increase of 14%.</p>
+<p>&#8226;Adjusted EBITDA. Third quarter 2024 Adjusted EBITDA was $1.1 billion compared to $1.0 billion for the third quarter 2023, an increase of 3%.</p>
+<p>&#8226;AFFO and AFFO per share. Third quarter 2024 AFFO was $801 million, or $1.84 per share, representing an increase from the third quarter 2023 of 4%.</p>
+<p>The pathway to possible.</p>
+<p>CrownCastle.com</p>
+<p>“Since announcing a change in our operational strategy in June, we have continued to deliver results in line with expectations,” said Dan Schlanger, Crown Castle’s Chief Financial Officer. “The third quarter was highlighted by 5.2% consolidated organic growth, and we issued $1.25 billion of long-term fixed rate debt at a weighted average rate of 5.1%.”</p>
+<p>OUTLOOK</p>
+<p>This Outlook section contains forward-looking statements.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert result.startswith("CROWN CASTLE REPORTS THIRD QUARTER 2024 RESULTS")
+    # The section wins over the lede: all four bullets serve, not just
+    # the one the lede budget reaches after the tables and the quote.
+    assert "Site rental revenues grew 1%, or $16 million" in result
+    assert "Net income for the third quarter 2024 was $303 million" in result
+    assert "Adjusted EBITDA was $1.1 billion" in result
+    assert "AFFO was $801 million, or $1.84 per share" in result
+    # No table residue survives.
+    assert "Change % Change" not in result
+    assert "Current Compared to Previous Outlook" not in result
+    assert "$6,340" not in result
+
+
+def test_financial_table_check_guards_spaceless_bullets() -> None:
+    from tickerlens.data.filings import _looks_like_financial_table  # noqa: E402
+
+    # Four space-less bullets carrying $ and % plus a $+%-carrying quote:
+    # narrative, not a table — the bullets are guarded, the quote is the
+    # only data row.
+    assert not _looks_like_financial_table(
+        [
+            "•Site rental revenues grew 1%, or $16 million, from third quarter 2023.",
+            "•Net income was $303 million, an increase of 14% over the prior year.",
+            "•Adjusted EBITDA was $1.1 billion, an increase of 3% year over year.",
+            "•AFFO was $801 million, or $1.84 per share, up 4% from last year.",
+            "“We issued $1.25 billion of debt at a weighted average rate of 5.1%.”",
+        ]
+    )
+    # Spaced bullets keep the batch-107 guard.
+    assert not _looks_like_financial_table(
+        [
+            "• Site rental revenues grew 1%, or $16 million.",
+            "• Net income was $303 million, an increase of 14%.",
+            "• Adjusted EBITDA was $1.1 billion, an increase of 3%.",
+            "• AFFO was $801 million, or $1.84 per share, up 4%.",
+        ]
+    )
+    # But a hyphen without a space is not a bullet: four negative-value
+    # rows still read as a table.
+    assert _looks_like_financial_table(
+        [
+            "-Site rental revenues $1,593 $1,577 1%",
+            "-Net income $303 $265 14%",
+            "-Adjusted EBITDA $1,075 $1,047 3%",
+            "-AFFO $801 $767 4%",
+        ]
+    )
+
+
+def test_spaceless_bullet_is_never_a_lede_table_line() -> None:
+    from tickerlens.data.filings import _is_lede_table_line  # noqa: E402
+
+    # A short, unterminated, figure-dense space-less bullet used to read
+    # as a data row; it is a bullet and must be kept in the lede.
+    assert not _is_lede_table_line("•Revenue $1.2B up 8%")
+    assert not _is_lede_table_line("•Revenue grew 8% to $1.2 billion")
+    # A hyphen-led figure-dense line with no space is still a table row.
+    assert _is_lede_table_line("-Revenue $1.2B up 8%")
+
+
+def test_highlights_section_ends_at_date_header() -> None:
+    # Instacart Q2 2026 live: the financial Highlights section's bullets
+    # are followed by the table's period header ("Three Months Ended
+    # June 30,") — the section collector used to swallow it as content,
+    # leaving the orphan as the last line of the highlights.
+    html = """<html><body>
+<h1>Instacart Announces Second Quarter 2026 Financial Results</h1>
+<p>San Francisco - August 6, 2026 - Instacart (NASDAQ: CART) today released financial results for its second quarter ended June 30, 2026, with GTV and revenue both growing double digits year over year as more consumers turn to the marketplace for their weekly grocery shop.</p>
+<p>Second Quarter 2026 Financial Highlights</p>
+<p>&#8226; GTV of $10,351 million, up 14% year-over-year.</p>
+<p>&#8226; Orders of 90.3 million, up 9% year-over-year.</p>
+<p>&#8226; Total revenue of $1,043 million, up 14% year-over-year, representing 10.1% of GTV.</p>
+<p>&#8226; Adjusted EBITDA of $313 million, up 19% year-over-year, representing 3.0% of GTV and 30% of total revenue.</p>
+<p>Three Months Ended June 30,</p>
+<p>GTV $10,351 $9,081 $1,270 14%</p>
+<p>Orders 90.3 82.7 7.6 9%</p>
+<p>Operational Highlights</p>
+<p>&#8226; We attracted and engaged more customers across our marketplace and enterprise platform, activating net-new customers at our fastest year-over-year growth rates since 2022.</p>
+</body></html>"""
+    result = extract_press_release_highlights(html)
+    assert result is not None
+    assert "GTV of $10,351 million, up 14%" in result
+    assert "Adjusted EBITDA of $313 million, up 19%" in result
+    assert "Three Months Ended June 30," not in result
+    assert "GTV $10,351 $9,081" not in result
+    # The business section does not displace the financial one.
+    assert "attracted and engaged more customers" not in result
+
+
 # ── Cover title-block skip (batch 100) ──────────────────────────────────────
 # Goldman Sachs opens its ex-99.1 with a cover page (quarter-period title +
 # "Earnings Results", inline media/investor contacts, masthead + address,

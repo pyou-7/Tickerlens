@@ -338,7 +338,17 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 # section is discarded as a table. Real tables (Lilly/WM) have no bullets.
 _TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
 
-_BULLET_LEAD_RE = re.compile(r"^[•●\-–—]\s")
+# A bullet-led line. Batch 154: the glyph bullets (•/●/–/—) need no
+# following space — flattened exhibits emit "•Site rental revenues."
+# with the text glued to the glyph, and the old "\s" requirement meant
+# those bullets missed every bullet guard. Crown Castle Q3 2024 proved
+# it: 3 space-less $+%-carrying bullets plus a $+%-carrying quote
+# tripped the data_rows >= 4 threshold, so the genuine 7-bullet
+# "HIGHLIGHTS FROM THE QUARTER" section was rejected as a financial
+# table and the lede fallback served the outlook table instead. The
+# hyphen stays strict (space required): a "-$1,234" line is a negative
+# table value, not a bullet, and must keep counting as a data row.
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s)")
 
 # A units parenthetical in words, anchored at line start (batch 143):
 # "(In millions, except earnings per share)" (FedEx), "(in thousands,
@@ -2807,6 +2817,7 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 or _TABLE_WORD_UNITS_RE.match(follow)
                 or _is_lede_table_heading(follow)
                 or _is_lede_period_header(follow)
+                or _is_lede_date_header(follow)
             ):
                 hit_table = True
                 break  # a table starts where the highlights end (AppLovin's
@@ -2814,6 +2825,9 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # ends here, the heading is not highlights. Only the strong
                 # heading shapes break — data rows stay out, so a section
                 # whose bullets are figure-dense is never cut. Batch 153.
+                # Batch 154: a date header ("Three Months Ended June 30,")
+                # breaks too — it is the table's period header, and without
+                # it Instacart's financial section ends on the orphan line.
             collected.append(follow)
             if len(collected) >= 12:
                 break
