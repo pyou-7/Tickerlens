@@ -285,9 +285,16 @@ def _clean_body_line(ln: str) -> str:
 # line. Batch 118: Prudential puts the dateline sentence between the
 # headline and the bullets, which made _leading_bullet_block return None
 # (first body line isn't a bullet) and let a "Financial Highlights" table
-# header become the whole body. The lead is all-caps location + dash, so a
-# prose line never matches it.
-_DATELINE_LEAD_RE = re.compile(r"^[A-Z][A-Z .'\-]*,\s*[A-Z][A-Z .'\-]*?\s[–—-]\s")
+# header become the whole body. The lead is a location + dash, so a prose
+# line rarely matches it. Batch 155: the location segments were all-caps
+# only, so Alphabet's "MOUNTAIN VIEW, Calif. – ..." dateline never
+# matched — the mixed-case state ("Calif.") broke the skip, the leading
+# block returned None, and Q4's "Financial Highlights" table section (the
+# only candidate) served table scaffolding instead of the bullets. Both
+# segments now allow mixed case; the comma + capital-led state + spaced
+# dash shape still keeps prose out (no digits in the class, so a "Q4"-led
+# line never matches, and a lowercase-led second segment never matches).
+_DATELINE_LEAD_RE = re.compile(r"^[A-Z][A-Za-z .'\-]*,\s*[A-Z][A-Za-z .'\-]*?\s[–—-]\s")
 
 # Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
 # EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
@@ -319,9 +326,13 @@ _FINANCIAL_LINE_RE = re.compile(
 # "Highlights" must head the line ("HIGHLIGHTS FOR ...") or close it
 # ("Selected Revenue Highlights") — a bare \bhighlights?\b also matched the
 # *verb* mid-sentence in footnotes ("...prepared to highlight and facilitate
-# ...", batch 97), hijacking the section with footnote prose.
+# ...", batch 97), hijacking the section with footnote prose. Batch 155: a
+# trailing parenthetical is allowed after the closing word ("Q1 2025
+# Financial Highlights (unaudited)") — Alphabet suffixes two quarters'
+# headings that way, and without it the leading-bullet block swallows the
+# heading plus the table-intro sentence as a bullet continuation.
 _HIGHLIGHTS_HEADING_RE = re.compile(
-    r"^highlights?\b|\bhighlights?\b[\s:–—-]*$", re.IGNORECASE
+    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
 )
 
 # A "Highlights" section that is really a financial data table (Lilly's
