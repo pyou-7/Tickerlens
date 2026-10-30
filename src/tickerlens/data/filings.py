@@ -535,8 +535,24 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
     r"%|\(\w\)|\d{4})$",
     re.IGNORECASE,
 )
-_LEDE_DATA_ROW_RE = re.compile(r"\$[\d(]")
+# Batch 156: the $ may be space-separated from its figure in flattened
+# tables ("Revenues $ 86,310 $ 96,469") — the old \$[\d(] never matched,
+# so space-separated data rows rode the lede budget. The 2-figure / 40%
+# density rule in _is_lede_data_row is still the guard: a prose line
+# carrying one spaced $ figure never qualifies.
+_LEDE_DATA_ROW_RE = re.compile(r"\$\s?[\d(]")
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
+# A table-intro sentence (batch 156): "The following table summarizes ..."
+# or "The table below summarizes ...". Only "summarizes" is attested in
+# real exhibits (Alphabet, Adobe) — "sets forth" is genuine prose in the
+# wild (Crown Castle Q1 2026: "The following table sets forth Crown
+# Castle's current full year 2026 Outlook, which includes a $40 million
+# decrease ..."), so the verb list stays at one word rather than guessing
+# synonyms that would eat real sentences.
+_TABLE_INTRO_RE = re.compile(
+    r"\b(?:following table|table below)\s+summarizes\b",
+    re.IGNORECASE,
+)
 # Figure tokens for the data-row density rule. The bare-number branch
 # must start with a digit (a bare "[\d,]+" also matches a lone comma, and
 # "13.8%" must match as one token, not "13" + "8%") — otherwise wrapped
@@ -602,9 +618,12 @@ def _is_lede_period_header(ln: str) -> bool:
 # Months Ended September 30,"): period words, month names, and day/year
 # numbers, with trailing commas stripped. The all-words-must-match rule
 # is the guard — a prose fragment ("for the quarter ended September 30")
-# carries "for"/"the" and never qualifies.
+# carries "for"/"the" and never qualifies. Batch 156 adds full/year/years:
+# a doubled period header ("Quarter Ended December 31, Year Ended
+# December 31,") is a date header too, and without them it rode the lede
+# budget after a rejected table section.
 _LEDE_DATE_TOKEN_RE = re.compile(
-    r"^(quarter|quarters|month|months|ended|three|six|nine|twelve|"
+    r"^(quarter|quarters|month|months|ended|three|six|nine|twelve|full|year|years|"
     r"january|february|march|april|may|june|july|august|september|"
     r"october|november|december|\d{1,4})$",
     re.IGNORECASE,
@@ -646,6 +665,14 @@ def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
     if _BULLET_LEAD_RE.match(ln):
         return False
+    # Batch 156: a table-intro sentence ("The following table summarizes
+    # ...") is table residue even though it is a terminated sentence — it
+    # is the table's own preamble, and without this it consumes a lede
+    # line after a rejected table section. Only "summarizes" is matched:
+    # "sets forth" is genuine prose in the wild (Crown Castle Q1 2026),
+    # so the verb is not generalized.
+    if _TABLE_INTRO_RE.search(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     # Anchored unit lines (a mid-sentence "(dollars ...)" parenthetical
@@ -2651,6 +2678,12 @@ def extract_press_release_highlights(
             if _is_lede_heading_fragment(ln):
                 i += 1
                 continue  # section-heading tail ("QUARTER", "YEAR") — never prose
+            if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
+                i += 1
+                continue  # Batch 156: a "Highlights" section heading is
+                # never lede prose — after a table-headed section is
+                # rejected, its heading would otherwise consume a lede
+                # line and starve the real bullets below the table.
             if _is_lone_bullet_marker(ln):
                 if not lede:
                     i += 1
@@ -2842,10 +2875,26 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             collected.append(follow)
             if len(collected) >= 12:
                 break
-        if hit_table and len("\n".join(collected)) < 150:
+        if hit_table and (
+            len("\n".join(collected)) < 150
+            or not any(
+                _BULLET_LEAD_RE.match(ln) or ln.startswith("·")
+                for ln in collected
+            )
+        ):
             continue  # table-headed section too thin — try later headings,
             # as the financial-table rejection below does; without this a
-            # thin table-led section would block every later heading
+            # thin table-led section would block every later heading.
+            # Batch 156: the no-bullet half is the GOOGL-Q4 hazard from
+            # batch 155, closed generically — a table-headed section with
+            # no bullets is a table, not highlights, even when its intro
+            # prose runs past 150 chars ("The following table summarizes
+            # ..." + a period header, which _looks_like_financial_table
+            # never flags); left in, it wins as the only candidate and
+            # pre-empts the lede's real bullets. The "·" lead counts as
+            # a bullet (batch 138/139: Plug/Chubb flatten bullets onto
+            # that marker), so a "·"-bulleted section is never rejected
+            # for lacking a "•"-style lead.
         if len("\n".join(collected)) >= 150:
             if _looks_like_financial_table(collected):
                 continue  # table, not narrative highlights — try later headings
