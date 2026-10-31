@@ -645,6 +645,48 @@ def _is_lede_date_header(ln: str) -> bool:
     return all(_LEDE_DATE_TOKEN_RE.match(w) for w in words)
 
 
+def _is_lede_table_title(ln: str) -> bool:
+    """True for a table's title line: an unterminated, figure-less line
+    that pairs a period phrase with table vocabulary ("Non-GAAP Financial
+    Measures Three Months Ended September" — Southern Company's table
+    title, which otherwise consumes a lede line and lets the table's
+    rows fill the 6-line budget). Guards: terminated lines are prose;
+    any figure (a year, a day, a value) means a header row or a prose
+    fragment, not a title — so "Three Months Ended December 31," and
+    "Fourth Quarter 2024" never qualify; the vocabulary is table-specific
+    ("financial measures", "non-gaap", "financial summary"), so a prose
+    fragment like "a summary of results for the three months ended"
+    fails; bullet-led lines never qualify, so a bullet carrying a period
+    phrase is never mistaken for a title. Batch 159."""
+    if _BULLET_LEAD_RE.match(ln) or ln[:1] in "▪■·○":
+        return False
+    if _is_sentence_terminated(ln):
+        return False
+    if _LEDE_FIGURE_RE.search(ln):
+        return False
+    words = ln.split()
+    if not words or len(words) > 12:
+        return False
+    low = ln.lower()
+    if not re.search(
+        r"\b(three|six|nine|twelve)\s+months\s+ended\b"
+        r"|\b(year|quarter)\s+ended\b"
+        r"|\bmonths\s+ended\b",
+        low,
+    ):
+        return False
+    return any(
+        vocab in low
+        for vocab in (
+            "financial measures",
+            "non-gaap",
+            "financial summary",
+            "financial highlights",
+            "consolidated",
+        )
+    )
+
+
 def _is_lede_data_row(ln: str) -> bool:
     """True for a table data row: carries at least 2 figures and figures
     are at least 40% of its tokens ("Net income (loss) per share—diluted
@@ -674,6 +716,33 @@ def _is_lede_data_row(ln: str) -> bool:
         if _LEDE_DATA_ROW_RE.search(ln):
             return True  # $-carrying: the pre-batch-157 behavior
         return len(ln) <= 80  # $-less: short rows only, never mega-lines
+    # Batch 159: $-less rows whose label runs 3-4 words dilute figure
+    # density below the 40% bar ("Organic revenue growth (Non-GAAP) 6%
+    # 6%", "Net Income – Excluding Items (in millions) 2024 2023 2024
+    # 2023", "Acquisition and Disposition Impacts — (2) — (2)"). A short
+    # line ending in a figure, with >=2 figures at >=25% density and no
+    # $ at all, is a row: a wrapped prose fragment ends mid-clause on a
+    # word, not a figure, and $-carrying rows are handled by the branch
+    # below, so a $-carrying prose fragment can never qualify here. A
+    # comparison clause is prose, not a row: "Earnings per share (EPS)
+    # up 23% versus Q2 2024; Adjusted EPS up 12%" and "2025 Earnings per
+    # share (EPS) 17% greater than 2024" are Kinder Morgan's EPS summary
+    # lines — the full-year figures in the second one appear nowhere
+    # else — and a data row is a label plus values, never a "versus" /
+    # "greater than" narration, so comparison phrases exempt the line.
+    if (
+        "$" not in ln
+        and len(ln) <= 80
+        and len(figures) / max(len(tokens), 1) >= 0.25
+        and _LEDE_FIGURE_RE.search(tokens[-1])
+        and not re.search(
+            r"\b(versus|greater than|less than|higher than|lower than|"
+            r"compared (?:with|to))\b",
+            ln,
+            re.IGNORECASE,
+        )
+    ):
+        return True
     return len(ln) <= 80 and len(re.findall(r"\$\s?[\d(]", ln)) >= 2
 
 
@@ -2827,6 +2896,18 @@ def extract_press_release_highlights(
                 # never lede prose — after a table-headed section is
                 # rejected, its heading would otherwise consume a lede
                 # line and starve the real bullets below the table.
+            if _is_lede_table_title(ln):
+                # Batch 159: a table's title line means the narrative
+                # lede is over and a table begins (Southern Company:
+                # the title plus the table's rows filled the 6-line
+                # budget after two good prose paragraphs). Break once
+                # content exists; before any content, skip the title
+                # and keep looking — the table's rows are skipped below
+                # and real bullets after the table are still collected.
+                if lede:
+                    break
+                i += 1
+                continue
             if _is_lone_bullet_marker(ln):
                 if not lede:
                     i += 1
