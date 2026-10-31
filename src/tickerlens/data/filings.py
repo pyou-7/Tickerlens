@@ -542,6 +542,20 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
 # with bare-number figures is never a lede data row).
 _LEDE_DATA_ROW_RE = re.compile(r"\$\s?[\d(]")
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
+# A table's symbol legend ("NM = not meaningful" — Allstate defines the
+# NM cell value below its Consolidated Highlights table). A short
+# all-caps symbol plus " = " plus a definition is legend, never prose:
+# narrative never opens with an abbreviation-equals definition. Batch 160.
+_LEDE_SYMBOL_LEGEND_RE = re.compile(r"^[A-Z]{1,5}\s*=\s+\S")
+# A spaced footnote-glyph legend line ("* Measures used in this release
+# ..." — Allstate's non-GAAP legend below its table). _FOOTNOTE_DEF_RE
+# deliberately matches only ATTACHED glyphs ("*Non-GAAP ...") for headline
+# purposes — a spaced "* Foo" is pinned as not-a-footnote-def there — but
+# in the lede a line leading with a footnote glyph is the table's legend,
+# never narrative: "*" is not a bullet lead in this extractor
+# (_BULLET_LEAD_RE is •●–—/- only), so no bullet is ever shaped this way.
+# Batch 160.
+_LEDE_FOOTNOTE_GLYPH_RE = re.compile(r"^[*†‡]\s+\S")
 # A table-intro sentence (batch 156): "The following table summarizes ..."
 # or "The table below summarizes ...". Only "summarizes" is attested in
 # real exhibits (Alphabet, Adobe) — "sets forth" is genuine prose in the
@@ -705,7 +719,16 @@ def _is_lede_data_row(ln: str) -> bool:
     ("Restructuring / Related Costs ~$0.06 ~$0.20" is 2 figures in 6
     tokens, 33%) is a guidance-table row even under the density bar.
     Terminated prose never qualifies — the caller checks termination
-    first, and the guard here protects direct callers."""
+    first, and the guard here protects direct callers.
+    Batch 160: the $-less caps move 80 -> 120 chars. Allstate's rows run
+    82-86 chars ("Net income (loss) applicable to common shareholders
+    1,161 (41) NM 2,651 (1,776) NM" is 82; "Property-Liability insurance
+    premiums earned 13,694 12,270 11.6 % 39,933 35,826 11.5 %" is 86),
+    so the 80 cap let them ride the lede. Tesla's flattened mega-line is
+    ~4000 chars, so 120 keeps that guard with wide margin. The 25%
+    branch also accepts a trailing "NM" ("not meaningful" — Allstate's
+    cell value where a change is meaningless) as a figure-like ending,
+    since a row ending in NM is a row, not prose."""
     if _is_sentence_terminated(ln):
         return False
     figures = _LEDE_FIGURE_RE.findall(ln)
@@ -715,7 +738,7 @@ def _is_lede_data_row(ln: str) -> bool:
     if len(figures) / max(len(tokens), 1) >= 0.4:
         if _LEDE_DATA_ROW_RE.search(ln):
             return True  # $-carrying: the pre-batch-157 behavior
-        return len(ln) <= 80  # $-less: short rows only, never mega-lines
+        return len(ln) <= 120  # $-less: short rows only, never mega-lines
     # Batch 159: $-less rows whose label runs 3-4 words dilute figure
     # density below the 40% bar ("Organic revenue growth (Non-GAAP) 6%
     # 6%", "Net Income – Excluding Items (in millions) 2024 2023 2024
@@ -730,11 +753,15 @@ def _is_lede_data_row(ln: str) -> bool:
     # lines — the full-year figures in the second one appear nowhere
     # else — and a data row is a label plus values, never a "versus" /
     # "greater than" narration, so comparison phrases exempt the line.
+    # Batch 160: the ending may be "NM" (see above) and the cap is 120.
     if (
         "$" not in ln
-        and len(ln) <= 80
+        and len(ln) <= 120
         and len(figures) / max(len(tokens), 1) >= 0.25
-        and _LEDE_FIGURE_RE.search(tokens[-1])
+        and (
+            _LEDE_FIGURE_RE.search(tokens[-1])
+            or re.fullmatch(r"\(?NM\)?", tokens[-1], re.IGNORECASE)
+        )
         and not re.search(
             r"\b(versus|greater than|less than|higher than|lower than|"
             r"compared (?:with|to))\b",
@@ -758,6 +785,8 @@ def _is_lede_table_line(ln: str) -> bool:
     # so the verb is not generalized.
     if _TABLE_INTRO_RE.search(ln):
         return True
+    if _LEDE_FOOTNOTE_GLYPH_RE.match(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     # Anchored unit lines (a mid-sentence "(dollars ...)" parenthetical
@@ -777,6 +806,11 @@ def _is_lede_table_line(ln: str) -> bool:
     if len(ln) > 60:
         return False
     words = ln.split()
+    # A symbol legend line ("NM = not meaningful") is the table's own
+    # footnote, not narrative — it sits below the table after the
+    # numbered footnotes. Batch 160.
+    if _LEDE_SYMBOL_LEGEND_RE.match(ln):
+        return True
     # Short label lines — but never a $-carrying value line: "$50.2
     # billion" is a metric value the batch-100 rule keeps, not a label.
     if "$" not in ln:
@@ -789,6 +823,36 @@ def _is_lede_table_line(ln: str) -> bool:
     if len(words) <= 6 and _LEDE_FOOTNOTE_TAIL_RE.search(ln):
         return True
     return False
+
+
+def _is_lede_table_label(ln: str, next_ln: str) -> bool:
+    """True for a table row's label line: figure-less and unterminated,
+    directly above its values row. Some filers flatten a row as label
+    on one line and values on the next (Allstate: "Property-Liability
+    combined ratio" / "Recorded 96.4 103.4 (7.0) 96.9 109.8 (12.9)";
+    "Return on Allstate common shareholders' equity (trailing twelve
+    months)" / its 26.1 % row; "Total policies in force (in thousands)"
+    / "205,483 190,089 8.1 %"), and the label alone matches no table
+    predicate — it is too long for the short-label rule, or paren-less.
+    Guards: terminated lines are prose; any figure means a data row or a
+    prose fragment, not a label; bullets are content; and the next line
+    must itself be a lede data row — a label with no values row below it
+    is not a label, so a sub-headline above a prose paragraph never
+    qualifies. A completed sentence inside the line is prose too:
+    Coinbase wraps one sentence across lines ("majority of which were
+    unrealized. These gains were" above the "$357 million and $514
+    million after reflecting the tax" continuation), and without this
+    guard the fragment reads as a label above a data row. Batch 160."""
+    if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
+        return False
+    if re.search(r"[.!?]\s", ln):
+        return False
+    if _LEDE_FIGURE_RE.search(ln):
+        return False
+    words = ln.split()
+    if not words or len(words) > 12 or len(ln) > 120:
+        return False
+    return bool(next_ln) and _is_lede_data_row(next_ln)
 
 
 def _is_lede_table_tail_continuation(ln: str) -> bool:
@@ -2924,6 +2988,12 @@ def extract_press_release_highlights(
                 continue  # separator between bullets — never consumes budget
             if _BOILERPLATE_RE.match(ln):
                 break
+            if _is_lede_table_label(
+                ln, lede_lines[i + 1] if i + 1 < len(lede_lines) else ""
+            ):
+                i += 1
+                continue  # a table row's label line (its values are the
+                # next line, itself a data row) — batch 160
             if _is_lede_table_line(ln):
                 i += 1
                 continue  # table residue (unit lines, outlook-table
