@@ -2919,6 +2919,38 @@ def _financial_line_count(lines: list[str]) -> int:
     return sum(1 for ln in lines if _FINANCIAL_LINE_RE.search(ln))
 
 
+def _item_has_open_quote(item_text: str) -> bool:
+    """True when item_text leaves a quotation open.
+
+    Curly quotes nest by depth ("\u201c opens, \u201d closes); a straight
+    double quote toggles the depth, so a lone " is an opener and a pair is
+    balanced. Mixed forms compose: a curly opener closed by a straight
+    quote still balances. Batch 158.
+    """
+    depth = 0
+    for ch in item_text:
+        if ch == "\u201c":
+            depth += 1
+        elif ch == "\u201d":
+            depth = max(0, depth - 1)
+        elif ch == '"':
+            depth = 0 if depth else 1
+    return depth > 0
+
+
+def _current_leading_item_text(bullets: list[str]) -> str:
+    """The current item of a leading-bullet block: from the last bullet
+    start line to the end. The item-close rule judges the quote state of
+    the item, not the whole block — an earlier item's closed quote must
+    not keep a later item open. Batch 158.
+    """
+    start = 0
+    for i, ln in enumerate(bullets):
+        if ln.startswith(("•", "-", "*")):
+            start = i
+    return "\n".join(bullets[start:])
+
+
 def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     """Consecutive bullet lines immediately after the headline.
 
@@ -2966,7 +2998,22 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # break — data rows and labels stay out, so a figure-dense
                 # bullet continuation is never cut. Batch 153.
             bullets.append(ln)
-            if re.search(r"[.!?;]\s*$", ln) and not nxt.startswith(("•", "-", "*")):
+            if (
+                # Batch 158: the terminal-punctuation check sees through a
+                # closing quote ("." / ".”) — without it a quote that opens
+                # and closes on one line never closes the item itself, and
+                # the next prose line leaks in before the rule fires.
+                re.search(r"[.!?;][\u201d\"']?\s*$", ln)
+                and not nxt.startswith(("•", "-", "*"))
+                # Batch 158: don't close the item while its quote is still
+                # open — a multi-line CEO quote (GOOGL Q2 FY2026: the
+                # opener ends "... across every part of our business." and
+                # the quote runs three more lines) would otherwise truncate
+                # at its first terminated line. The 14-line cap and the
+                # heading/boilerplate breaks above still bound the block,
+                # so an unclosed quote cannot run away.
+                and not _item_has_open_quote(_current_leading_item_text(bullets))
+            ):
                 break  # item closed and prose follows (dateline)
         else:
             break  # first line isn't a bullet — no leading block
