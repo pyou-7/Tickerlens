@@ -890,6 +890,12 @@ def _is_lede_table_line(ln: str) -> bool:
     # so the verb is not generalized.
     if _TABLE_INTRO_RE.search(ln):
         return True
+    # Batch 162: a bare numbered footnote ("1) See Table A ...") is
+    # table residue even though it is a terminated sentence — checked
+    # before the termination gate, like the table-intro sentence
+    # (batch 156), so the tail trim can start on it.
+    if _LEDE_FOOTNOTE_NUM_RE.match(ln):
+        return True
     if _LEDE_FOOTNOTE_GLYPH_RE.match(ln):
         return True
     if _is_sentence_terminated(ln):
@@ -1194,6 +1200,15 @@ def _is_lone_bullet_marker(ln: str) -> bool:
 # with the marker running straight into the text, and the old [\s.] tail let
 # that endnote boilerplate fill the lede and get stored as highlights.
 _LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
+
+# A bare numbered footnote ("1) See Table A for information regarding
+# non-GAAP financial measures.", "1) The three months ended June 30,
+# 2025 are adjusted for M&A transaction costs of $1.4 million ...") —
+# the table's footnote definitions without parentheses. Sempra numbers
+# its reconciliation-table footnote "1)" and Datadog its M&A-costs
+# footnote the same way; neither is narrative, and both sit inside the
+# lede budget where the parenthesized rule never sees them. Batch 162.
+_LEDE_FOOTNOTE_NUM_RE = re.compile(r"^\d{1,3}\)\s")
 
 # A footnote-definition legend line is never a headline (batch 126): the
 # marker is a single letter/digit in parentheses ("(B)Crude oil ..."). The
@@ -2798,11 +2813,13 @@ def extract_press_release_highlights(
             # Batch 110.
             i += wrapped_label
             continue
-        if _FOOTNOTE_DEF_RE.match(ln):
+        if _FOOTNOTE_DEF_RE.match(ln) or _LEDE_FOOTNOTE_NUM_RE.match(ln):
             # Footnote-definition legend lines (GEV's Workiva exhibit opens
             # with "1 Defined as remaining performance obligation (RPO)" /
             # "*Non-GAAP Financial Measure" before the real headline): never
-            # headline material. Batch 104.
+            # headline material. Batch 104. Batch 162: the bare numbered
+            # form ("1) See Table A ...") is the same hazard — a footnote
+            # definition sitting ahead of the headline.
             i += 1
             continue
         if _TOC_HEADING_RE.match(ln):
@@ -3051,11 +3068,18 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
-            if _LEDE_FOOTNOTE_RE.match(ln) or _FOOTNOTE_DEF_RE.match(ln):
+            if (
+                _LEDE_FOOTNOTE_RE.match(ln)
+                or _FOOTNOTE_DEF_RE.match(ln)
+                or _LEDE_FOOTNOTE_NUM_RE.match(ln)
+            ):
                 i += 1
                 continue  # table footnotes ("(a) ...", "(1) ...") and
                 # footnote-definition legends ("1 Defined as ...",
                 # "*Non-GAAP Financial Measure") are never lede
+                # content. Batch 162: the bare numbered form ("1) See
+                # Table A ...") is the same class — Sempra's and
+                # Datadog's table footnotes sit mid-lede otherwise.
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
@@ -3296,6 +3320,21 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     return None
 
 
+def _is_section_footnote_line(ln: str) -> bool:
+    """True for a table-footnote definition inside a Highlights section:
+    parenthesized ("(1) During the year ..."), definition-verb ("1
+    Defined as ...", "*Non-GAAP Financial Measure"), or bare numbered
+    ("1) See Table A ..."). A footnote definition is never a highlight —
+    Datadog's M&A-costs footnote sits between its section bullets — so
+    it is dropped after qualification, like the lone-marker lines
+    (batch 140). Batch 162."""
+    return bool(
+        _LEDE_FOOTNOTE_RE.match(ln)
+        or _FOOTNOTE_DEF_RE.match(ln)
+        or _LEDE_FOOTNOTE_NUM_RE.match(ln)
+    )
+
+
 def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
     """Return the content lines of every explicit "Highlights" section.
 
@@ -3364,8 +3403,18 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             # before — only the junk glyph lines disappear. Flattened
             # bullet lists (Nucor: "•" on its own line before each item)
             # otherwise store a glyph line per item.
-            collected = [ln for ln in collected if not _is_lone_bullet_marker(ln)]
-            sections.append(collected)
+            # Batch 162: footnote-definition lines drop the same way —
+            # Datadog's M&A-costs footnote sits between its section
+            # bullets, and the section collector is the one collection
+            # path with no footnote handling at all.
+            collected = [
+                ln
+                for ln in collected
+                if not _is_lone_bullet_marker(ln)
+                and not _is_section_footnote_line(ln)
+            ]
+            if collected:
+                sections.append(collected)
             continue
         break  # heading found but section too thin — don't try later headings
     return sections

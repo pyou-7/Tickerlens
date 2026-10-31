@@ -67,14 +67,19 @@ _MCO_LINES = (
 
 def test_rule_line_and_dangling_heading_are_dropped() -> None:
     # Batch 157: Meta's rule line and dangling "CFO Outlook Commentary"
-    # heading never reach the served body; the bullets and the footnote
-    # sentence survive.
+    # heading never reach the served body; the bullets survive.
+    # Batch 162: the "(1) For more information on our free cash flow ..."
+    # footnote-definition line is dropped too — it is a footnote pointer,
+    # not a highlight, and the section collector is the one collection
+    # path that used to keep it (the lede path has dropped "(1) ..." lines
+    # since batch 97). The batch-157 assertion that it survived pinned
+    # incidental behavior, not content.
     hl = extract_press_release_highlights(_bare_release_html(*_META_LINES))
     assert hl is not None
     assert "____" not in hl
     assert "CFO Outlook Commentary" not in hl
     assert "Family daily active people" in hl
-    assert "For more information on our free cash flow" in hl
+    assert "For more information on our free cash flow" not in hl
 
 
 def test_trailing_heading_and_table_intro_pair_are_dropped() -> None:
