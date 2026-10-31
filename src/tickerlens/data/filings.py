@@ -536,10 +536,10 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 # Batch 156: the $ may be space-separated from its figure in flattened
-# tables ("Revenues $ 86,310 $ 96,469") — the old \$[\d(] never matched,
-# so space-separated data rows rode the lede budget. The 2-figure / 40%
-# density rule in _is_lede_data_row is still the guard: a prose line
-# carrying one spaced $ figure never qualifies.
+# tables ("Revenues $ 86,310 $ 96,469"). Batch 157: a $ before a figure
+# is no longer required for short data rows, but it still distinguishes
+# the pre-existing behavior for long lines (a flattened table mega-line
+# with bare-number figures is never a lede data row).
 _LEDE_DATA_ROW_RE = re.compile(r"\$\s?[\d(]")
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
 # A table-intro sentence (batch 156): "The following table summarizes ..."
@@ -651,14 +651,30 @@ def _is_lede_data_row(ln: str) -> bool:
     $0.65 $(3,903) N/A $0.55 $0.10" -> 5 of 10 tokens). A wrapped prose
     fragment with a $ figure is figure-sparse, so it never qualifies; a
     lone value line ("$50.2 billion", one figure) is a metric value, not
-    a row, so it is kept."""
-    if not _LEDE_DATA_ROW_RE.search(ln):
+    a row, so it is kept. Batch 157: $-less guidance/margin rows ("Net
+    Sales Growth (0.5%) - 0.5% 1.5% - 3.5%", "Margin 14.7% 16.4% 170
+    bps ...", "FY 2024 FY 2024 FY 2024") are table rows too, and the
+    density rule is the guard — but only for short lines. A flattened
+    table mega-line (Tesla's whole FINANCIAL SUMMARY as one 4000-char
+    line) is figure-dense without a $ before its figures, and skipping
+    it just swaps one table mega-line for the next (OPERATIONAL SUMMARY);
+    the length cap keeps that pre-existing behavior. A second shape
+    qualifies on $ figures alone: a label + 2 $ figures in a short line
+    ("Restructuring / Related Costs ~$0.06 ~$0.20" is 2 figures in 6
+    tokens, 33%) is a guidance-table row even under the density bar.
+    Terminated prose never qualifies — the caller checks termination
+    first, and the guard here protects direct callers."""
+    if _is_sentence_terminated(ln):
         return False
     figures = _LEDE_FIGURE_RE.findall(ln)
     if len(figures) < 2:
         return False
     tokens = ln.split()
-    return len(figures) / max(len(tokens), 1) >= 0.4
+    if len(figures) / max(len(tokens), 1) >= 0.4:
+        if _LEDE_DATA_ROW_RE.search(ln):
+            return True  # $-carrying: the pre-batch-157 behavior
+        return len(ln) <= 80  # $-less: short rows only, never mega-lines
+    return len(ln) <= 80 and len(re.findall(r"\$\s?[\d(]", ln)) >= 2
 
 
 def _is_lede_table_line(ln: str) -> bool:
@@ -735,6 +751,133 @@ def _is_bare_highlights_heading(ln: str) -> bool:
     if s.endswith((".", "!", "?", "…")):
         return False
     return bool(_HIGHLIGHTS_HEADING_RE.search(ln))
+
+
+# A horizontal-rule line: a flattened <hr> or a row of underscores/dashes
+# in the exhibit (Meta's releases carry a 36-underscore rule between the
+# Highlights bullets and the footnote). It is never content. Batch 157.
+_RULE_LINE_RE = re.compile(r"^([_\-*=])\1{7,}$")
+
+# A table-intro sentence standing alone as a line ("The following table
+# summarizes the key financial performance measures for the third quarter
+# of 2026."): the table itself never follows in highlights, so as a
+# trailing line it is a stub, not content. The ending may be a colon —
+# Adobe's targets intro ends "targets:" and is still just the table's
+# preamble. Must be a single sentence — Emerson's guidance paragraph
+# opens with the same phrase and continues with real guidance prose in
+# the same flattened line, and that line must never be dropped. Batch 157.
+_TRAILING_TABLE_INTRO_RE = re.compile(
+    r"^(?:the following table|the table below)\s+summarizes\b[^.!?]*[.:]$",
+    re.IGNORECASE,
+)
+
+# Small words that may appear lowercase inside a heading ("First Quarter
+# 2026 Financial Results" is all-capitals-led; "Recent Investment
+# Activity" likewise). A trailing line is only a heading when every word
+# is capitalized, all-caps, a number, or one of these — a lowercase-led
+# wrapped prose fragment ("and other items") never qualifies. Batch 157.
+_HEADING_SMALL_WORDS = frozenset(
+    {"and", "or", "of", "the", "for", "to", "in", "on", "at", "a", "an", "&"}
+)
+
+# Section words a heading ends with ("CFO Outlook Commentary",
+# "First Quarter 2026 Financial Results", "Financial Targets"). The
+# end-word is the guard that keeps a truncated headline fragment out:
+# "Goldman Sachs Reports Second Quarter Earnings Per Common" is
+# heading-shaped (7 capitalized words, unterminated) but ends with
+# "Common", so it is content, not a section label. Batch 157.
+_HEADING_END_WORDS = frozenset(
+    {
+        "highlights",
+        "results",
+        "commentary",
+        "targets",
+        "summary",
+        "overview",
+        "update",
+        "guidance",
+        "outlook",
+        "performance",
+        "review",
+        "measures",
+        "financials",
+        "earnings",
+        "activity",
+        "discussion",
+    }
+)
+
+
+def _is_trailing_heading(ln: str) -> bool:
+    """True for a heading-shaped line: short, unterminated, every word
+    capitalized (or a number / small word), no figures or currency,
+    ending with a section word, and never bullet- or dash-led (a quote
+    attribution is not a heading)."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if s.endswith((".", "!", "?", "…")):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not words or len(words) > 8:
+        return False
+    if words[-1].strip(",;:").lower() not in _HEADING_END_WORDS:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _clean_highlights_result(result: str) -> str:
+    """Final cleanup of an assembled highlights body (batch 157).
+
+    Drops horizontal-rule lines anywhere, and trims a trailing table
+    stub — a lone table-intro sentence and/or a heading-shaped line at
+    the very end (Meta's "CFO Outlook Commentary" with nothing after
+    it; Moody's "First Quarter 2026 Financial Results" + intro
+    sentence after the bullets). The headline is never trimmed: only
+    lines after the first paragraph break are candidates. The trim is
+    kept only when the result stays >=200 chars — below that the
+    extractor would return None, and a wart is better than dropping
+    the row (the batch-153 floor rule).
+    """
+    lines = [ln for ln in result.split("\n") if not _RULE_LINE_RE.match(ln.strip())]
+    head_end = 0
+    for i, ln in enumerate(lines):
+        if not ln.strip():
+            head_end = i
+            break
+    else:
+        return "\n".join(lines).strip()
+    body = lines[head_end:]
+    trimmed = list(body)
+    while trimmed:
+        last = trimmed[-1].strip()
+        if not last:
+            trimmed.pop()
+            continue
+        if _TRAILING_TABLE_INTRO_RE.match(last):
+            trimmed.pop()
+            continue
+        if _is_trailing_heading(last):
+            trimmed.pop()
+            continue
+        break
+    candidate = "\n".join(lines[:head_end] + trimmed).strip()
+    if len(candidate) < 200:
+        return "\n".join(lines).strip()
+    return candidate
 
 
 def _trim_lede_table_tail(lede: list[str]) -> list[str]:
@@ -2731,6 +2874,10 @@ def extract_press_release_highlights(
         # Batch 115.
         headline = re.sub(r"^[•\-*]\s*", "", headline).strip()
     result = f"{headline}\n\n{body}".strip() if headline else body.strip()
+    # Batch 157: drop horizontal-rule lines and trim a trailing table
+    # stub (lone table-intro sentence / dangling heading) from the
+    # assembled body — the headline itself is never trimmed.
+    result = _clean_highlights_result(result)
     if len(result) < 200:
         logger.info("Press-release highlights too short after extraction")
         return None
