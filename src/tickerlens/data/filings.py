@@ -773,6 +773,111 @@ def _is_lede_data_row(ln: str) -> bool:
     return len(ln) <= 80 and len(re.findall(r"\$\s?[\d(]", ln)) >= 2
 
 
+def _is_lede_figure_token(tok: str) -> bool:
+    """True for a token that is a single figure: a bare or parenthesized
+    number ("44", "(35)", "13.8%"), a $ figure ("$1.2"), or a standalone
+    "%" (spaced-out tables write "11.6 %" as two tokens). A footnote
+    marker ("(a)") or a symbol ("NM") is not a figure."""
+    return bool(re.fullmatch(r"\(?\$?[\d,.]+\)?%?", tok)) or tok == "%"
+
+
+# A bare 4-digit year (1900-2099, optionally parenthesized). A line
+# ending in a year is prose, never a reconciliation row: headlines
+# ("Simon® Reports Third Quarter 2024 Results, Affirms Full Year
+# 2024"), sub-headlines ("Verizon delivered strong financial growth
+# ... in 1Q 2025"), and wrapped fragments ("of common stock at the
+# close of business on August 17, 2026") all end in years, while a
+# reconciliation value is a small bare number ("41", "(8)", "9") —
+# never a year. Batch 161.
+_LEDE_YEAR_RE = re.compile(r"\(?(?:19|20)\d{2}\)?")
+
+
+def _is_lede_recon_row(ln: str) -> bool:
+    """True for a reconciliation-table row: a long wordy label plus
+    sparse values that no data-row density rule catches. Sempra's
+    GAAP-to-adjusted reconciliation table flattens this way: rows carry
+    one trailing figure after dash placeholders for empty cells
+    ("Equity losses from write-off of rate base disallowances ...
+    — — — 44"), rows that end in a dash cell ("Net unrealized losses
+    on interest rate swaps ... 9 —", "Tax items related to assets held
+    for sale 26 — 26 —"), and bare two-figure rows whose labels dilute
+    density to 13-17% ("Impact from foreign currency ... (8) 41").
+    Two branches, both guarded by a >=4-word label (the tokens before
+    the first figure or dash token): a short label plus a value is a
+    metric line ("EPS — $0.89"), not a reconciliation row. The dash
+    branch requires a standalone dash token adjacent to a figure token
+    (a prose em-dash sits between words) and an ending in a figure or
+    a dash, capped at 300 chars. The bare branch requires >=2 figures,
+    an ending in a figure, no $ or % anywhere, >=10% density, <=150
+    chars, no mid-line sentence boundary (the COIN guard, batch 160),
+    and no comparison phrase (the KMI guard, batch 159). Terminated
+    prose and bullets never qualify, and a line that is already a lede
+    data row is not a recon row — the predicates stay disjoint. A line
+    ending in a bare year is prose, never a row (headlines and wrapped
+    fragments end in years; a reconciliation value never is one).
+    Batch 161."""
+    if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
+        return False
+    if _is_lede_data_row(ln):
+        return False
+    figures = _LEDE_FIGURE_RE.findall(ln)
+    if not figures:
+        return False
+    tokens = ln.split()
+    if not tokens:
+        return False
+    # The label is the run before the values zone (first figure or dash
+    # token); a reconciliation label is a wordy phrase, never 1-3 words.
+    first_value = next(
+        (
+            i
+            for i, tok in enumerate(tokens)
+            if tok in ("—", "–", "-") or _is_lede_figure_token(tok)
+        ),
+        len(tokens),
+    )
+    if first_value < 4:
+        return False
+    # Dash-cell branch: an empty-cell dash adjacent to a figure, with
+    # the line ending in a figure or a dash cell — never in a year.
+    dash_idx = [i for i, tok in enumerate(tokens) if tok in ("—", "–", "-")]
+    if dash_idx and len(ln) <= 300:
+        last = tokens[-1]
+        ends_fig_or_dash = (
+            _is_lede_figure_token(last)
+            and not _LEDE_YEAR_RE.fullmatch(last)
+        ) or last in ("—", "–", "-")
+        adjacent = any(
+            (i > 0 and _is_lede_figure_token(tokens[i - 1]))
+            or (i + 1 < len(tokens) and _is_lede_figure_token(tokens[i + 1]))
+            for i in dash_idx
+        )
+        if ends_fig_or_dash and adjacent:
+            return True
+    # Bare two-figure branch: sparse values, no $ or % anywhere, ending
+    # in a figure — never in a year. A wrapped prose fragment ends
+    # mid-clause on a word, not a figure; a comparison clause is prose,
+    # not a row.
+    if (
+        len(figures) >= 2
+        and "$" not in ln
+        and "%" not in ln
+        and len(ln) <= 150
+        and len(figures) / max(len(tokens), 1) >= 0.10
+        and _is_lede_figure_token(tokens[-1])
+        and not _LEDE_YEAR_RE.fullmatch(tokens[-1])
+        and not re.search(r"[.!?]\s", ln)
+        and not re.search(
+            r"\b(versus|greater than|less than|higher than|lower than|"
+            r"compared (?:with|to))\b",
+            ln,
+            re.IGNORECASE,
+        )
+    ):
+        return True
+    return False
+
+
 def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
     if _BULLET_LEAD_RE.match(ln):
@@ -802,6 +907,11 @@ def _is_lede_table_line(ln: str) -> bool:
     # it is exempt from the length gate below — its density rule (2+
     # figures, >=40% of tokens) is the guard that keeps wrapped prose out.
     if _is_lede_data_row(ln):
+        return True
+    # Batch 161: a reconciliation row is table residue too — its label
+    # runs long and its values are sparse, so it reads as prose to the
+    # density rules but is still a table row.
+    if _is_lede_recon_row(ln):
         return True
     if len(ln) > 60:
         return False
@@ -836,13 +946,17 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
     predicate — it is too long for the short-label rule, or paren-less.
     Guards: terminated lines are prose; any figure means a data row or a
     prose fragment, not a label; bullets are content; and the next line
-    must itself be a lede data row — a label with no values row below it
-    is not a label, so a sub-headline above a prose paragraph never
-    qualifies. A completed sentence inside the line is prose too:
+    must itself be a lede data row or a reconciliation row — a label with
+    no values row below it is not a label, so a sub-headline above a
+    prose paragraph never qualifies. A completed sentence inside the line
+    is prose too:
     Coinbase wraps one sentence across lines ("majority of which were
     unrealized. These gains were" above the "$357 million and $514
     million after reflecting the tax" continuation), and without this
-    guard the fragment reads as a label above a data row. Batch 160."""
+    guard the fragment reads as a label above a data row. Batch 160.
+    Batch 161: a reconciliation row below the label counts as the values
+    row (Sempra flattens some reconciliation labels onto their own line).
+    """
     if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
         return False
     if re.search(r"[.!?]\s", ln):
@@ -852,7 +966,9 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
     words = ln.split()
     if not words or len(words) > 12 or len(ln) > 120:
         return False
-    return bool(next_ln) and _is_lede_data_row(next_ln)
+    return bool(next_ln) and (
+        _is_lede_data_row(next_ln) or _is_lede_recon_row(next_ln)
+    )
 
 
 def _is_lede_table_tail_continuation(ln: str) -> bool:
