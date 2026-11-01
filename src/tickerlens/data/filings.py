@@ -1755,6 +1755,48 @@ def _asterisk_note_block_len(lines: list[str], i: int) -> int:
     return _wrapped_note_block_len(lines, i, _ASTERISK_NOTE_LEAD_RE)
 
 
+# A shareholder-letter salutation (batch 169): letters open "Fellow
+# shareholders," / "Dear Shareholders," after the date — a greeting,
+# never highlights. It is served three ways today: as the HEADLINE
+# (NFLX — the headline loop picks the first short line it reaches, so
+# the salutation becomes the headline); as lede content (COIN's Q3
+# FY2025 letter, SKYD); and as a leading-bullet continuation (AXON —
+# the salutation follows the last bullet and the block appends it as a
+# wrap). NFLX's letters carry it as a standalone line (one quarter
+# drops the comma in flattening); COIN's Q3 FY2025 letter splits it
+# across two lines ("Fellow" / "Shareholders,"). _salutation_block_len
+# returns how many lines the salutation starting at lines[i] occupies
+# (1, or 2 for the split form), or 0. The pattern is deliberately
+# salutation-shaped: an optional single capitalized word between the
+# opener and "shareholders" ("Fellow Affirm Shareholders,") and an
+# optional trailing comma or period — and the line must END at the
+# salutation. A prose sentence that happens to mention shareholders
+# ("Shareholders approved the merger") never matches, and an inline
+# salutation ("Dear Shareholders, This is my first letter ...",
+# Instacart/Affirm's flattened form) never matches either: dropping
+# that line would eat the prose with it, so those stay served.
+_SALUTATION_RE = re.compile(
+    r"^(Fellow|Dear)(\s+[A-Z][a-z]+)?\s+shareholders[,.]?$",
+    re.IGNORECASE,
+)
+_SALUTATION_SPLIT_RE = re.compile(r"^shareholders[,.]?$", re.IGNORECASE)
+
+
+def _salutation_block_len(lines: list[str], i: int) -> int:
+    """Length of the salutation block starting at lines[i], or 0."""
+    if i >= len(lines):
+        return 0
+    if _SALUTATION_RE.match(lines[i]):
+        return 1
+    if (
+        lines[i].strip().lower() in ("fellow", "dear")
+        and i + 1 < len(lines)
+        and _SALUTATION_SPLIT_RE.match(lines[i + 1])
+    ):
+        return 2
+    return 0
+
+
 def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
     """Drop runs of 3+ consecutive table fragments (see above).
 
@@ -3530,6 +3572,16 @@ def extract_press_release_highlights(
             # the headline either. Batch 167.
             i += note
             continue
+        sal = _salutation_block_len(lines, i)
+        if sal:
+            # Shareholder-letter salutation ("Fellow shareholders,"):
+            # never a headline — and a letter that opens with one has
+            # no headline at all (NFLX: date / salutation / bullets),
+            # so the lede starts after it, like the dateline branch
+            # below. Without this the loop picks the salutation as the
+            # headline. Batch 169.
+            body_start = i + sal
+            break
         if _TOC_HEADING_RE.match(ln):
             # Combined release+supplement packet (SPG): skip the table of
             # contents so its heading and entries never become the headline.
@@ -3807,6 +3859,13 @@ def extract_press_release_highlights(
                 # content. The lede's table-line rule already drops the
                 # asterisk opener, but its wrapped continuations were
                 # served; the block skip takes them with it. Batch 167.
+            sal = _salutation_block_len(lede_lines, i)
+            if sal:
+                i += sal
+                continue  # shareholder-letter salutation ("Fellow
+                # shareholders,", "Dear Shareholders," — or the split
+                # "Fellow" / "Shareholders," form) is a greeting, never
+                # lede content. Batch 169.
             if _CONFERENCE_CALL_NOTICE_RE.search(ln):
                 i += 1
                 continue  # investor-conference-call notice (Emerson: the
@@ -3932,16 +3991,27 @@ def extract_press_release_highlights(
     if len(result) < 200:
         logger.info("Press-release highlights too short after extraction")
         return None
-    if not headline and len(result.split("\n\n")[0]) > 1000:
+    first_para = result.split("\n\n")[0]
+    if (
+        not headline
+        and first_para
+        and max(len(ln) for ln in first_para.split("\n")) > 1000
+    ):
         # Page-image exhibit (Bank of America slide deck): the "lines" are
-        # whole pages with no usable headline. A page-line is not a highlight;
+        # whole pages with no usable headline. A page-LINE is not a highlight;
         # return None so the UI shows "Not available" instead of garbage.
-        # Batch 105.
+        # Batch 105. Batch 169: the bound is on the longest LINE, not the
+        # paragraph — the section path joins a bullet list with "\n", so a
+        # 1385-char bullet list reads as one paragraph although no line
+        # exceeds 350 chars (NFLX Q3 FY2024: headline-less once the
+        # salutation fix stops the greeting becoming the headline, its
+        # bullets were discarded as a "page-line"). A single line over
+        # 1000 chars still trips the guard exactly as before.
         # Batch 163: a Workiva page-flattened release is the same shape but
         # carries real narrative behind a dateline — salvage its lede (and
         # an embedded title) instead of discarding it; a dateline-less page
         # line still returns None below.
-        salvaged = _salvage_page_line_lede(result.split("\n\n")[0])
+        salvaged = _salvage_page_line_lede(first_para)
         if salvaged is not None:
             return salvaged
         logger.info("Press-release highlights are page-lines without a headline")
@@ -4063,6 +4133,15 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # bullet item. Skip the whole block and keep collecting.
             # Batch 167.
             skip_until = idx + note
+            continue
+        sal = _salutation_block_len(lines, idx)
+        if sal:
+            # Shareholder-letter salutation after the bullets (AXON:
+            # "Fellow shareholders," follows the last bullet and the
+            # block would append it as a wrap continuation). Skip the
+            # whole block and keep collecting — the prose paragraph
+            # after it still closes the last item. Batch 169.
+            skip_until = idx + sal
             continue
         if ln.startswith(("•", "-", "*")):
             bullets.append(ln)
@@ -4221,6 +4300,13 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                     # section: same boilerplate class as a footnote
                     # definition — drop the whole block. Batch 167.
                     j += note
+                    continue
+                sal = _salutation_block_len(collected, j)
+                if sal:
+                    # Shareholder-letter salutation inside a Highlights
+                    # section: a greeting, never a highlight — drop the
+                    # whole block. Batch 169.
+                    j += sal
                     continue
                 if not _is_lone_bullet_marker(collected[j]):
                     kept.append(collected[j])
