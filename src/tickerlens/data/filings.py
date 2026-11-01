@@ -1567,6 +1567,131 @@ def _footnote_def_block_len(
     return n
 
 
+# A rounding note (batch 167): Coinbase's shareholder letters carry a
+# rounding boilerplate paragraph ahead of the letter prose — the long form
+# ("Figures have been rounded for presentation purposes only. For
+# additional financial information and a reconciliation between GAAP and
+# non-GAAP results, please refer to the reconciliation of GAAP to
+# Non-GAAP results table(s) in this shareholder letter and our Form
+# 10-K/10-Q filed with the SEC on <date>.") and the short form ("Note:
+# Figures presented [above] may not sum precisely due to rounding.").
+# Either form fills the lede when nothing else precedes the prose (Q4
+# FY2024's whole stored body is the long form), and the long form's first
+# line becomes the headline when the quarter title is skipped (Q1/Q2
+# FY2025). A rounding note is boilerplate, never highlights. The short
+# form's "may not" alternative covers the wrapped shape ("Note: Figures
+# presented may not / sum precisely due to rounding."). The "For
+# additional financial information" alternative covers the long form's
+# second sentence standing alone: Q3 FY2024 carries the short note plus
+# the referral sentence, with no long-form first sentence — without it
+# the referral paragraph is served as lede content.
+_ROUNDING_NOTE_RE = re.compile(
+    r"^Figures have been rounded for presentation purposes\b"
+    r"|^Note:\s*Figures presented (above\s+)?may not\b"
+    r"|^For additional financial information\b",
+    re.IGNORECASE,
+)
+
+# The rounding note's second sentence (batch 167): the long form is two
+# sentences, and the flattening may put the break on a line boundary
+# ("Figures have been rounded for presentation purposes only." / "For
+# additional financial information and a ..."). A following line with
+# this lead is the same note's continuation, never new prose.
+_ROUNDING_NOTE_CHAIN_RE = re.compile(
+    r"^For additional financial information\b", re.IGNORECASE
+)
+
+# A spaced-glyph asterisk note (batch 167): Coinbase's letters annotate
+# charts with "*"-led notes — "* Based on the closing price of Coinbase's
+# Class A common stock on May 7, 2025 on the Nasdaq Global Stock Market.",
+# "*Below reporting threshold of 10%.", "*Net of USDC loaned or pledged as
+# collateral.", "*As of December 31, 2024, USDC excludes ...", "* Measures
+# used in this release ...". The lede's table-line rule already drops the
+# opener, but its wrapped continuations are served ("Coinbase's Class A
+# common stock" opens Q1 FY2025's lede once the rounding note is skipped),
+# and in the leading-bullet block the opener starts a bullet item. The
+# lead list is deliberately note-shaped: a highlights bullet never opens
+# with "Based on" / "As of" / "Net of" / "Below" / "Measures used" — and
+# the batch-165 "* Revenue grew 12 percent." bullet stays a bullet.
+# Known limitation: the "During" form ("*During the first quarter of 2024,
+# we revised our definition of ...") and the quoted-term form ("*‘Major’
+# stablecoins include ...") are not covered — neither is served by any
+# path today.
+_ASTERISK_NOTE_LEAD_RE = re.compile(
+    r"^\*\s*(Based on|As of|Net of|Below|Measures used)\b",
+    re.IGNORECASE,
+)
+
+
+def _wrapped_note_block_len(
+    lines: list[str], i: int, opener_re, chain_re=None, cap: int = 10
+) -> int:
+    """Length of the boilerplate-note block starting at lines[i], or 0.
+
+    A note is one paragraph, possibly wrapped: consume lines until the
+    current sentence terminates, taking any non-boundary line as a
+    continuation — unlike the footnote block, a note's wraps are ordinary
+    sentence fragments ("GAAP results table in this shareholder letter
+    and our", "Coinbase's Class A common stock", "Form 10-Q filed with
+    the SEC on May 8, 2025."), so the footnote block's plausibility test
+    (lowercase-led / verb-led / bare-term) would stop the block mid-note
+    and serve the rest. The opener is the guard instead: both regexes
+    match boilerplate only, never narrative prose. After termination the
+    block chains only onto chain_re (the rounding note's second sentence);
+    a following note is its own opener, handled by the caller's per-line
+    check. Capped at 10 lines: the attested long form is 6, the asterisk
+    note 4, the Allstate legend 3 — a misfire can never eat the letter.
+    """
+    if i >= len(lines) or not opener_re.match(lines[i]):
+        return 0
+    n = 1
+    cur = lines[i]
+    while n < cap:
+        nxt = lines[i + n] if i + n < len(lines) else None
+        if nxt is None:
+            break
+        if _is_sentence_terminated(cur):
+            # Sentence finished — chain only onto the note's second
+            # sentence (rounding note); anything else ends the block.
+            if chain_re is not None and chain_re.match(nxt):
+                n += 1
+                cur = nxt
+                continue
+            break
+        if _is_block_boundary(nxt):
+            break
+        n += 1
+        cur = nxt
+    return n
+
+
+def _rounding_note_block_len(lines: list[str], i: int) -> int:
+    """Length of the rounding-note block starting at lines[i], or 0.
+
+    The long form ("Figures have been rounded for presentation purposes
+    only. For additional financial information ... Form 10-Q filed with
+    the SEC on May 8, 2025.") is 6 wrapped lines; the short form ("Note:
+    Figures presented may not / sum precisely due to rounding.") is 2,
+    or 1 unwrapped. The chain rule covers the sentence break falling on
+    a line boundary.
+    """
+    return _wrapped_note_block_len(
+        lines, i, _ROUNDING_NOTE_RE, chain_re=_ROUNDING_NOTE_CHAIN_RE
+    )
+
+
+def _asterisk_note_block_len(lines: list[str], i: int) -> int:
+    """Length of the asterisk-note block starting at lines[i], or 0.
+
+    One sentence, possibly wrapped ("* Based on the closing price of /
+    Coinbase's Class A common stock / on May 7, 2025 on the Nasdaq /
+    Global Stock Market." is 4 lines); the single-line forms ("*Below
+    reporting threshold of 10%.") are 1. No chaining: each note stands
+    alone.
+    """
+    return _wrapped_note_block_len(lines, i, _ASTERISK_NOTE_LEAD_RE)
+
+
 def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
     """Drop runs of 3+ consecutive table fragments (see above).
 
@@ -1738,6 +1863,20 @@ def _is_subsidiary_list(ln: str) -> bool:
     )
 
 
+# A quarter cover title (batch 167): "First Quarter 2025", "Second
+# Quarter 2025", "Fourth Quarter and Full Year 2024". It is a document
+# title, never an address line — but the digit rule below would swallow
+# the 3-word form as a street / city-postal line, and the headline loop's
+# masthead branch then skips it when a date line follows (Coinbase's Q1/Q2
+# 2025 letters lost their title that way and the rounding note became the
+# headline). The 6-word "and Full Year" form already escapes the digit
+# rule on word count and is picked as the headline today; the exclusion
+# makes the 3-word form behave the same.
+_QUARTER_TITLE_RE = re.compile(
+    r"^(First|Second|Third|Fourth) Quarter( and Full Year)? \d{4}$"
+)
+
+
 def _looks_like_masthead_residue(ln: str) -> bool:
     """True for head-office address-block lines that follow a company-name
     masthead (Chubb: "Bärengasse 32", "CH-8001 Zurich", "Switzerland",
@@ -1755,6 +1894,8 @@ def _looks_like_masthead_residue(ln: str) -> bool:
     pattern covers them without relaxing the word-count guard for all
     digit-bearing lines. A real headline never contains a suite designator.
     """
+    if _QUARTER_TITLE_RE.match(ln):
+        return False  # cover title, not an address line (batch 167)
     if len(ln) > 48:
         return False
     if _CONTACT_LINE_RE.search(ln):
@@ -2750,6 +2891,17 @@ def _skip_bare_masthead_name(lines: list[str], i: int) -> int | None:
     """
     ln = lines[i]
     words = ln.split()
+    if _QUARTER_TITLE_RE.match(ln):
+        return None  # cover title ("First Quarter 2025"), not a company
+        # name: the lookahead below would read the date line + page number
+        # as masthead residue and the first footnote line ("[1] Adjusted
+        # EBITDA is a non-GAAP financial" — unterminated, so
+        # headline-shaped) as the real headline, skipping the title.
+        # Coinbase's Q2 2025 letter lost its title exactly that way
+        # (Q1's "[1] This is a non-GAAP financial measure." ends with a
+        # period, so the skip returned None there and the title survived).
+        # A quarter title is a document title, never a masthead name.
+        # Batch 167.
     if len(words) > 3 or _looks_like_headline(ln):
         return None
     if (
@@ -3160,11 +3312,16 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
             or _LEDE_FOOTNOTE_NUM_RE.match(s)
             or _FOOTNOTE_BRACKET_RE.match(s)
             or _FOOTNOTE_DEF_SENTENCE_RE.match(s)
+            or _ROUNDING_NOTE_RE.match(s)
         ):
             continue  # footnote-definition sentence, including the
             # bracketed form ("[1] Adjusted EBITDA is ...") and the
             # fourth shape collapsed onto one sentence ("1 Coinbase
-            # Total Trading Volume comprises ..."). Batch 166.
+            # Total Trading Volume comprises ..."). Batch 166. A
+            # rounding-note sentence ("Figures have been rounded for
+            # presentation purposes only.", "Note: Figures presented may
+            # not sum precisely due to rounding.") is the same
+            # boilerplate class. Batch 167.
         if _is_lede_table_line(s) or len(_NUMBER_TOKEN_RE.findall(s)) >= 6:
             # Table residue — but the release title may sit at its head,
             # ahead of the table. Rescue it as the headline when it is
@@ -3298,6 +3455,17 @@ def extract_press_release_highlights(
             # packet that must return None; "(2026) ACME CORP ..."
             # headlines are preserved).
             i += block
+            continue
+        note = _rounding_note_block_len(lines, i) or _asterisk_note_block_len(
+            lines, i
+        )
+        if note:
+            # Rounding boilerplate ("Figures have been rounded for
+            # presentation purposes ...") and chart asterisk notes ("*
+            # Based on the closing price of ...") are never headline
+            # material — and a wrapped note's continuations are never
+            # the headline either. Batch 167.
+            i += note
             continue
         if _TOC_HEADING_RE.match(ln):
             # Combined release+supplement packet (SPG): skip the table of
@@ -3564,6 +3732,18 @@ def extract_press_release_highlights(
                 # item at the budget: the key line and its continuations
                 # are skipped before the budget logic ever sees them.
                 # Batch 162 (bare numbered form); batch 166 (the block).
+            note = _rounding_note_block_len(lede_lines, i) or (
+                _asterisk_note_block_len(lede_lines, i)
+            )
+            if note:
+                i += note
+                continue  # rounding note ("Figures have been rounded ...",
+                # "Note: Figures presented may not sum precisely due to
+                # rounding.") or chart asterisk note ("* Based on the
+                # closing price of ...") — boilerplate, never lede
+                # content. The lede's table-line rule already drops the
+                # asterisk opener, but its wrapped continuations were
+                # served; the block skip takes them with it. Batch 167.
             if _CONFERENCE_CALL_NOTICE_RE.search(ln):
                 i += 1
                 continue  # investor-conference-call notice (Emerson: the
@@ -3809,6 +3989,18 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # form); batch 166 (the block).
             skip_until = idx + block
             continue
+        note = _rounding_note_block_len(lines, idx) or _asterisk_note_block_len(
+            lines, idx
+        )
+        if note:
+            # Same hazard as a footnote block, one path earlier: a
+            # rounding note ahead of the bullets would break the block
+            # (prose first line, no bullet yet), and an asterisk note
+            # ("* Based on the closing price of ...") would start a
+            # bullet item. Skip the whole block and keep collecting.
+            # Batch 167.
+            skip_until = idx + note
+            continue
         if ln.startswith(("•", "-", "*")):
             bullets.append(ln)
             in_item = True
@@ -3957,6 +4149,15 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 block = _footnote_def_block_len(collected, j)
                 if block:
                     j += block
+                    continue
+                note = _rounding_note_block_len(
+                    collected, j
+                ) or _asterisk_note_block_len(collected, j)
+                if note:
+                    # Rounding note / asterisk note inside a Highlights
+                    # section: same boilerplate class as a footnote
+                    # definition — drop the whole block. Batch 167.
+                    j += note
                     continue
                 if not _is_lone_bullet_marker(collected[j]):
                     kept.append(collected[j])
