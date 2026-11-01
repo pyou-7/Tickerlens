@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 import threading
 import time
 
@@ -808,6 +809,48 @@ def _is_blank_disclosure(value: str | None) -> bool:
     return value is None or not value.strip()
 
 
+_QUARTER_LABEL_RE = re.compile(r"\bQ([1-4])\s+FY(\d{4})\b")
+
+
+def _correct_stale_source_label(
+    stored: str | None, live: str | None, fiscal_period: str | None
+) -> str | None:
+    """Corrected source label when the stored quarter is a pre-batch-52
+    fossil, else None.
+
+    Rows enriched before the batch-52 count-back fix carry a "Q1" source
+    label for a Q3 (or Q2) quarter — the old labeler counted forward from
+    Q1 in a mid-cycle window. The live discovery label is correct now,
+    but the backfill only fills blank fields, so a wrong-but-present label
+    stayed wrong forever (14 rows: NFLX/PLUG/AMZN/XOM/... Q3 FY2024
+    stored as "Q1 FY2024"). Correct it only on a two-against-one vote:
+    the stored quarter disagrees with the live quarter, the live quarter
+    equals the row's XBRL fiscal_period, and the fiscal years agree — so
+    only the quarter moves, never the year. The Feb-year-end FY-offset
+    convention question (stored FY vs live FY disagreeing) is untouched,
+    and a row whose own fiscal_period is suspect (e.g. fiscal_year 2021
+    on a 2024 row) never corrects, because the live quarter cannot match
+    its fiscal_period.
+    """
+    if not stored or not live or not fiscal_period:
+        return None
+    sm = _QUARTER_LABEL_RE.search(stored)
+    lm = _QUARTER_LABEL_RE.search(live)
+    if sm is None or lm is None:
+        return None
+    if sm.group(1) == lm.group(1):
+        return None  # quarters agree — nothing stale
+    if sm.group(2) != lm.group(2):
+        return None  # fiscal years disagree — the offset-convention
+        # question, not a fossil; leave the label alone
+    if f"Q{lm.group(1)}" != fiscal_period:
+        return None  # live quarter does not match the row's own fiscal
+        # quarter — the stored label is not the odd one out
+    return re.sub(
+        r"\bQ[1-4](?=\s+FY\d{4})", f"Q{lm.group(1)}", stored, count=1
+    )
+
+
 class FinancialsService:
     """Financial statement extraction, persistence, and enrichment service."""
 
@@ -1304,6 +1347,21 @@ class FinancialsService:
             if ex is not None and _is_blank_disclosure(row.transcript_excerpts):
                 row.transcript_excerpts = ex
                 row.transcript_source = ex_src
+            # Batch 171: correct a stale source label while this period is
+            # already re-fetched — a wrong-but-present label was never
+            # overwritten by the blank-only fills above, so the pre-batch-52
+            # "Q1" fossils stayed wrong forever. Only the quarter moves,
+            # only when live and the row's fiscal quarter agree.
+            for attr, live_src in (
+                ("press_release_source", hl_src),
+                ("management_guidance_source", gd_src),
+                ("transcript_source", ex_src),
+            ):
+                corrected = _correct_stale_source_label(
+                    getattr(row, attr), live_src, row.fiscal_period
+                )
+                if corrected is not None:
+                    setattr(row, attr, corrected)
 
     def _fetch_press_release_highlights(
         self, cik: str, period: EarningsPeriod
