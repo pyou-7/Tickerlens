@@ -1225,13 +1225,30 @@ _TOC_ENTRY_RE = re.compile(r"^.+ \d{1,3}$")
 # Footnote-definition legend lines (GEV's Workiva ex-99 opens with
 # "1 Defined as remaining performance obligation (RPO)" /
 # "*Non-GAAP Financial Measure" / "Page 1" before the real headline, and the
-# numeric one was picked as the headline in batch 103's aftermath). Two
-# shapes, both never headline or lede material. Batch 104.
+# numeric one was picked as the headline in batch 103's aftermath). Three
+# shapes, all never headline or lede material. Batch 104.
 #   - numeric key + definition verb: "1 Defined as ...", "2 Represents ...",
 #     "1 Includes ...", "3 Excludes ..." — the verb is the guard that keeps a
 #     numeric-opening headline from being swallowed ("2025 outlook raised"
 #     can't match: 4-digit year; "1Q26 record quarter" can't match: no space
 #     and no verb; "1 billion in buybacks" can't match: no verb).
+#   - numeric key + defined term + copula + definition pointer: "1
+#     Non-GAAP measures are detailed in the Supplemental Disclosures at
+#     the end of this letter." (Skydance Q2 FY2026 — picked as the
+#     headline, batch 164), "1 Adjusted EBITDA is defined as ...", "2
+#     Free cash flow is calculated as ...". The participle list is
+#     deliberately definition-pointer only: "are included / provided /
+#     presented / discussed" stay OUT, because a wrapped bullet
+#     continuation can legitimately read "1 million shares are included
+#     in ..." — those verbs are prose, not footnote pointers. The
+#     300-char line bound is load-bearing: the copula may sit anywhere
+#     in the line, so an unbounded match would swallow a Workiva
+#     page-flattened mega-line whole — SHOP Q3 2024's page 1 opens
+#     "1 Internet, Everywhere ..." and contains "are reconciled ..." a
+#     thousand chars in, and the unbounded form dropped the entire page
+#     from the lede (killing the batch-163 salvage and serving the
+#     outlook + balance sheet instead). A footnote definition is one
+#     sentence, always far under 300 chars; a mega-line never is.
 #   - glyph footnote markers attached to the text: "*Non-GAAP Financial
 #     Measure", "†Excludes ...". The marker must sit at line start with the
 #     text attached — a spaced "* Foo" or mid-line asterisk is prose
@@ -1239,6 +1256,7 @@ _TOC_ENTRY_RE = re.compile(r"^.+ \d{1,3}$")
 #     unaffected).
 _FOOTNOTE_DEF_RE = re.compile(
     r"^\d{1,3}\s+(defined as|represents|includes|excludes|reflects)\b"
+    r"|^(?=.{0,300}$)\d{1,3}\s+\S.*\b(are|is)\s+(detailed|defined|described|calculated|reconciled|set forth)\b"
     r"|^[*†‡]\S",
     re.IGNORECASE,
 )
@@ -3397,6 +3415,14 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             in_item = True
         elif in_item:
             nxt = lines[idx + 1] if idx + 1 < n else ""
+            if _is_section_footnote_line(ln):
+                continue  # footnote definition after a bullet ("1) See
+                # Table A ...", "1 Non-GAAP measures are detailed ...") is
+                # table residue, not a bullet continuation — skip it and
+                # keep collecting the block. Batch 164; closes the
+                # batch-163 follow-up (no attested case in this path, same
+                # hazard class as the headline pick, and the section filter
+                # already drops these lines).
             if (
                 _TABLE_UNITS_RE.match(ln)
                 or _TABLE_WORD_UNITS_RE.match(ln)
@@ -3444,8 +3470,9 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
 def _is_section_footnote_line(ln: str) -> bool:
     """True for a table-footnote definition inside a Highlights section:
     parenthesized ("(1) During the year ..."), definition-verb ("1
-    Defined as ...", "*Non-GAAP Financial Measure"), or bare numbered
-    ("1) See Table A ..."). A footnote definition is never a highlight —
+    Defined as ...", "*Non-GAAP Financial Measure"), bare numbered
+    ("1) See Table A ..."), or copula-pointer ("1 Non-GAAP measures are
+    detailed ...", batch 164). A footnote definition is never a highlight —
     Datadog's M&A-costs footnote sits between its section bullets — so
     it is dropped after qualification, like the lone-marker lines
     (batch 140). Batch 162."""
