@@ -2714,6 +2714,120 @@ def _split_bullet_runs(lines: list[str]) -> list[str]:
     return out
 
 
+# Workiva page-flattened releases (batch 163): a whole release page collapses
+# into a single mega-line — the dateline lede, the CEO/CFO quotes, the
+# headline, and the metric table all run together with no line breaks, so no
+# headline line ever exists and the batch-105 page-line guard discards the
+# release entirely (Shopify Q3 2024: its only blank quarter, the other 7
+# fine). Unlike a slide deck, the page line carries real narrative: it opens
+# with a dateline ("Internet, Everywhere - November 12, 2024 - ..."), so the
+# salvage below splits ONLY such a line, at sentence boundaries, and keeps
+# the narrative sentences. It runs strictly inside the batch-105 guard — a
+# document that currently extracts anything never reaches it — so the blast
+# radius is exactly the set of documents that currently return None there.
+_PAGE_DATELINE_RE = re.compile(
+    r"^(?:\d{1,2}\s+)?"  # optional Workiva page number ("1 Internet, ...")
+    r"[A-Z][^,]{0,60}?,\s+(?:[^,]{0,60}?\s+-\s+)?"  # city, [tagline -]
+    r"(January|February|March|April|May|June|July|August|September|October|November|December)"
+    r"\s+\d{1,2},\s+\d{4}\s+-\s+"
+)
+_SENTENCE_END_RE = re.compile(
+    r"(?:(?<=[.!?][\"”')\]])|(?<=[.!?]))\s+(?=[A-Z\"“\(\[])"
+)
+_SENTENCE_ABBREV = frozenset(
+    {
+        "inc", "corp", "ltd", "co", "llc", "llp", "mr", "mrs", "ms", "dr",
+        "jr", "sr", "st", "no", "vs", "e.g", "i.e", "etc", "u.s", "u.k",
+        "a.m", "p.m", "jan", "feb", "mar", "apr", "jun", "jul", "aug",
+        "sep", "sept", "oct", "nov", "dec", "ave", "blvd", "dept", "fig",
+        "eq", "approx", "al", "sen", "rep", "gov",
+    }
+)
+_PAGE_NUMBER_PREFIX_RE = re.compile(r"^\d{1,2}\s+")
+_NUMBER_TOKEN_RE = re.compile(r"\b\d[\d,]*\.?\d*%?\b")
+_TABLE_HEAD_MARKER_RE = re.compile(
+    r"(?:three|nine)\s+months\s+ended|year\s+ended|\(in\s+(?:us\s+)?\$\s|"
+    r"selected\s+business\s+performance|condensed\s+consolidated",
+    re.IGNORECASE,
+)
+
+
+def _split_page_line_sentences(text: str) -> list[str]:
+    """Split a page-flattened mega-line at sentence boundaries.
+
+    A sentence ends on . ! ? (modulo a closing quote/paren) followed by
+    whitespace and a capital, opening quote, or opening paren. A terminal
+    abbreviation ("Inc.", "U.S.", "Nov.") never splits — the next token is
+    a continuation, not a new sentence ("Shopify Inc. (NYSE, TSX: SHOP)"
+    stays one sentence).
+    """
+    pieces: list[str] = []
+    start = 0
+    for m in _SENTENCE_END_RE.finditer(text):
+        before = text[start : m.start()].rstrip()
+        word = before.split()[-1] if before else ""
+        if word.rstrip(".!?\"”')]").lower() in _SENTENCE_ABBREV:
+            continue
+        pieces.append(text[start : m.start()].strip())
+        start = m.end()
+    tail = text[start:].strip()
+    if tail:
+        pieces.append(tail)
+    return [p for p in pieces if p]
+
+
+def _salvage_page_line_lede(paragraph: str) -> str | None:
+    """Salvage highlights from a page-flattened mega-line paragraph.
+
+    Only a paragraph opening with a dateline qualifies — a slide-deck page
+    (Bank of America, batch 105) has none, so it still returns None. The
+    dateline sentence plus up to 5 following narrative sentences become the
+    lede (the 6-line budget, mirroring the lede); footnote-definition and
+    table-residue sentences are dropped, and a release title sitting at the
+    head of a table-residue sentence ("... Expands to 19%   Three months
+    ended ... GMV 69,715 ...") is rescued as the headline when it is
+    headline-shaped. Returns the full result string, or None when the
+    paragraph holds no real narrative (single dateline sentence, table-only
+    sentences, or under 200 chars of prose).
+    """
+    if not _PAGE_DATELINE_RE.match(paragraph):
+        return None
+    # Drop the Workiva page number ("1 Internet, Everywhere ...") so the
+    # dateline sentence reads as a dateline, not a page marker.
+    paragraph = _PAGE_NUMBER_PREFIX_RE.sub("", paragraph, count=1)
+    sentences = _split_page_line_sentences(paragraph)
+    if len(sentences) < 2:
+        return None
+    headline: str | None = None
+    body: list[str] = []
+    for s in sentences:
+        if _BOILERPLATE_RE.match(s):
+            break
+        if (
+            _LEDE_FOOTNOTE_RE.match(s)
+            or _FOOTNOTE_DEF_RE.match(s)
+            or _LEDE_FOOTNOTE_NUM_RE.match(s)
+        ):
+            continue
+        if _is_lede_table_line(s) or len(_NUMBER_TOKEN_RE.findall(s)) >= 6:
+            # Table residue — but the release title may sit at its head,
+            # ahead of the table. Rescue it as the headline when it is
+            # headline-shaped; the table itself is never kept.
+            if headline is None:
+                head = _TABLE_HEAD_MARKER_RE.split(s, maxsplit=1)[0].strip()
+                if head and _looks_like_headline(head):
+                    headline = head
+            continue
+        # The 6-sentence budget caps the body, but scanning continues: a
+        # table-residue sentence past the cap may still carry the headline.
+        if len(body) < 6:
+            body.append(s)
+    text = "\n\n".join(body)
+    if len(body) < 2 or len(text) < 200:
+        return None
+    return f"{headline}\n\n{text}".strip() if headline else text
+
+
 def extract_press_release_highlights(
     document_html: str, max_chars: int = 4000
 ) -> str | None:
@@ -3177,6 +3291,13 @@ def extract_press_release_highlights(
         # whole pages with no usable headline. A page-line is not a highlight;
         # return None so the UI shows "Not available" instead of garbage.
         # Batch 105.
+        # Batch 163: a Workiva page-flattened release is the same shape but
+        # carries real narrative behind a dateline — salvage its lede (and
+        # an embedded title) instead of discarding it; a dateline-less page
+        # line still returns None below.
+        salvaged = _salvage_page_line_lede(result.split("\n\n")[0])
+        if salvaged is not None:
+            return salvaged
         logger.info("Press-release highlights are page-lines without a headline")
         return None
     if headline and _FOOTNOTE_HEADLINE_RE.match(headline):
