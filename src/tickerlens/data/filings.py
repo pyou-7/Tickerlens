@@ -361,6 +361,25 @@ _TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
 # table value, not a bullet, and must keep counting as a data row.
 _BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s)")
 
+
+def _is_inline_bullet_start(ln: str) -> bool:
+    """True for a line that opens a bullet item with its marker attached
+    to the text: "•Q2 was our best quarter ...".
+
+    The _BULLET_LEAD_RE glyphs (•/●/–/—, "- " with the space) plus the
+    flattened-list glyphs the lede already treats as bullets ("·"/"○"/
+    "▪"/"■" — batch 138/139/140) and "*" (a bullet start in
+    _leading_bullet_block). A lone marker line is NOT one — it is a
+    separator, handled by _is_lone_bullet_marker — so text must follow
+    the marker. Batch 165.
+    """
+    m = _BULLET_LEAD_RE.match(ln)
+    if m:
+        return bool(ln[m.end():].strip())
+    if ln[:1] in "▪■·○*":
+        return bool(ln[1:].strip())
+    return False
+
 # A units parenthetical in words, anchored at line start (batch 143):
 # "(In millions, except earnings per share)" (FedEx), "(in thousands,
 # except per share data)" (AutoZone), "(In billions)" (Elevance). The
@@ -1988,6 +2007,34 @@ _HEADLINE_WRAP_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A lede line that ends grammatically unfinished — a wrap tail. Batch 165:
+# the lede finish rule (batch 139) fires for lone-marker ledes via
+# marker_seen, but an inline-marked bullet list (Skydance's "Summary
+# Points") never sets it, so a bullet cut mid-sentence ("...building our
+# pipeline across") stayed cut. The wrap tail is the second trigger: a
+# trailing comma/dash, or a trailing conjunction / preposition / article /
+# copula — the sentence continues on the next line. A semicolon is NOT a
+# wrap tail: it separates independent clauses, and Coinbase's letter ends
+# a paragraph with one right before its footnote block ("...than any other
+# company;" / "1 Coinbase Total Trading Volume ...") — treating it as a
+# wrap pulled the footnote definition in as "continuation". A complete
+# statement does NOT match, even without terminal punctuation: a figure
+# bullet ("•Share repurchases and dividends of $5.1B", "•Diluted EPS was
+# $0.78") and a complete clause ("...up 181% and 148% year over year,
+# respectively") end the item, so the prose and tables that follow are
+# never pulled in as "continuation". Deliberately wider than the headline
+# wrap tail (which lacks "across" — the attested Skydance tail) and
+# narrower than a bare "no terminal punctuation" test (which would fire
+# on every period-less figure bullet).
+_LEDE_WRAP_TAIL_RE = re.compile(
+    r"(\b(and|or|of|for|to|with|in|on|at|the|a|an|across|including|through|"
+    r"under|over|between|among|per|via|from|by|as|into|upon|toward|towards|"
+    r"against|within|without|before|after|during|while|than|but|so|yet|nor|"
+    r"versus|vs|is|are|was|were|has|have|had|will|would|be|been)\b"
+    r"|[&–—-]|[,]\s*)\s*$",
+    re.IGNORECASE,
+)
+
 # A headline that ends with a headline verb ("Freeport Reports",
 # "Merck ... Announces") is a company+verb fragment, not a complete headline —
 # the real headline continues on the next line ("Second-Quarter 2026 Results").
@@ -3194,6 +3241,12 @@ def extract_press_release_highlights(
         content_lines = 0
         overrun = 0
         marker_seen = False
+        # Batch 165: decided once, at the first line past the budget —
+        # whether the item at the budget is unfinished. finish_sentence
+        # is the wrap-tail trigger: the unfinished item is a sentence,
+        # so collection stops once a continuation line terminates it.
+        finish_item: bool | None = None
+        finish_sentence = False
         i = 0
         while i < len(lede_lines):
             ln = lede_lines[i]
@@ -3272,8 +3325,33 @@ def extract_press_release_highlights(
                 # headings/headers, data rows) never consumes lede budget
                 # and never gets stored — batch 153
             if content_lines >= 6:
-                if not marker_seen:
-                    break  # prose lede: the 6-line cap is the bound
+                if finish_item is None:
+                    # First line past the budget: decide once whether the
+                    # item at the budget is unfinished. A lone-marker lede
+                    # (batch 139) always finishes; otherwise only a line
+                    # that ends grammatically unfinished (wrap tail) does
+                    # — a complete figure bullet ("•Share repurchases and
+                    # dividends of $5.1B") or a complete clause (ending in
+                    # "respectively") ends the item, so the prose or tables
+                    # that follow are never pulled in as "continuation".
+                    # The decision is snapshotted: a continuation line's own
+                    # ending is an arbitrary wrap point, not evidence the
+                    # item finished. Batch 165.
+                    finish_item = marker_seen or bool(
+                        _LEDE_WRAP_TAIL_RE.search(lede[-1])
+                    )
+                    finish_sentence = not marker_seen and finish_item
+                if not finish_item:
+                    break  # the item at the budget is complete — a prose
+                    # lede keeps the hard 6-line cap. Batch 165.
+                if _is_inline_bullet_start(ln):
+                    break  # a new bullet starts past the budget — stop at
+                    # the item boundary rather than starting a bullet we
+                    # cannot finish. Batch 165.
+                if finish_sentence and _is_sentence_terminated(lede[-1]):
+                    break  # the unfinished sentence just terminated — the
+                    # next line starts a new item, not a continuation.
+                    # Batch 165.
                 if overrun >= 4:
                     break  # finishing cap: at most 4 lines past the budget
                 lede.append(ln)
