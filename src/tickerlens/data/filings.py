@@ -4066,6 +4066,19 @@ def _item_has_open_quote(item_text: str) -> bool:
     return depth > 0
 
 
+# Bullet starts for the leading-bullet block (batch 170): "◦" (white
+# bullet, U+25E6) joins "•"/"-"/"*". Netflix nests "◦" sub-bullets
+# under "•" items, and the item-close rule treated a terminated "◦"
+# line followed by another "◦" line as the end of the block — the
+# block truncated at the first sub-bullet and the rest of the list
+# was lost (6 NFLX rows refused by the batch-169 preservation gate).
+# Distinct from "○" (white circle, U+25CB), which the lone-marker
+# rule already covers. The "·"/"▪"/"●" glyphs are NOT added: they are
+# top-level bullets served fine by the lede path, with no attested
+# leading-block truncation — a separate design if one is ever found.
+_LEADING_BULLET_STARTS = ("•", "-", "*", "◦")
+
+
 def _current_leading_item_text(bullets: list[str]) -> str:
     """The current item of a leading-bullet block: from the last bullet
     start line to the end. The item-close rule judges the quote state of
@@ -4074,7 +4087,7 @@ def _current_leading_item_text(bullets: list[str]) -> str:
     """
     start = 0
     for i, ln in enumerate(bullets):
-        if ln.startswith(("•", "-", "*")):
+        if ln.startswith(_LEADING_BULLET_STARTS):
             start = i
     return "\n".join(bullets[start:])
 
@@ -4143,7 +4156,7 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # after it still closes the last item. Batch 169.
             skip_until = idx + sal
             continue
-        if ln.startswith(("•", "-", "*")):
+        if ln.startswith(_LEADING_BULLET_STARTS):
             bullets.append(ln)
             in_item = True
         elif in_item:
@@ -4167,7 +4180,7 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # and closes on one line never closes the item itself, and
                 # the next prose line leaks in before the rule fires.
                 re.search(r"[.!?;][\u201d\"']?\s*$", ln)
-                and not nxt.startswith(("•", "-", "*"))
+                and not nxt.startswith(_LEADING_BULLET_STARTS)
                 # Batch 158: don't close the item while its quote is still
                 # open — a multi-line CEO quote (GOOGL Q2 FY2026: the
                 # opener ends "... across every part of our business." and
