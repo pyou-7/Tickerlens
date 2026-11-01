@@ -1352,12 +1352,14 @@ _FOOTNOTE_BRACKET_RE = re.compile(r"^\[\d{1,3}\](?:\s|$)")
 # never opens a block — its verb sits on the second line, not leading
 # it, so the chain stops at the previous definition's termination and
 # the whole wrapped-term definition is left; a definition's second
-# sentence ("Both measurements represent the product ...") is left too,
-# because a capital-led sentence after a terminated definition is
-# indistinguishable from new prose; and a mixed-case term ("2 Total
-# transaction revenue / generated from trading on our / platform.")
-# never opens a block, because the term test needs Title-Case words.
-# A wrapped-term chain rule is a separate design.
+# sentence is consumed only when it is anaphoric with an exact noun
+# match ("These losses were ..." — batch 168), so a second sentence
+# whose noun differs in number ("Both measurements represent ..." vs
+# the definition's "period of measurement") is still left — and no path
+# serves that line today; and a mixed-case term ("2 Total transaction
+# revenue / generated from trading on our / platform.") never opens a
+# block, because the term test needs Title-Case words. A wrapped-term
+# chain rule and a plural-tolerant anaphora test are separate designs.
 _FOOTNOTE_TERM_KEY_RE = re.compile(
     r"^\d{1,3}\s+(?:[A-Z][a-z]+|[A-Z]{2,})"
     r"(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){1,5}$"
@@ -1511,11 +1513,62 @@ def _is_plausible_continuation(ln: str) -> bool:
         # year-led or figure-led prose sentence either terminates or
         # carries digits, so the two guards keep those out.
         return True
+    if (
+        re.match(r"^[A-Z]{2,}\s*\([a-z]", ln)
+        and not any(ch.isdigit() for ch in ln)
+    ):
+        # All-caps abbreviation lead opening a lowercase parenthetical
+        # ("USDC (net of USDC lent or", the Q3 FY2024 [3] definition's
+        # wrap tail — batch 168): the 4-cap lead fails the 2-3-cap
+        # branch above, but a lowercase parenthetical after an
+        # abbreviation is a definition tail, never new prose. Unlike
+        # that branch the termination guard is dropped: a tail that
+        # happens to terminate on its own line ("USDC (net of USDC lent
+        # or pledged as collateral).") is still the same definition's
+        # tail. The no-digits guard keeps figure-led prose out, and the
+        # line is only ever reached as the wrap of an unterminated
+        # definition.
+        return True
     if ln[0] == "$":
         return True
     if ln[0].isdigit() and not re.match(r"^\d{4}\s+[a-z]", ln):
         return True
     return _is_bare_term_def_opener(ln)
+
+
+# A definition's second sentence (batch 168): Coinbase's Q3 FY2024 [1]
+# footnote is two sentences, and the flattening puts the break on a line
+# boundary — "majority of which were unrealized." / "These losses were
+# $92 million / after reflecting the tax impact." The block stops at the
+# first sentence's termination and the second sentence is served as lede.
+# (Q4 FY2024's identical shape escapes only because its second sentence
+# starts mid-line, "These gains were" sharing the termination line.) A
+# capital-led sentence after a terminated definition is otherwise
+# indistinguishable from new prose, so the guard is anaphora: the line
+# must open with an anaphoric determiner (These/This/Those/That/Both/
+# Such) whose noun appears in the definition just consumed — "These
+# losses" (losses in the [1] definition). Real prose after the legend
+# ("2025 was a strong year ...", "We delivered ...") never opens that
+# way, and the noun test is exact, not stemmed ("measures" != "measure"),
+# so the Q4 FY2025 "Both measurements represent ..." shape stays
+# uncovered (its definition says "period of measurement").
+_ANAPHORA_LEAD_RE = re.compile(r"^(These|This|Those|That|Both|Such)\s+([A-Za-z]+)")
+
+
+def _def_words(ln: str) -> set[str]:
+    """Lowercase alpha words of a definition line, for the anaphora test."""
+    return set(re.findall(r"[A-Za-z]+", ln.lower()))
+
+
+def _is_def_second_sentence(ln: str, def_words: set[str]) -> bool:
+    """True when ln is the second sentence of the just-terminated
+    footnote definition (see _ANAPHORA_LEAD_RE)."""
+    if _is_block_boundary(ln):
+        return False
+    m = _ANAPHORA_LEAD_RE.match(ln)
+    if not m:
+        return False
+    return m.group(2).lower() in def_words
 
 
 def _footnote_def_block_len(
@@ -1536,12 +1589,15 @@ def _footnote_def_block_len(
         return 0
     n = 1
     cur = lines[i]
+    def_words = _def_words(cur)
     while n < 60:
         nxt = lines[i + n] if i + n < len(lines) else None
         if nxt is None:
             break
         if _is_sentence_terminated(cur):
-            # Definition finished — chain only onto another definition.
+            # Definition finished — chain only onto another definition,
+            # or onto its own anaphoric second sentence ("These losses
+            # were $92 million ..." — batch 168).
             if _opens_footnote_def(
                 nxt,
                 lines[i + n + 1] if i + n + 1 < len(lines) else "",
@@ -1549,6 +1605,12 @@ def _footnote_def_block_len(
             ) or _is_bare_term_def_opener(nxt):
                 n += 1
                 cur = nxt
+                def_words = _def_words(nxt)
+                continue
+            if _is_def_second_sentence(nxt, def_words):
+                n += 1
+                cur = nxt
+                def_words |= _def_words(nxt)
                 continue
             break
         # Unfinished — the next line continues unless it is a hard
@@ -1564,6 +1626,7 @@ def _footnote_def_block_len(
             break
         n += 1
         cur = nxt
+        def_words |= _def_words(nxt)
     return n
 
 
