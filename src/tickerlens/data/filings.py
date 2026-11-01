@@ -1220,6 +1220,23 @@ def _is_lone_bullet_marker(ln: str) -> bool:
 # that endnote boilerplate fill the lede and get stored as highlights.
 _LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
 
+# An investor-conference-call notice ("Today, beginning at 3:30 p.m.
+# Central Time ... Emerson management will discuss the second quarter
+# results during an investor conference call. Participants can access a
+# live webcast ... A replay of the call will be available for 90 days.")
+# is never highlights — it sits at the end of the release and backfills
+# the lede once the footnotes below it are dropped (Emerson's quarters,
+# batch 166). Both markers are required, and "call" is singular with a
+# word boundary: a bare "conference call" mention inside real prose
+# ("we discussed the quarter on the call") is not a notice, a
+# "webcast"/"replay" mention without the call is not either, and a
+# heading like AppLovin's "Webcast and Conference Calls" (plural) is
+# not a notice either.
+_CONFERENCE_CALL_NOTICE_RE = re.compile(
+    r"conference call\b.*(webcast|replay)|(webcast|replay).*conference call\b",
+    re.IGNORECASE,
+)
+
 # A bare numbered footnote ("1) See Table A for information regarding
 # non-GAAP financial measures.", "1) The three months ended June 30,
 # 2025 are adjusted for M&A transaction costs of $1.4 million ...") —
@@ -1279,6 +1296,275 @@ _FOOTNOTE_DEF_RE = re.compile(
     r"|^[*†‡]\S",
     re.IGNORECASE,
 )
+
+# A bracketed footnote marker ("[1] Adjusted EBITDA is a non-GAAP
+# financial measure." — Coinbase's Q2 FY2025 letter serves its [1]/[2]
+# footnotes as the lede). The paren form "(1) ..." is already a footnote
+# by _LEDE_FOOTNOTE_RE; the bracket form is the same class. Batch 166.
+_FOOTNOTE_BRACKET_RE = re.compile(r"^\[\d{1,3}\](?:\s|$)")
+
+# A footnote-definition BLOCK (batch 166): the single-line shapes above
+# only drop the key line, but a definition wraps ("3 Trading Volume
+# represents the / total US dollar equivalent value of / ... / period of
+# measurement.") and the wrapped continuation lines are served as lede /
+# section / bullet-block content whenever a path reaches them. Coinbase's
+# letters also carry a fourth shape the single-line regexes never match
+# at all: a numeric key + bare capitalized term, the definition verb on
+# the NEXT line ("1 Coinbase Total Trading Volume / comprises Spot Trading
+# Volume / and Derivatives Trading Volume."), followed by chained
+# bare-term definitions ("Spot Trading Volume is the total / U.S. dollar
+# equivalent value of spot ..."). A sixth variant puts the verb on the
+# key line after the term ("3 Trading Volume represents the", "4 Crypto
+# Asset Volatility represents", "1 Spot Trading Volume is" — the last
+# one is why shape 2 misses it: its participle is "presented", outside
+# shape 2's list). _footnote_def_block_len returns how many lines the
+# block starting at lines[i] occupies, or 0 when lines[i] opens no
+# footnote definition; callers skip that many lines at every collection
+# path (headline, lede, leading-bullet block, Highlights sections), so a
+# footnote definition is never served, whole or in part.
+#
+# Consumption rules, each load-bearing:
+#   - Only sentence termination ends a definition. There is deliberately
+#     NO completeness gate: a wrapped line can look complete ("[3] $USD
+#     resources is defined as cash and cash" carries a 5-word object,
+#     yet the definition wraps onto "equivalents and USDC ..."). The
+#     guard that matters is the next line's shape, not this line's.
+#   - An unterminated line consumes its next line only when that line is
+#     a plausible wrap continuation: lowercase-led, definition-verb-led,
+#     conjunction-led, a "U.S."-style abbreviation lead, or a bare-term
+#     definition opener. A headline-shaped next line ("Third Quarter
+#     2025 Results") is never plausible, so GEV's single-line legend
+#     never eats the headline that follows it. A figure-dense
+#     continuation ("million and $687 million in pre-tax gains ...") is
+#     lowercase-led, so it consumes — it must NOT be treated as a table
+#     line, which is why the boundary below excludes table predicates.
+#   - After a definition terminates, the block chains only onto another
+#     definition opener (any key shape, or a bare capitalized term +
+#     copula/definition verb, no digits). Real prose after the block
+#     ("2025 was a strong year ...") ends the chain.
+#   - Hard boundaries (bullets, boilerplate, admin/contact lines,
+#     headings, datelines) never continue a definition, even an
+#     unfinished one.
+# Known limitations (attested in Coinbase's Q4 FY2024 / Q4 FY2025
+# letters, no path serves these lines today): a definition whose TERM
+# wraps ("4 Coinbase Crypto Trading Volume / Market Share is defined as
+# / Coinbase Total Crypto Trading / Volume divided by Total Crypto ...")
+# never opens a block — its verb sits on the second line, not leading
+# it, so the chain stops at the previous definition's termination and
+# the whole wrapped-term definition is left; a definition's second
+# sentence ("Both measurements represent the product ...") is left too,
+# because a capital-led sentence after a terminated definition is
+# indistinguishable from new prose; and a mixed-case term ("2 Total
+# transaction revenue / generated from trading on our / platform.")
+# never opens a block, because the term test needs Title-Case words.
+# A wrapped-term chain rule is a separate design.
+_FOOTNOTE_TERM_KEY_RE = re.compile(
+    r"^\d{1,3}\s+(?:[A-Z][a-z]+|[A-Z]{2,})"
+    r"(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){1,5}$"
+)
+# Same-line term+verb variant (batch 166): "3 Trading Volume
+# represents the", "4 Crypto Asset Volatility represents", "1 Spot
+# Trading Volume is". A bare "is"/"are" counts only at line end or
+# before a definition participle (including "presented", the attested
+# one shape 2 excludes) — "1 Total Revenue is expected to grow" never
+# opens a block, because "expected" is prose, not a definition pointer.
+# The anchored term (1-5 Title-Case words right after the key) is what
+# keeps shape 2's "1 million shares are included in ..." hazard out:
+# "million" is lowercase, so the term never matches. The term's first
+# word must be Title-Case, but later words may be lowercase (Emerson's
+# "2 Underlying orders do not include AspenTech.", "2 Underlying sales
+# excludes the impact ...") — the verb right after the term is the
+# guard, and an optional "do not / does not" precedes it. A digit in
+# the term still blocks ("1 Fourth Quarter 2025 Results are presented"
+# never opens: "2025" breaks the term).
+_FOOTNOTE_TERM_VERB_RE = re.compile(
+    r"^\d{1,3}\s+(?:[A-Z][a-z]+|[A-Z]{2,})(?:\s+[A-Za-z]+){0,4}\s+"
+    r"(?:(?:do not|does not)\s+)?"
+    r"(?:(?:defined as|represents?|includes?|excludes?|reflects|comprises"
+    r"|consists of|means|refers to)\b"
+    r"|(?:is|are)(?:\s+(?:defined|described|calculated|reconciled"
+    r"|set forth|detailed|presented)\b|\s*$))",
+    re.IGNORECASE,
+)
+_FOOTNOTE_DEF_VERB_LEAD_RE = re.compile(
+    r"^(comprises|represents|includes|excludes|reflects|consists of"
+    r"|means|refers to|is defined as|are defined as|defined as)\b",
+    re.IGNORECASE,
+)
+_FOOTNOTE_BARE_TERM_RE = re.compile(
+    r"^(?:[A-Z][a-z]+|[A-Z]{2,})(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){1,4}"
+    r"\s+(is|are|represents|comprises|includes|excludes|means|refers to"
+    r"|defined as)\b"
+)
+# The fourth shape collapsed onto one sentence (page-flattened decks):
+# "1 Coinbase Total Trading Volume comprises Spot Trading Volume and
+# Derivatives Trading Volume." Used by the salvage path, which sees
+# sentences, not lines. Batch 166.
+_FOOTNOTE_DEF_SENTENCE_RE = re.compile(
+    r"^\d{1,3}\s+(?:[A-Z][a-z]+|[A-Z]{2,})"
+    r"(?:\s+(?:[A-Z][a-z]+|[A-Z]{2,})){1,5}\s+"
+    r"(comprises|represents|includes|excludes|reflects|is|are|defined as"
+    r"|means|refers to)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_term_def_opener(ln: str) -> bool:
+    """True for a bare capitalized-term definition opener ("Spot Trading
+    Volume is the total", "Derivatives Trading Volume is the").
+
+    No digits: a figure line ("Total Revenue is expected to grow 10%")
+    is prose, not a definition. The 80-char bound keeps a wrapped prose
+    sentence that happens to start "Term is ..." out — a definition
+    opener is one short term + verb, never a full clause.
+    """
+    if len(ln) > 80 or any(ch.isdigit() for ch in ln):
+        return False
+    return bool(_FOOTNOTE_BARE_TERM_RE.match(ln))
+
+
+def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> bool:
+    """True when ln opens a footnote-definition block.
+
+    Any single-line shape (_FOOTNOTE_DEF_RE, bare numbered, paren,
+    bracketed), or the fourth shape: a numeric key + bare capitalized
+    term whose NEXT line starts with a definition verb ("1 Coinbase
+    Total Trading Volume" / "comprises Spot Trading Volume"). The
+    verb-on-next-line requirement is the guard that keeps a numbered
+    heading ("1 Fourth Quarter Highlights") from opening a block.
+    include_paren=False for the headline loop: a paren line ("(B)Crude
+    oil ...", "(2026) ACME CORP REPORTS ...") stays headline-eligible
+    there — batch 126 returns None for a supplement packet whose best
+    headline is a footnote definition, and preserves year-prefixed
+    headlines — so the headline loop must not skip paren lines.
+    """
+    if (
+        _FOOTNOTE_DEF_RE.match(ln)
+        or _LEDE_FOOTNOTE_NUM_RE.match(ln)
+        or (include_paren and _LEDE_FOOTNOTE_RE.match(ln))
+        or _FOOTNOTE_BRACKET_RE.match(ln)
+        or _FOOTNOTE_TERM_VERB_RE.match(ln)
+    ):
+        return True
+    return bool(
+        _FOOTNOTE_TERM_KEY_RE.match(ln)
+        and nxt
+        and _FOOTNOTE_DEF_VERB_LEAD_RE.match(nxt)
+    )
+
+
+def _is_block_boundary(ln: str) -> bool:
+    """True for a line that never continues a footnote definition, even
+    an unfinished one: bullets, boilerplate, admin/contact lines,
+    headings, datelines. Deliberately NOT table predicates: a wrapped
+    footnote continuation routinely carries figures ("million and $687
+    million in pre-tax gains ...", "$1.5 billion in pre-tax gains on")
+    and scores as a table line — treating it as a boundary stops the
+    block at the key line and serves the continuations. Table lines
+    are already excluded by the plausibility test (they do not start
+    lowercase, with a definition verb, or with a conjunction), and a
+    lowercase-led table fragment consumed here is residue the lede
+    would skip anyway."""
+    return bool(
+        _is_inline_bullet_start(ln)
+        or _is_lone_bullet_marker(ln)
+        or _BOILERPLATE_RE.match(ln)
+        or _ADMIN_LINE_RE.match(ln)
+        or _CONTACT_HEADER_RE.match(ln)
+        or _CONTACT_LINE_RE.search(ln)
+        or (_HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120)
+        or (ln.isupper() and len(ln) <= 80)
+        or _DATELINE_LEAD_RE.match(ln)
+    )
+
+
+def _is_plausible_continuation(ln: str) -> bool:
+    """True when ln could be the wrapped continuation of an unterminated
+    footnote definition: lowercase-led (wrapped prose), definition-verb
+    led, conjunction-led, a "U.S."-style abbreviation lead, a "$"-led
+    or digit-led figure line, or a bare-term definition opener.
+    Anything else — in particular a headline-shaped line — ends the
+    definition. A digit-led line is implausible when it opens a
+    year-led sentence ("2025 was a strong year ..."): a new sentence
+    never continues a definition. A "$"-led line is always a figure
+    continuation ("$357 million and $514 million after reflecting the
+    tax") — a new sentence starting with "$" does not follow an
+    unterminated definition line."""
+    if not ln:
+        return False
+    if ln[0].islower():
+        return True
+    if _FOOTNOTE_DEF_VERB_LEAD_RE.match(ln):
+        return True
+    if re.match(r"^(and|or|but)\b", ln, re.IGNORECASE):
+        return True
+    if re.match(r"^[A-Z]{1,2}\.", ln):
+        return True
+    if (
+        re.match(r"^[A-Z]{2,3}\s+[a-z]", ln)
+        and not _is_sentence_terminated(ln)
+        and not any(ch.isdigit() for ch in ln)
+    ):
+        # All-caps abbreviation lead without the periods ("US dollar
+        # equivalent value of ...", the Q1 FY2025 [4] AUC definition):
+        # a wrapped definition's first words, not a new sentence — a
+        # year-led or figure-led prose sentence either terminates or
+        # carries digits, so the two guards keep those out.
+        return True
+    if ln[0] == "$":
+        return True
+    if ln[0].isdigit() and not re.match(r"^\d{4}\s+[a-z]", ln):
+        return True
+    return _is_bare_term_def_opener(ln)
+
+
+def _footnote_def_block_len(
+    lines: list[str], i: int, include_paren: bool = True
+) -> int:
+    """Length of the footnote-definition block starting at lines[i], or 0.
+
+    Consumes the key line, its wrapped continuations (while the
+    definition is unfinished and the next line is a plausible wrap),
+    and any chained definitions that follow a terminated/complete one.
+    Capped at 60 lines: a real footnote block is far shorter, and the
+    cap bounds any misfire to one block instead of the document.
+    include_paren=False for the headline loop (see _opens_footnote_def).
+    """
+    if i >= len(lines) or not _opens_footnote_def(
+        lines[i], lines[i + 1] if i + 1 < len(lines) else "", include_paren
+    ):
+        return 0
+    n = 1
+    cur = lines[i]
+    while n < 60:
+        nxt = lines[i + n] if i + n < len(lines) else None
+        if nxt is None:
+            break
+        if _is_sentence_terminated(cur):
+            # Definition finished — chain only onto another definition.
+            if _opens_footnote_def(
+                nxt,
+                lines[i + n + 1] if i + n + 1 < len(lines) else "",
+                include_paren,
+            ) or _is_bare_term_def_opener(nxt):
+                n += 1
+                cur = nxt
+                continue
+            break
+        # Unfinished — the next line continues unless it is a hard
+        # boundary or an implausible wrap. No completeness gate: a
+        # wrapped line can look complete ("[3] $USD resources is
+        # defined as cash and cash" has a 5-word object, yet the
+        # definition wraps onto "equivalents and USDC ..."), and the
+        # plausibility test is the guard that matters — a headline-
+        # shaped next line ("Third Quarter 2025 Results") is never a
+        # plausible wrap, so GEV's single-line legend never eats the
+        # headline that follows it.
+        if _is_block_boundary(nxt) or not _is_plausible_continuation(nxt):
+            break
+        n += 1
+        cur = nxt
+    return n
 
 
 def _drop_table_fragment_runs(lines: list[str]) -> list[str]:
@@ -2872,8 +3158,13 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
             _LEDE_FOOTNOTE_RE.match(s)
             or _FOOTNOTE_DEF_RE.match(s)
             or _LEDE_FOOTNOTE_NUM_RE.match(s)
+            or _FOOTNOTE_BRACKET_RE.match(s)
+            or _FOOTNOTE_DEF_SENTENCE_RE.match(s)
         ):
-            continue
+            continue  # footnote-definition sentence, including the
+            # bracketed form ("[1] Adjusted EBITDA is ...") and the
+            # fourth shape collapsed onto one sentence ("1 Coinbase
+            # Total Trading Volume comprises ..."). Batch 166.
         if _is_lede_table_line(s) or len(_NUMBER_TOKEN_RE.findall(s)) >= 6:
             # Table residue — but the release title may sit at its head,
             # ahead of the table. Rescue it as the headline when it is
@@ -2992,14 +3283,21 @@ def extract_press_release_highlights(
             # Batch 110.
             i += wrapped_label
             continue
-        if _FOOTNOTE_DEF_RE.match(ln) or _LEDE_FOOTNOTE_NUM_RE.match(ln):
-            # Footnote-definition legend lines (GEV's Workiva exhibit opens
+        block = _footnote_def_block_len(lines, i, include_paren=False)
+        if block:
+            # Footnote-definition block (GEV's Workiva exhibit opens
             # with "1 Defined as remaining performance obligation (RPO)" /
-            # "*Non-GAAP Financial Measure" before the real headline): never
-            # headline material. Batch 104. Batch 162: the bare numbered
-            # form ("1) See Table A ...") is the same hazard — a footnote
-            # definition sitting ahead of the headline.
-            i += 1
+            # "*Non-GAAP Financial Measure" before the real headline):
+            # never headline material — and the block skip takes the
+            # wrapped continuations with it, so a wrapped definition
+            # never becomes the headline either. Batch 104; batch 162:
+            # the bare numbered form ("1) See Table A ...") is the same
+            # hazard; batch 166: the whole block, not just the key line.
+            # include_paren=False: a paren line stays headline-eligible
+            # (batch 126: "(B)Crude oil ..." headlines a supplement
+            # packet that must return None; "(2026) ACME CORP ..."
+            # headlines are preserved).
+            i += block
             continue
         if _TOC_HEADING_RE.match(ln):
             # Combined release+supplement packet (SPG): skip the table of
@@ -3253,18 +3551,27 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
-            if (
-                _LEDE_FOOTNOTE_RE.match(ln)
-                or _FOOTNOTE_DEF_RE.match(ln)
-                or _LEDE_FOOTNOTE_NUM_RE.match(ln)
-            ):
+            block = _footnote_def_block_len(lede_lines, i)
+            if block:
+                i += block
+                continue  # footnote-definition block ("1 Defined as ...",
+                # "*Non-GAAP Financial Measure", "1) See Table A ...",
+                # "[1] Adjusted EBITDA is ...", "1 Coinbase Total Trading
+                # Volume / comprises ..." plus wrapped continuations and
+                # chained term definitions) is never lede content. The
+                # block skip is what keeps the batch-165 finish rule from
+                # pulling a footnote block in as a "continuation" of the
+                # item at the budget: the key line and its continuations
+                # are skipped before the budget logic ever sees them.
+                # Batch 162 (bare numbered form); batch 166 (the block).
+            if _CONFERENCE_CALL_NOTICE_RE.search(ln):
                 i += 1
-                continue  # table footnotes ("(a) ...", "(1) ...") and
-                # footnote-definition legends ("1 Defined as ...",
-                # "*Non-GAAP Financial Measure") are never lede
-                # content. Batch 162: the bare numbered form ("1) See
-                # Table A ...") is the same class — Sempra's and
-                # Datadog's table footnotes sit mid-lede otherwise.
+                continue  # investor-conference-call notice (Emerson: the
+                # "Today, beginning at 3:30 p.m. ... will discuss the ...
+                # results during an investor conference call ... live
+                # webcast ... replay ..." line) is never highlights; it
+                # backfills the lede once the footnotes are dropped.
+                # Batch 166.
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
@@ -3476,7 +3783,10 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     bullets: list[str] = []
     in_item = False  # previous line was a bullet start or continuation
     n = len(lines)
+    skip_until = 0  # footnote-definition block span (batch 166)
     for idx, ln in enumerate(lines):
+        if idx < skip_until:
+            continue  # inside a skipped footnote-definition block
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             continue
         if _BOILERPLATE_RE.match(ln):
@@ -3488,19 +3798,22 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # the bullets are still the leading block, not the dateline
             # prose. Only before any bullet is collected; mid-block lines
             # keep the existing continuation behavior. Batch 118.
+        block = _footnote_def_block_len(lines, idx)
+        if block:
+            # Footnote definition after a bullet ("1) See Table A ...",
+            # "1 Non-GAAP measures are detailed ...", "1 Coinbase Total
+            # Trading Volume / comprises ...") is table residue, not a
+            # bullet continuation — skip the whole block (key line plus
+            # wrapped continuations) and keep collecting the block. The
+            # item stays open across the skip. Batch 164 (single-line
+            # form); batch 166 (the block).
+            skip_until = idx + block
+            continue
         if ln.startswith(("•", "-", "*")):
             bullets.append(ln)
             in_item = True
         elif in_item:
             nxt = lines[idx + 1] if idx + 1 < n else ""
-            if _is_section_footnote_line(ln):
-                continue  # footnote definition after a bullet ("1) See
-                # Table A ...", "1 Non-GAAP measures are detailed ...") is
-                # table residue, not a bullet continuation — skip it and
-                # keep collecting the block. Batch 164; closes the
-                # batch-163 follow-up (no attested case in this path, same
-                # hazard class as the headline pick, and the section filter
-                # already drops these lines).
             if (
                 _TABLE_UNITS_RE.match(ln)
                 or _TABLE_WORD_UNITS_RE.match(ln)
@@ -3632,13 +3945,23 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             # Batch 162: footnote-definition lines drop the same way —
             # Datadog's M&A-costs footnote sits between its section
             # bullets, and the section collector is the one collection
-            # path with no footnote handling at all.
-            collected = [
-                ln
-                for ln in collected
-                if not _is_lone_bullet_marker(ln)
-                and not _is_section_footnote_line(ln)
-            ]
+            # path with no footnote handling at all. Batch 166: the
+            # whole block drops, not just the key line — a wrapped
+            # definition's continuation lines are footnote material
+            # too ("3 Trading Volume represents the / total US dollar
+            # equivalent value of / ..."). The filter is index-aware
+            # because a block spans lines.
+            kept: list[str] = []
+            j = 0
+            while j < len(collected):
+                block = _footnote_def_block_len(collected, j)
+                if block:
+                    j += block
+                    continue
+                if not _is_lone_bullet_marker(collected[j]):
+                    kept.append(collected[j])
+                j += 1
+            collected = kept
             if collected:
                 sections.append(collected)
             continue
