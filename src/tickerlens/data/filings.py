@@ -363,7 +363,16 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 # billion, up 26%...") each carry $ and % — without the bullet guard, four
 # such bullets trip the data_rows >= 4 threshold and a genuine narrative
 # section is discarded as a table. Real tables (Lilly/WM) have no bullets.
-_TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
+# Batch 175: the bare-dollar units form — Trane's summary tables head
+# with "$, millions except EPS Q3 2024 Q3 2023 ..." (no parens), which
+# the parenthesized branch never matches, so the Highlights section
+# collector sailed past the units line and served the table's data rows
+# as highlights (5 TT quarters). A line starting "$," followed by a
+# scale word is a units header, never prose.
+_TABLE_UNITS_RE = re.compile(
+    r"\(\s*(dollars|usd|\$)|^\$\s*,\s*(millions|thousands|billions)\b",
+    re.IGNORECASE,
+)
 
 # A bullet-led line. Batch 154: the glyph bullets (•/●/–/—) need no
 # following space — flattened exhibits emit "•Site rental revenues."
@@ -375,7 +384,14 @@ _TABLE_UNITS_RE = re.compile(r"\(\s*(dollars|usd|\$)", re.IGNORECASE)
 # table and the lede fallback served the outlook table instead. The
 # hyphen stays strict (space required): a "-$1,234" line is a negative
 # table value, not a bullet, and must keep counting as a data row.
-_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s)")
+# Batch 175: the Wingdings "l" bullet — Trane's releases render their
+# highlight bullets as <font face="Wingdings">l</font> (a small square),
+# which flattens to a lone "l" ("l Reported revenues of $5.4 billion
+# ..."). A line starting with a lone "l" plus a space is never prose
+# (no English word is a lone "l"), so "l " is a bullet lead. The space
+# stays required: a line starting with the letter "l" glued to a word
+# ("lower revenue ...") is prose, not a bullet.
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s|l\s)")
 
 
 def _is_inline_bullet_start(ln: str) -> bool:
@@ -594,7 +610,7 @@ _LEDE_SYMBOL_LEGEND_RE = re.compile(
 # purposes — a spaced "* Foo" is pinned as not-a-footnote-def there — but
 # in the lede a line leading with a footnote glyph is the table's legend,
 # never narrative: "*" is not a bullet lead in this extractor
-# (_BULLET_LEAD_RE is •●–—/- only), so no bullet is ever shaped this way.
+# (_BULLET_LEAD_RE is •●–—/-/l only), so no bullet is ever shaped this way.
 # Batch 160.
 _LEDE_FOOTNOTE_GLYPH_RE = re.compile(r"^[*†‡]\s+\S")
 # A table-intro sentence (batch 156): "The following table summarizes ..."
@@ -798,7 +814,17 @@ def _is_lede_data_row(ln: str) -> bool:
     ~4000 chars, so 120 keeps that guard with wide margin. The 25%
     branch also accepts a trailing "NM" ("not meaningful" — Allstate's
     cell value where a change is meaningless) as a figure-like ending,
-    since a row ending in NM is a row, not prose."""
+    since a row ending in NM is a row, not prose.
+    Batch 175: a bullet-led line never qualifies — a highlight bullet
+    is narrative, never a table row, and _is_lede_table_line already
+    exempts bullets, so the predicate itself must too: direct callers
+    (repair residue scans) otherwise misflag figure-dense bullets.
+    Trane's Wingdings "l" EPS bullet ("l GAAP continuing EPS of $3.43;
+    adjusted continuing EPS* of $3.37, up 21 percent") trips the
+    $-figures branch (2 $ figures in 78 chars) without it.
+    """
+    if _BULLET_LEAD_RE.match(ln):
+        return False
     if _is_sentence_terminated(ln):
         return False
     figures = _LEDE_FIGURE_RE.findall(ln)
