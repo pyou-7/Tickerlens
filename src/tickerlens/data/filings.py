@@ -294,7 +294,23 @@ def _clean_body_line(ln: str) -> str:
 # segments now allow mixed case; the comma + capital-led state + spaced
 # dash shape still keeps prose out (no digits in the class, so a "Q4"-led
 # line never matches, and a lowercase-led second segment never matches).
-_DATELINE_LEAD_RE = re.compile(r"^[A-Z][A-Za-z .'\-]*,\s*[A-Z][A-Za-z .'\-]*?\s[–—-]\s")
+# Batch 172: Business Wire datelines need no "CITY, ST" comma at all —
+# "SEATTLE—(BUSINESS WIRE) October 31, 2024—..." (Amazon),
+# "BOZEMAN, Mont.--(BUSINESS WIRE)--October 30, 2024--..." (FICO),
+# "GOODLETTSVILLE, Tenn.--(BUSINESS WIRE)--..." (Dollar General),
+# "DENVER— (BUSINESS WIRE) — ..." (Palantir),
+# "SAN FRANCISCO—(BUSINESS WIRE)—..." (DoorDash). The wire branch is a
+# caps city with an optional mixed-case state abbreviation, one or two
+# dashes (or a spaced dash) around the literal "(BUSINESS WIRE)" tag, an
+# optional "Month DD, YYYY" date, and the lead sentence. The tag itself
+# is the anchor — prose never opens with a caps city + dash + wire tag —
+# and a bare tag with nothing after it is a credit line, not a dateline
+# (the separator after the tag is required).
+_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s*[A-Z][A-Za-z .'\-]*?\s[–—-]\s"
+    r"|^[A-Z][A-Z .'\-]*?(?:,\s*[A-Za-z.]+)?\s*[–—-]{1,2}\s*\(BUSINESS WIRE\)"
+    r"(?:\s*[–—-]{1,2}\s*|\s+)(?:[A-Z][a-z]+\.? \d{1,2}, \d{4}\s*[–—-]{1,2}\s*)?"
+)
 
 # Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
 # EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
@@ -4124,6 +4140,13 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # the bullets are still the leading block, not the dateline
             # prose. Only before any bullet is collected; mid-block lines
             # keep the existing continuation behavior. Batch 118.
+        if not bullets and _is_lede_period_header(ln):
+            continue  # bare period label between the dateline and the
+            # bullets (Amazon Q4: "Fourth Quarter 2024" sits on its own
+            # line after the dateline; the lede loop already drops it via
+            # _is_lede_table_line). Only before any bullet is collected;
+            # mid-block lines keep the existing continuation behavior.
+            # Batch 172.
         block = _footnote_def_block_len(lines, idx)
         if block:
             # Footnote definition after a bullet ("1) See Table A ...",
