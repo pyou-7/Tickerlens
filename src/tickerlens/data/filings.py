@@ -536,6 +536,22 @@ def _looks_like_table_fragment(ln: str) -> bool:
     return False
 
 
+# Headline verbs: a longer all-caps line carrying one is the release's
+# sub-headline, not a section heading ("Q2 ORGANIC SALES AND ADJUSTED
+# EPS EXCEED OUTLOOK", "COMPANY MAINTAINS FULL-YEAR REVENUE AND EPS
+# GUIDANCE", "RESETTING DIVIDEND TO ACCELERATE DEBT REDUCTION").
+# Batch 177.
+_LEDE_HEADLINE_VERB_RE = re.compile(
+    r"\b(REPORTS?|ANNOUNCES?|EXCEEDS?|RAISES?|MAINTAINS?|LEADS?|"
+    r"NAMES?|APPOINTS?|ELECTS?|DECLARES?|POSTS?|DELIVERS?|"
+    r"ACHIEVES?|SETS?|UPDATES?|REAFFIRMS?|GUIDES?|RESETTING|"
+    r"RESETS?|GROWS?|INCREASES?|DECREASES?|BEATS?|TOPS?|MISSES?|"
+    r"LIFTS?|CUTS?|EXPANDS?|LAUNCHES?|INTRODUCES?|UNVEILS?|"
+    r"RETIRE|ASSUME|COMPLETES?)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_lede_heading_fragment(ln: str) -> bool:
     """True for an all-caps section-heading fragment in the lede — a lone
     all-caps word ("QUARTER" from a "Fourth Quarter" heading, "YEAR" from
@@ -544,14 +560,126 @@ def _is_lede_heading_fragment(ln: str) -> bool:
     lede; left in, it consumes one of the 6 lede lines and truncates a real
     bullet (Chubb Q4 2024: the "QUARTER" line plus the leading "●" left
     bullet 2 cut mid-item). Batch 138; batch 153 extends the single word
-    to short headings (<=4 words).
+    to short headings (<=4 words). Batch 177 extends the bound to 8
+    words for table titles ("FOURTH QUARTER AND FULL YEAR SUMMARY
+    FINANCIALS" — Moody's Q4 2025, 6 words), guarded by a headline-verb
+    list and a no-figures rule: a longer all-caps line is usually the
+    release's sub-headline ("Q2 ORGANIC SALES AND ADJUSTED EPS EXCEED
+    OUTLOOK", "AMERICAN WATER REPORTS SOLID SECOND QUARTER RESULTS"),
+    and the verb is what tells a sub-headline from a table title.
     """
     words = ln.split()
-    return (
-        len(words) <= 4
-        and ln.isupper()
-        and any(c.isalpha() for c in ln)
-    )
+    if not words:
+        return False
+    if not ln.isupper() or not any(c.isalpha() for c in ln):
+        return False
+    if len(words) <= 4:
+        return True
+    if len(words) > 8:
+        return False
+    if "$" in ln or "%" in ln:
+        return False
+    if any(c.isdigit() for c in ln):
+        return False
+    return not _LEDE_HEADLINE_VERB_RE.search(ln)
+
+
+# A colon-ended list-intro / section heading in the lede ("Financial
+# Results for the Quarter:", "Fiscal 2026 outlook:", "Fourth Quarter
+# 2024:", "Business highlights included the following:"). It carries no
+# figures and no news — the list or table below it is the content — so
+# it only consumes one of the 6 lede lines and starves a real bullet
+# (Disney Q3 2026: "Fiscal 2026 outlook:" sits above the outlook
+# bullets; Capital One: "The quarter included the following adjusting
+# items:" sits above the adjusting-items table). The "the following:" /
+# "as follows:" idiom fires regardless of verbs ("included" is part of
+# the idiom); otherwise the line must be a bare noun phrase — no verb
+# at all. A quote attribution ("Sundar Pichai, CEO of Google and
+# Alphabet, said:") is never a heading: dropping it would orphan the
+# quote, so "said"/"says" vetoes. Batch 177.
+_LEDE_COLON_VERB_RE = re.compile(
+    r"\b(is|are|was|were|be|been|being|has|have|had|expected|expects|"
+    r"expect|continued|continues|continue|announced|announces|"
+    r"reported|reports|said|says|noted|added|delivered|delivers|"
+    r"provides|provided|reflects|reflected|includes|included|"
+    r"include|drives|drove|shows|showed|remains|remained|grew|"
+    r"grows|increased|decreased|rose|fell|will|would|can|could|"
+    r"should)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_colon_heading(ln: str) -> bool:
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if not s.endswith(":"):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    body = s[:-1].strip()
+    if re.search(r"\b(said|says)\b", body, re.IGNORECASE):
+        return False  # quote attribution — never a heading
+    words = body.split()
+    if not words:
+        return False
+    low = body.lower()
+    m = re.search(r"\bthe following\b((?:\s+\w+){0,3})\s*$", low)
+    if m and not _LEDE_COLON_VERB_RE.search(m.group(1)):
+        return len(words) <= 14  # list-intro idiom, verb or not — the
+    # tail after "the following" is a bare noun phrase ("adjusting
+    # items"); a verb there ("metrics will improve") makes it a prose
+    # lead-in, not an intro, and it falls through to the verb veto.
+    if low.endswith("as follows"):
+        return len(words) <= 14
+    if len(words) > 8:
+        return False
+    return not _LEDE_COLON_VERB_RE.search(body)
+
+
+# A summary-table column-header line in the lede ("MCO Diluted EPS MCO
+# Adjusted Diluted EPS2" — Moody's, 6 stored rows; "Impact After-Tax
+# Diluted EPS" — Capital One's adjusting-items table header, 5 rows).
+# It is two column labels flattened onto one line: figure-less,
+# unterminated, every word capital-led, carrying a metric token, with
+# either a repeated label word or a table qualifier (Adjusted /
+# After-Tax / Pre-Tax / Non-GAAP / GAAP). A sub-headline looks similar
+# but carries a headline verb ("Q2 ORGANIC SALES AND ADJUSTED EPS
+# EXCEED OUTLOOK", "RESETTING DIVIDEND TO ACCELERATE DEBT REDUCTION",
+# "Investment Income Leads Second-Quarter Profits") — the verb vetoes.
+# Batch 177.
+_LEDE_TABLE_HEADER_METRIC_RE = re.compile(
+    r"\b(EPS|Revenue|Income|Margin|EBITDA|Sales|Cash|Profit|Dividend)\b",
+    re.IGNORECASE,
+)
+_LEDE_TABLE_HEADER_QUALIFIERS = frozenset(
+    {"adjusted", "after-tax", "pre-tax", "non-gaap", "gaap"}
+)
+
+
+def _is_lede_table_header(ln: str) -> bool:
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    words = s.split()
+    if not 4 <= len(words) <= 8:
+        return False
+    if not _LEDE_TABLE_HEADER_METRIC_RE.search(s):
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s):
+        return False  # sub-headline, not a column header
+    for w in words:
+        w2 = re.sub(r"\d+$", "", w)
+        if not w2 or not w2[0].isupper():
+            return False
+    lowered = [w.lower().strip(",") for w in words]
+    if len(set(lowered)) < len(lowered):
+        return True  # a label word repeats: two labels, one line
+    return any(q in lowered for q in _LEDE_TABLE_HEADER_QUALIFIERS)
 
 
 # Table residue in the lede (batch 153): Crown Castle's releases open with
@@ -4132,6 +4260,22 @@ def extract_press_release_highlights(
                 # the same class — Disney's Q4 FY2024 lede ends on the
                 # dangling heading while its bullets starve below it.
                 # Skipping it lets the bullets in.
+            if _is_lede_colon_heading(ln):
+                i += 1
+                continue  # Batch 177: a colon-ended list-intro /
+                # section heading ("Financial Results for the
+                # Quarter:", "Fiscal 2026 outlook:", "Business
+                # highlights included the following:") carries no
+                # figures and no news — the list below it is the
+                # content. Skipping it frees a lede line for a real
+                # bullet. A quote attribution ("... said:") never
+                # qualifies — the veto is in the predicate.
+            if _is_lede_table_header(ln):
+                i += 1
+                continue  # Batch 177: a summary-table column-header
+                # line ("MCO Diluted EPS MCO Adjusted Diluted EPS2",
+                # "Impact After-Tax Diluted EPS") is two column
+                # labels flattened onto one line, not narrative.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
@@ -4648,7 +4792,25 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         return (1, count) if (count >= 2 and density >= 0.4) else (0, 0)
 
     best = max(candidates, key=_score)
-    return best if _score(best)[0] > 0 else candidates[0]
+    if _score(best)[0] <= 0:
+        best = candidates[0]
+    # Batch 177: drop colon-ended list-intro / section headings and
+    # summary-table column-header lines from the WINNING section only.
+    # The drop must happen after selection, not in the per-section
+    # cleanup: dropping a heading line pre-selection changes a
+    # candidate's financial density and flips which candidate wins
+    # (Akamai: the "Revenue by solution:" / "Revenue by geography:"
+    # sub-headings drop, the Full-year section wins over the lede's
+    # Revenue section, and the real Security/Delivery/Compute bullets
+    # are lost). Post-selection the competition is untouched and only
+    # the served text loses the dangling heading (Datadog: "Third
+    # Quarter & Recent Business Highlights:" between the financial
+    # bullets and the business bullets).
+    return [
+        ln
+        for ln in best
+        if not _is_lede_colon_heading(ln) and not _is_lede_table_header(ln)
+    ]
 
 
 # --- Shareholder-letter extraction mode (batch 94) ---------------------------
