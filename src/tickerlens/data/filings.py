@@ -369,8 +369,14 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 # collector sailed past the units line and served the table's data rows
 # as highlights (5 TT quarters). A line starting "$," followed by a
 # scale word is a units header, never prose.
+# Batch 178: the singular "dollar" — Ares Capital's tables head with
+# "(dollar amounts in millions, except per share data)", which the
+# "dollars" branch never matches, so the units line plus its column
+# headers rode the lede in all 8 ARCC quarters. The lookahead keeps a
+# hyphenated prose parenthetical ("(dollar-cost averaging ...)") out:
+# only a space, comma, or close-paren may follow the word.
 _TABLE_UNITS_RE = re.compile(
-    r"\(\s*(dollars|usd|\$)|^\$\s*,\s*(millions|thousands|billions)\b",
+    r"\(\s*(dollars?(?=[\s),])|usd|\$)|^\$\s*,\s*(millions|thousands|billions)\b",
     re.IGNORECASE,
 )
 
@@ -420,6 +426,36 @@ def _is_inline_bullet_start(ln: str) -> bool:
 # in narrative prose never fires.
 _TABLE_WORD_UNITS_RE = re.compile(
     r"^\(\s*in\s+(millions|thousands|billions)\b", re.IGNORECASE
+)
+
+# A bare units declaration, no parens (batch 178): Visa's tables head
+# with the sentence "In billions, except percentages and per share
+# data." — no parens, terminated, so neither units regex matches it
+# and the termination gate in _is_lede_table_line returns False before
+# the units checks. The freed lede budget (a dropped title line) lets
+# the loop reach it in 7 Visa quarters. The shape is the whole line: a
+# scale word, "except", and an ending in "data"/"information" — a prose
+# sentence that merely mentions units ("In billions, except percentages
+# and per share data, revenue grew ...") never ends there. DuPont's
+# tables head with the same shape in "Dollars in" form ("Dollars in
+# millions, except EPS") — the "Dollars in" opening is itself the
+# units-declaration signature, so its tail is free.
+_LEDE_BARE_UNITS_RE = re.compile(
+    r"^(?:In (millions|billions|thousands), except .* (data|information)\.?$"
+    r"|Dollars? in (millions|billions|thousands), except)",
+    re.IGNORECASE,
+)
+
+# The lowercase form of the same declaration (batch 178, post-blast
+# scan): eBay's and Emerson's units lines split from their parenthesised
+# header and flatten without the capital ("in millions, except per share
+# data and percentages", "in millions, except per share)"). A real
+# sentence never opens lowercase, so the free tail is safe here — the
+# capital form keeps the (data|information) tail so a prose sentence
+# that merely mentions units ("In billions, ... revenue grew 8%.")
+# still survives.
+_LEDE_BARE_UNITS_LOWER_RE = re.compile(
+    r"^in (millions|billions|thousands), except",
 )
 
 # A "Percent Change" column header in words (batch 143): FedEx's tables
@@ -540,11 +576,19 @@ def _looks_like_table_fragment(ln: str) -> bool:
 # sub-headline, not a section heading ("Q2 ORGANIC SALES AND ADJUSTED
 # EPS EXCEED OUTLOOK", "COMPANY MAINTAINS FULL-YEAR REVENUE AND EPS
 # GUIDANCE", "RESETTING DIVIDEND TO ACCELERATE DEBT REDUCTION").
-# Batch 177.
+# Batch 177. Batch 178 adds the missing members of families the list
+# already covers — AFFIRMS (American Water's "AFFIRMS 2024 EPS GUIDANCE
+# AND LONG-TERM GROWTH TARGETS"), PROVIDES (Campbell's "PROVIDES
+# FULL-YEAR FISCAL 2027 GUIDANCE"), CONFIRMS / REVISES / INITIATES
+# (FedEx's "... Earnings Outlook" headings), REITERATES / REITERATING
+# (Church & Dwight's "REITERATING FULL YEAR 2026 OUTLOOK") — each is a
+# sub-headline the title-line skip would otherwise drop.
 _LEDE_HEADLINE_VERB_RE = re.compile(
     r"\b(REPORTS?|ANNOUNCES?|EXCEEDS?|RAISES?|MAINTAINS?|LEADS?|"
     r"NAMES?|APPOINTS?|ELECTS?|DECLARES?|POSTS?|DELIVERS?|"
-    r"ACHIEVES?|SETS?|UPDATES?|REAFFIRMS?|GUIDES?|RESETTING|"
+    r"ACHIEVES?|SETS?|UPDATES?|REAFFIRMS?|AFFIRMS?|PROVIDES?|"
+    r"CONFIRMS?|REVISES?|INITIATES?|REITERATES?|REITERATING|"
+    r"GUIDES?|RESETTING|"
     r"RESETS?|GROWS?|INCREASES?|DECREASES?|BEATS?|TOPS?|MISSES?|"
     r"LIFTS?|CUTS?|EXPANDS?|LAUNCHES?|INTRODUCES?|UNVEILS?|"
     r"RETIRE|ASSUME|COMPLETES?)\b",
@@ -596,7 +640,12 @@ def _is_lede_heading_fragment(ln: str) -> bool:
 # the idiom); otherwise the line must be a bare noun phrase — no verb
 # at all. A quote attribution ("Sundar Pichai, CEO of Google and
 # Alphabet, said:") is never a heading: dropping it would orphan the
-# quote, so "said"/"says" vetoes. Batch 177.
+# quote, so "said"/"says" vetoes. Batch 177. Batch 178: the bare-phrase
+# bound moves 8 -> 12 words — a table's label line is the same shape
+# one word longer ("Weighted average yields on debt and other income
+# producing securities(7):" — Ares Capital, 10 words, no verb), and a
+# 9-12-word verb-less colon line is a label or a heading either way,
+# never a prose lead-in (a lead-in carries a verb).
 _LEDE_COLON_VERB_RE = re.compile(
     r"\b(is|are|was|were|be|been|being|has|have|had|expected|expects|"
     r"expect|continued|continues|continue|announced|announces|"
@@ -632,7 +681,7 @@ def _is_lede_colon_heading(ln: str) -> bool:
     # lead-in, not an intro, and it falls through to the verb veto.
     if low.endswith("as follows"):
         return len(words) <= 14
-    if len(words) > 8:
+    if len(words) > 12:
         return False
     return not _LEDE_COLON_VERB_RE.search(body)
 
@@ -647,9 +696,14 @@ def _is_lede_colon_heading(ln: str) -> bool:
 # but carries a headline verb ("Q2 ORGANIC SALES AND ADJUSTED EPS
 # EXCEED OUTLOOK", "RESETTING DIVIDEND TO ACCELERATE DEBT REDUCTION",
 # "Investment Income Leads Second-Quarter Profits") — the verb vetoes.
-# Batch 177.
+# Batch 177. Batch 178: footnote digits ride the qualifier ("Organic
+# Net Sales, Non-GAAP1", "Adjusted Diluted Net Earnings Per Common
+# Share, Non-GAAP1,2" — Estée Lauder's summary-table headers), so the
+# qualifier/repeat comparison strips trailing digits and commas first
+# ("Non-GAAP1,2" -> "non-gaap", "EPS2" -> "eps"); "Earnings" joins the
+# metric list for the same pair of lines.
 _LEDE_TABLE_HEADER_METRIC_RE = re.compile(
-    r"\b(EPS|Revenue|Income|Margin|EBITDA|Sales|Cash|Profit|Dividend)\b",
+    r"\b(EPS|Revenue|Income|Margin|EBITDA|Sales|Cash|Profit|Dividend|Earnings)\b",
     re.IGNORECASE,
 )
 _LEDE_TABLE_HEADER_QUALIFIERS = frozenset(
@@ -676,7 +730,10 @@ def _is_lede_table_header(ln: str) -> bool:
         w2 = re.sub(r"\d+$", "", w)
         if not w2 or not w2[0].isupper():
             return False
-    lowered = [w.lower().strip(",") for w in words]
+    lowered = [
+        re.sub(r"[\d,]+$", "", w.lower().strip(",")) for w in words
+    ]
+    lowered = [w for w in lowered if w]
     if len(set(lowered)) < len(lowered):
         return True  # a label word repeats: two labels, one line
     return any(q in lowered for q in _LEDE_TABLE_HEADER_QUALIFIERS)
@@ -718,8 +775,12 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
 # tables ("Revenues $ 86,310 $ 96,469"). Batch 157: a $ before a figure
 # is no longer required for short data rows, but it still distinguishes
 # the pre-existing behavior for long lines (a flattened table mega-line
-# with bare-number figures is never a lede data row).
-_LEDE_DATA_ROW_RE = re.compile(r"\$\s?[\d(]")
+# with bare-number figures is never a lede data row). Batch 178: the $
+# may also be separated from a DECIMAL figure by a space and a period
+# ("Diluted Net Earnings Per Common Share $ .44 $ .91 (52) %" — Estée
+# Lauder's summary table flattens "$0.44" as "$ .44"), so the optional
+# dot is part of the $ figure too.
+_LEDE_DATA_ROW_RE = re.compile(r"\$\s?\.?[\d(]")
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
 # A table's symbol legend ("NM = not meaningful" — Allstate defines the
 # NM cell value below its Consolidated Highlights table). A short
@@ -873,6 +934,26 @@ def _is_lede_date_header(ln: str) -> bool:
     return all(_LEDE_DATE_TOKEN_RE.match(w) for w in words)
 
 
+# A bare as-of date fragment ("As of December 31," — Ares Capital's
+# balance-sheet date line, served as a lede line in Q4 FY2025 above
+# the Fair-value recon row). The date-header predicate never fires on
+# it ("As"/"of" are not date tokens), and it carries no year — a table's
+# as-of line never does, the year lives in the column header — so the
+# shape is the whole month-day fragment with an optional trailing
+# comma. A prose fragment ("As of December 31, revenue grew ...")
+# always continues on the same line, so a standalone year-less as-of
+# line is table residue, never narrative. Batch 178.
+_LEDE_ASOF_DATE_RE = re.compile(
+    r"^As of (January|February|March|April|May|June|July|August|"
+    r"September|October|November|December) \d{1,2},?$"
+)
+
+
+def _is_lede_asof_date(ln: str) -> bool:
+    """True for a standalone year-less as-of date fragment line."""
+    return bool(_LEDE_ASOF_DATE_RE.match(ln.strip()))
+
+
 def _is_lede_table_title(ln: str) -> bool:
     """True for a table's title line: an unterminated, figure-less line
     that pairs a period phrase with table vocabulary ("Non-GAAP Financial
@@ -943,6 +1024,31 @@ def _is_lede_data_row(ln: str) -> bool:
     branch also accepts a trailing "NM" ("not meaningful" — Allstate's
     cell value where a change is meaningless) as a figure-like ending,
     since a row ending in NM is a row, not prose.
+    Batch 178: the $-carrying branch's cap moves 80 -> 120 too — the
+    batch-160 raise left it behind, and Ares Capital's reconciliation
+    rows run 86 chars ("Fair value of accruing debt and other income
+    producing securities(5) $ 24,831 $ 23,643"), so they rode the lede
+    in 5 quarters. But the 81-120 band is bare-number table values
+    ONLY: a wrapped prose fragment ends mid-clause on a word and its $
+    figures carry scale words ("We delivered strong financial results
+    in Q1, generating $2.0 billion in total revenue, $66 million in net
+    income," — Coinbase Q1 FY2025; Chubb's "Net income was $2.32
+    billion, up 13.8%, and core operating income was $2.33 billion, up
+    14.3%. For the" — both 81-120 chars with 2 $ figures, both prose).
+    A table row ends in a value and its $ figures are bare amounts, so
+    the extended band requires all four: the line ends in a figure
+    token that is not a bare year (Eaton's "... up 24% over 2022"),
+    no $ figure is followed by a scale word, no $-to-$ range (Amex's
+    "EPS OF $12.65 TO $13.15"; Cencora's "$17.45 to $17.75" — a range
+    is a guidance statement, never a table row), and the line is not a
+    flattened-list bullet ("■"/"◦" are not in _BULLET_LEAD_RE, so the
+    top guard misses them — AIG's "■Net income per diluted share was
+    $0.12 ..." and AWK's "◦2023 weather-normalized earnings of $4.77
+    ..." are bullets). The plain 80-char branch is unchanged — short
+    rows keep the old behavior, and the repair script's $-row guard
+    already uses 120. The $-figure count also accepts the spaced-decimal
+    form ("$ .44" — Estée Lauder's "$ .44 $ .91" row), via the optional
+    dot in _LEDE_DATA_ROW_RE and in the count below.
     Batch 175: a bullet-led line never qualifies — a highlight bullet
     is narrative, never a table row, and _is_lede_table_line already
     exempts bullets, so the predicate itself must too: direct callers
@@ -994,7 +1100,42 @@ def _is_lede_data_row(ln: str) -> bool:
         )
     ):
         return True
-    return len(ln) <= 80 and len(re.findall(r"\$\s?[\d(]", ln)) >= 2
+    dollar_figs = len(re.findall(r"\$\s?\.?[\d(]", ln))
+    if dollar_figs >= 2:
+        if len(ln) <= 80:
+            return True
+        # Batch 178, extended band (see docstring): bare-number table
+        # values only — ends in a figure (never a bare year), no scaled
+        # $ figure, no $-to-$ range, and never a flattened-list bullet
+        # ("■"/"◦" bullets are not in _BULLET_LEAD_RE, so the top guard
+        # misses them — AIG's "■Net income per diluted share was $0.12
+        # ..." and AWK's "◦2023 weather-normalized earnings of $4.77
+        # ..." are bullets, not rows). A bare-year ending is prose
+        # (Eaton's "Fourth quarter earnings per share of $2.35 and
+        # record adjusted earnings per share of $2.55, up 24% over
+        # 2022"), and a $-to-$ range is a guidance statement (Amex's
+        # "FULL-YEAR 2024 GUIDANCE FOR REVENUE GROWTH OF 9% TO 11% AND
+        # EPS OF $12.65 TO $13.15"; Cencora's "$17.45 to $17.75" range),
+        # never a table row — a row's values are separate columns.
+        if (
+            len(ln) <= 120
+            and ln[:1] not in "▪■·○◦"
+            and _is_lede_figure_token(tokens[-1])
+            and not _LEDE_YEAR_RE.fullmatch(tokens[-1].rstrip(","))
+            and not re.search(
+                r"\$\s?\.?[\d,().]+\s+to\s+\$",
+                ln,
+                re.IGNORECASE,
+            )
+            and not re.search(
+                r"\$\s?\.?[\d,().]+\s+"
+                r"(?:billions?|millions?|thousands?|trillions?)\b",
+                ln,
+                re.IGNORECASE,
+            )
+        ):
+            return True
+    return False
 
 
 def _is_lede_figure_token(tok: str) -> bool:
@@ -1122,6 +1263,14 @@ def _is_lede_table_line(ln: str) -> bool:
         return True
     if _LEDE_FOOTNOTE_GLYPH_RE.match(ln):
         return True
+    # Batch 178: a bare units declaration ("In billions, except
+    # percentages and per share data.") is table residue even though it
+    # is a terminated sentence — checked before the termination gate,
+    # like the table-intro sentence (batch 156).
+    if _LEDE_BARE_UNITS_RE.match(ln):
+        return True
+    if _LEDE_BARE_UNITS_LOWER_RE.match(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     # Anchored unit lines (a mid-sentence "(dollars ...)" parenthetical
@@ -1132,6 +1281,8 @@ def _is_lede_table_line(ln: str) -> bool:
     if _is_lede_table_heading(ln) or _is_lede_period_header(ln):
         return True
     if _is_lede_date_header(ln):
+        return True
+    if _is_lede_asof_date(ln):
         return True
     # A data row's wordy label plus 4-5 figures can run past 60 chars, so
     # it is exempt from the length gate below — its density rule (2+
@@ -1318,6 +1469,22 @@ def _is_trailing_heading(ln: str) -> bool:
     return True
 
 
+def _is_lede_title_line(ln: str) -> bool:
+    """True for an exhibit title line served mid-lede ("Capital One
+    Third Quarter 2024 Earnings" — Capital One, 7 stored rows: the
+    freed lede budget reaches the exhibit's own title below the CEO
+    quote). It is heading-shaped (short, capital-led, ending in a
+    section word), so _is_trailing_heading matches it — but a
+    sub-headline is heading-shaped too ("Q2 ORGANIC SALES AND ADJUSTED
+    EPS EXCEED OUTLOOK", "COMPANY MAINTAINS FULL-YEAR REVENUE AND EPS
+    GUIDANCE", "AMERICAN WATER REPORTS SOLID SECOND QUARTER RESULTS"),
+    and the headline verb is what tells them apart: a title line never
+    carries one, a sub-headline always does. The verb veto is
+    load-bearing — without it the batch-177 keeps all drop. Batch 178.
+    """
+    return _is_trailing_heading(ln) and not _LEDE_HEADLINE_VERB_RE.search(ln)
+
+
 def _clean_highlights_result(result: str) -> str:
     """Final cleanup of an assembled highlights body (batch 157).
 
@@ -1350,6 +1517,16 @@ def _clean_highlights_result(result: str) -> str:
             trimmed.pop()
             continue
         if _is_trailing_heading(last):
+            trimmed.pop()
+            continue
+        # Batch 178: a trailing bare units declaration (eBay's "in
+        # millions, except per share data and percentages" — the next
+        # section's table header, flattened without its parens) is
+        # table residue, not a highlight. The lede loop's table-line
+        # skip never sees it: a Highlights section serves its lines
+        # directly, so the units fragment lands at the very end of the
+        # assembled body and only this final trim can catch it.
+        if _LEDE_BARE_UNITS_RE.match(last) or _LEDE_BARE_UNITS_LOWER_RE.match(last):
             trimmed.pop()
             continue
         break
@@ -1710,10 +1887,16 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
         batch 164's mirror negative), and a bullet with a footnote key
         ("2 • Strategic acquisition ...") starts with a marker, not a
         capital — both stay continuations, not footnotes.
+      - Batch 178: the number may be GLUED to its word ("1See pages 17
+        and 18 for reconciliation ...", "2Adjusted Non-GAAP measures
+        are calculated ..." — Estée Lauder's summary-table footnotes,
+        flattened without the space). The glued form requires a capital
+        followed by a lowercase letter — "3M reports ..." is digit +
+        single capital + space, so a company name never opens a block.
     """
     if len(ln) > 500 or not _is_sentence_terminated(ln):
         return False
-    return bool(re.match(r"^\d{1,3}\s+[A-Z]", ln))
+    return bool(re.match(r"^\d{1,3}(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
 
 
 def _is_bare_term_def_opener(ln: str) -> bool:
@@ -1938,7 +2121,22 @@ def _footnote_def_block_len(
         # plausibility test is the guard that matters — a headline-
         # shaped next line ("Third Quarter 2025 Results") is never a
         # plausible wrap, so GEV's single-line legend never eats the
-        # headline that follows it.
+        # headline that follows it. Batch 178: a blank line or a bare
+        # page number inside a wrapped definition is a flattening
+        # artifact (Ares Capital's (7) yields footnote wraps across a
+        # page break: "... plus the net annual" / "2" / "" / "securities
+        # at amortized cost ..." — the "2" is a page number, an admin
+        # line and therefore a boundary by _is_block_boundary, which
+        # orphans the continuation as lede content) — consume it and
+        # keep looking for the continuation. The plausibility test on
+        # the line after the artifact still guards the boundary: a new
+        # prose paragraph after the blank is capital-led and
+        # implausible, so the block still ends there. A lone bare
+        # number is never a footnote key (a key always carries its term
+        # on the same line), so skipping it loses no definition.
+        if not nxt.strip() or re.fullmatch(r"\d{1,3}", nxt.strip()):
+            n += 1
+            continue
         if _is_block_boundary(nxt) or not _is_plausible_continuation(nxt):
             break
         n += 1
@@ -4276,6 +4474,14 @@ def extract_press_release_highlights(
                 # line ("MCO Diluted EPS MCO Adjusted Diluted EPS2",
                 # "Impact After-Tax Diluted EPS") is two column
                 # labels flattened onto one line, not narrative.
+            if _is_lede_title_line(ln):
+                i += 1
+                continue  # Batch 178: an exhibit title line ("Capital
+                # One Third Quarter 2024 Earnings") is the document's
+                # own title served mid-lede once the budget frees up —
+                # never highlights. The verb veto in the predicate keeps
+                # sub-headlines ("Q2 ORGANIC SALES AND ADJUSTED EPS
+                # EXCEED OUTLOOK") in the lede.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
