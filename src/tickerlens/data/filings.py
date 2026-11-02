@@ -581,7 +581,13 @@ _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
 # NM cell value below its Consolidated Highlights table). A short
 # all-caps symbol plus " = " plus a definition is legend, never prose:
 # narrative never opens with an abbreviation-equals definition. Batch 160.
-_LEDE_SYMBOL_LEGEND_RE = re.compile(r"^[A-Z]{1,5}\s*=\s+\S")
+# Batch 173: the quoted-symbol dash form ("“cc” - constant currency" —
+# Walmart's legend after its footnote run) is the same class with a dash
+# instead of "=".
+_LEDE_SYMBOL_LEGEND_RE = re.compile(
+    r"^[A-Z]{1,5}\s*=\s+\S"
+    r'|^["“”\'][A-Za-z]{1,5}["“”\']\s*[-\u2013\u2014]\s+\S'
+)
 # A spaced footnote-glyph legend line ("* Measures used in this release
 # ..." — Allstate's non-GAAP legend below its table). _FOOTNOTE_DEF_RE
 # deliberately matches only ATTACHED glyphs ("*Non-GAAP ...") for headline
@@ -1427,6 +1433,55 @@ _FOOTNOTE_DEF_SENTENCE_RE = re.compile(
 )
 
 
+# A footnote-pointer opener (batch 173): a bare-numbered cross-reference
+# ("1 See additional information at the end of the release ...",
+# "1 Refer to the tables at the end of this press release ...",
+# "2 See the Non-GAAP Measures section ...") — Walmart, CSX, Carnival
+# and PACCAR serve these as lede content today (13 stored rows). The
+# See/Refer-to verb is the anchor: prose never opens with a bare number
+# + See/Refer to. The optional period covers "1. See ...". The
+# parenthesized alternative covers Carnival's tail pointer ("(See
+# \u201cNon-GAAP Financial Measures\u201d and \u201cReconciliation of
+# Forecasted Data\u201d)") — a cross-reference wrapped in parens, never
+# narrative. Batch 173.
+_FOOTNOTE_POINTER_RE = re.compile(
+    r"^(?:\d{1,3}[.)]?\s+|\(+)(See|Refer to)\b", re.IGNORECASE
+)
+
+
+def _is_bare_numbered_footnote(ln: str) -> bool:
+    """True for a bare-numbered footnote sentence ("2 Comp sales for the
+    13-week period ...", "3 Source: Rystad Energy ...", "1 Net debt is
+    total debt of $39.0 billion ...", "1 As used in this release ...").
+
+    Guards, each load-bearing:
+      - Terminated sentence: a wrapped bullet continuation ("12 of them
+        in Texas") is unterminated, so it never opens — the termination
+        test is what keeps wrapped prose out.
+      - 500-char cap: a footnote definition is one or two short
+        sentences — attested bare-numbered footnotes run to 470 chars
+        (Amex's participating-award footnote). Two longer ones still
+        sit above the cap and survive as tails — Moody's 556-char
+        medium-term-EPS disclaimer, Amex's 671-char FX-adjusted
+        footnote — carried as a follow-up (a higher cap needs its own
+        evidence). Page/table mega-lines start with a bare number too
+        (Affirm's page-flattened letter lines; Ford's flattened
+        highlights table, a 3000-char line) and are far longer — the
+        cap keeps them out, and the Affirm lines are unterminated
+        besides, so the termination test excludes them.
+      - Capital after the number: a footnote sentence starts capitalized
+        ("1 Net debt is ...", "2 Comp sales ...", "3 Source: ..."). A
+        wrapped bullet continuation starts with a lowercase quantity
+        word ("1 million shares are included in the diluted count." —
+        batch 164's mirror negative), and a bullet with a footnote key
+        ("2 • Strategic acquisition ...") starts with a marker, not a
+        capital — both stay continuations, not footnotes.
+    """
+    if len(ln) > 500 or not _is_sentence_terminated(ln):
+        return False
+    return bool(re.match(r"^\d{1,3}\s+[A-Z]", ln))
+
+
 def _is_bare_term_def_opener(ln: str) -> bool:
     """True for a bare capitalized-term definition opener ("Spot Trading
     Volume is the total", "Derivatives Trading Volume is the").
@@ -1445,11 +1500,13 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
     """True when ln opens a footnote-definition block.
 
     Any single-line shape (_FOOTNOTE_DEF_RE, bare numbered, paren,
-    bracketed), or the fourth shape: a numeric key + bare capitalized
-    term whose NEXT line starts with a definition verb ("1 Coinbase
-    Total Trading Volume" / "comprises Spot Trading Volume"). The
-    verb-on-next-line requirement is the guard that keeps a numbered
-    heading ("1 Fourth Quarter Highlights") from opening a block.
+    bracketed), a footnote pointer ("1 See ...", "1 Refer to ..." —
+    batch 173), a bare-numbered footnote sentence (batch 173), or the
+    fourth shape: a numeric key + bare capitalized term whose NEXT line
+    starts with a definition verb ("1 Coinbase Total Trading Volume" /
+    "comprises Spot Trading Volume"). The verb-on-next-line requirement
+    is the guard that keeps a numbered heading ("1 Fourth Quarter
+    Highlights") from opening a block.
     include_paren=False for the headline loop: a paren line ("(B)Crude
     oil ...", "(2026) ACME CORP REPORTS ...") stays headline-eligible
     there — batch 126 returns None for a supplement packet whose best
@@ -1462,6 +1519,8 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
         or (include_paren and _LEDE_FOOTNOTE_RE.match(ln))
         or _FOOTNOTE_BRACKET_RE.match(ln)
         or _FOOTNOTE_TERM_VERB_RE.match(ln)
+        or _FOOTNOTE_POINTER_RE.match(ln)
+        or _is_bare_numbered_footnote(ln)
     ):
         return True
     return bool(
@@ -1943,6 +2002,37 @@ _CONTACT_HEADER_RE = re.compile(
     r"contacts?\b",
     re.IGNORECASE,
 )
+
+# A bare job-title line ("Chief Financial Officer", "President and Chief
+# Executive Officer" — Moody's quote attributions, 6 stored rows): the
+# name is missing (dropped elsewhere), so the role alone is a dangling
+# fragment, never highlights. Every word must be role vocabulary (2-6
+# words) and at least one must be an anchor (Officer/President/...), so
+# a prose line that merely mentions a role ("Our Chief Financial Officer
+# said ...") never matches — it carries verbs and other words.
+_ROLE_TITLE_WORDS = frozenset(
+    "president and chief executive financial operating commercial legal "
+    "technology information marketing strategy people risk accounting "
+    "senior vice officer director chairman chairwoman chair founder "
+    "co-founder cofounder group global managing head investor relations "
+    "general counsel secretary treasurer principal corporate development "
+    "business human resources administrative".split()
+)
+_ROLE_ANCHOR_WORDS = frozenset(
+    "officer president chairman chairwoman chair director founder "
+    "co-founder cofounder head counsel secretary treasurer principal".split()
+)
+
+
+def _is_bare_role_line(ln: str) -> bool:
+    """True when ln is only a job title, no name or other content."""
+    words = [w.strip(",.").lower() for w in ln.split()]
+    if not 2 <= len(words) <= 6:
+        return False
+    if not all(w in _ROLE_TITLE_WORDS for w in words):
+        return False
+    return any(w in _ROLE_ANCHOR_WORDS for w in words)
+
 
 # Phone numbers inside contact blocks (609-806-1200, 1.650.607.0349, ...).
 _PHONE_RE = re.compile(r"\+?\d[\d.\-\s()]{7,}\d")
@@ -3433,6 +3523,8 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
             or _LEDE_FOOTNOTE_NUM_RE.match(s)
             or _FOOTNOTE_BRACKET_RE.match(s)
             or _FOOTNOTE_DEF_SENTENCE_RE.match(s)
+            or _FOOTNOTE_POINTER_RE.match(s)
+            or _is_bare_numbered_footnote(s)
             or _ROUNDING_NOTE_RE.match(s)
         ):
             continue  # footnote-definition sentence, including the
@@ -3442,7 +3534,10 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
             # rounding-note sentence ("Figures have been rounded for
             # presentation purposes only.", "Note: Figures presented may
             # not sum precisely due to rounding.") is the same
-            # boilerplate class. Batch 167.
+            # boilerplate class. Batch 167. Batch 173: a footnote
+            # pointer ("1 See ...") or bare-numbered footnote sentence
+            # ("1 Information about Affirm's use of non-GAAP ...") is
+            # the same class on a page-flattened line.
         if _is_lede_table_line(s) or len(_NUMBER_TOKEN_RE.findall(s)) >= 6:
             # Table residue — but the release title may sit at its head,
             # ahead of the table. Rescue it as the headline when it is
@@ -3901,6 +3996,13 @@ def extract_press_release_highlights(
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
                 continue  # contact blocks some filers put before the headline
+            if _is_bare_role_line(ln):
+                i += 1
+                continue  # bare quote-attribution role line ("Chief
+                # Financial Officer", "President and Chief Executive
+                # Officer" — Moody's, 6 stored rows): the name is
+                # missing, so the role alone is a dangling fragment,
+                # never highlights. Batch 173.
             if _is_lede_heading_fragment(ln):
                 i += 1
                 continue  # section-heading tail ("QUARTER", "YEAR") — never prose
@@ -3910,6 +4012,12 @@ def extract_press_release_highlights(
                 # never lede prose — after a table-headed section is
                 # rejected, its heading would otherwise consume a lede
                 # line and starve the real bullets below the table.
+            if re.fullmatch(r"Key Points:?", ln.strip(), re.IGNORECASE):
+                i += 1
+                continue  # Batch 173: a "Key Points:" section heading is
+                # the same class — Disney's Q4 FY2024 lede ends on the
+                # dangling heading while its bullets starve below it.
+                # Skipping it lets the bullets in.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
@@ -4179,6 +4287,15 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # after it still closes the last item. Batch 169.
             skip_until = idx + sal
             continue
+        if _LEDE_SYMBOL_LEGEND_RE.match(ln):
+            continue  # symbol legend ("NM = not meaningful",
+            # "“cc” - constant currency" — Walmart's legend after its
+            # footnote run): the table's own footnote, never a bullet
+            # continuation. Batch 173.
+        if _is_bare_role_line(ln):
+            continue  # bare quote-attribution role line — the same
+            # dangling fragment as in the lede loop (Moody's).
+            # Batch 173.
         if ln.startswith(_LEADING_BULLET_STARTS):
             bullets.append(ln)
             in_item = True
@@ -4343,6 +4460,32 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                     # section: a greeting, never a highlight — drop the
                     # whole block. Batch 169.
                     j += sal
+                    continue
+                if _LEDE_SYMBOL_LEGEND_RE.match(collected[j]):
+                    # Symbol legend inside a Highlights section (Walmart:
+                    # "“cc” - constant currency" sits after its footnote
+                    # run in the Third-Quarter Highlights section): the
+                    # table's own footnote, never a highlight. The lede
+                    # loop and the leading-bullet block already skip it;
+                    # the section collector is the path that actually
+                    # serves Walmart, so it needs the skip too. Batch 173.
+                    j += 1
+                    continue
+                if _is_bare_role_line(collected[j]):
+                    # Bare quote-attribution role line inside a Highlights
+                    # section — the same dangling fragment as in the lede
+                    # loop (Moody's). Batch 173.
+                    j += 1
+                    continue
+                if collected[j].rstrip().lower() in (
+                    "key points:",
+                    "key points",
+                ):
+                    # "Key Points:" sub-heading inside a Highlights
+                    # section — the same dangling heading as in the lede
+                    # loop (Disney); the bullets after it are the
+                    # content. Batch 173.
+                    j += 1
                     continue
                 if not _is_lone_bullet_marker(collected[j]):
                     kept.append(collected[j])
