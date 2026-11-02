@@ -1297,6 +1297,57 @@ def _is_lone_bullet_marker(ln: str) -> bool:
 # that endnote boilerplate fill the lede and get stored as highlights.
 _LEDE_FOOTNOTE_RE = re.compile(r"^\([a-z0-9]+\)", re.IGNORECASE)
 
+
+def _is_paren_prose_continuation(ln: str) -> bool:
+    """True when a paren-led line is a wrapped prose continuation, not a
+    footnote definition. Batch 176: the paren shape is the loosest
+    footnote marker — it also matches a parenthesized abbreviation
+    that a wrapped sentence breaks on ("(MRC) protocol, and segment
+    routing over IPv6 (SRv6) ..." — the tail of an Arista bullet;
+    "(QoQ) and 46% year-over-year (YoY), driven by ..." — the tail
+    of a Plug bullet; "(IV) KEYTRUDA. Merck also announced ..." — the
+    tail of a Merck sentence, "(IV)" completing "intravenous (IV)").
+    The section collector was dropping all three as footnote
+    definitions, losing real prose. Two guards, both on the text after
+    the marker — the previous line is deliberately NOT consulted:
+    a genuine definition can follow an unterminated table row
+    (Lilly's "(1) Tirzepatide is marketed ..." follows the revenue
+    table's last row), so a prev-line test would keep real footnotes.
+      - Lowercase lead: a definition is a sentence and starts
+        capitalized; a continuation resumes mid-sentence, so its first
+        word after the marker is lowercase ("protocol", "and").
+      - Single-word first sentence with more text after it: "(IV)
+        KEYTRUDA." is a bare term, not a definition — a definition
+        needs a predicate — and the line then starts a new sentence
+        ("Merck also announced ..."). The "more text" requirement is
+        load-bearing: a bare figure fragment ("(210) (0.67)") has no
+        sentence terminator at all, and a bare marker ("(1)") has no
+        text after it, so neither fires — both stay footnote/table
+        residue, as the CEG/CNC rows require.
+    """
+    m = _LEDE_FOOTNOTE_RE.match(ln)
+    if not m:
+        return False
+    rest = ln[m.end():].strip()
+    if not rest:
+        return False
+    if rest[0].islower():
+        return True
+    # A single alphabetic word (2+ letters) as the whole first
+    # sentence, with a new sentence after it: "(IV) KEYTRUDA. Merck
+    # also announced ..." — the marker's "definition" is a bare term,
+    # not a definition, and the line is the tail of the previous
+    # sentence ("... compared to intravenous (IV) KEYTRUDA."). The
+    # 2+ letter, all-alpha bound is load-bearing: a decimal figure
+    # ("(210) (0.67)") splits on its decimal point, and an
+    # abbreviation ("U.S. ...") splits after one letter — neither
+    # fires, so CEG's table fragments and real definitions stay
+    # footnote residue. A bare marker ("(1)") has no text after it
+    # and never reaches this test.
+    if re.match(r"[A-Za-z]{2,}[.!?]\s+\S", rest):
+        return True
+    return False
+
 # An investor-conference-call notice ("Today, beginning at 3:30 p.m.
 # Central Time ... Emerson management will discuss the second quarter
 # results during an investor conference call. Participants can access a
@@ -1567,11 +1618,19 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
     there — batch 126 returns None for a supplement packet whose best
     headline is a footnote definition, and preserves year-prefixed
     headlines — so the headline loop must not skip paren lines.
+    Batch 176: a paren line that is a wrapped prose continuation
+    ("(MRC) protocol ...", "(QoQ) and ...", "(IV) KEYTRUDA. Merck
+    ...") is not a footnote definition — see
+    _is_paren_prose_continuation.
     """
     if (
         _FOOTNOTE_DEF_RE.match(ln)
         or _LEDE_FOOTNOTE_NUM_RE.match(ln)
-        or (include_paren and _LEDE_FOOTNOTE_RE.match(ln))
+        or (
+            include_paren
+            and _LEDE_FOOTNOTE_RE.match(ln)
+            and not _is_paren_prose_continuation(ln)
+        )
         or _FOOTNOTE_BRACKET_RE.match(ln)
         or _FOOTNOTE_TERM_VERB_RE.match(ln)
         or _FOOTNOTE_POINTER_RE.match(ln)
