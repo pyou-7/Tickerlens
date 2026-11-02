@@ -2387,8 +2387,15 @@ def _looks_like_table_heading(ln: str) -> bool:
 # the lede fallback before any real content is collected. Corporate URLs and
 # social handles (Chubb's "www.chubb.com" / "@Chubb" masthead lines) are contact
 # info too — never headline or lede material.
+# Batch 179: role-abbreviation labels ("PR Contact:" / "IR Contact:" —
+# Chipotle heads every release with them, and the old regexes only knew
+# the spelled-out roles, so "PR Contact: Laurie Schalow" became the
+# headline). Word-boundaried so "their contact" / "first contact" never
+# match — the "ir" sits mid-word there, with no boundary before it.
 _CONTACT_LINE_RE = re.compile(
-    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)|[\w.\-+]+@[\w.\-]+\.\w+"
+    r"(media|press|investor)[\s\-–]*(contacts?|inquiries?)"
+    r"|\b(pr|ir)[\s\-–]*(contacts?|inquiries?)\b"
+    r"|[\w.\-+]+@[\w.\-]+\.\w+"
     r"|www\.|@\w",
     re.IGNORECASE,
 )
@@ -2413,7 +2420,10 @@ _CONTACT_LINE_RE = re.compile(
 # "contacts?(\s|:)" to *terminate* the lede when a contacts section appears at
 # the end of a release.
 _CONTACT_HEADER_RE = re.compile(
-    r"^((for more information|investor(\s+relations)?|financial|media|press|editorial)\s+)?"
+    # Batch 179: role-abbreviation prefixes ("PR Contact:" / "IR Contact:"
+    # — Chipotle) join the prefix list, so the header branch fires and
+    # the block skip consumes the phone/email detail lines with it.
+    r"^((for more information|investor(\s+relations)?|financial|media|press|editorial|pr|ir)\s+)?"
     r"contacts?\b"
     # Company-prefixed header: "The Progressive Corporation Company Contact:"
     # (batch 105). A real headline never ends with "Company Contact:".
