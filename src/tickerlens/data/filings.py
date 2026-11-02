@@ -669,6 +669,35 @@ def _is_lede_period_header(ln: str) -> bool:
     )
 
 
+# A bare period-fragment line ("Three Months", "Six Months", "Ended",
+# "Year Ended", "Full Year", "Three Months Ended"): a table's period
+# header flattened onto one line, with no month or year to anchor it.
+# Every word must be a period token — a prose sentence ("Three months
+# ended September 30, 2025 ...") carries a month name and digits, so it
+# never qualifies, and a bullet ("• Three months ...") never qualifies
+# either. The lede loop already drops these via _is_lede_table_line
+# (every fragment is a table line), but the leading-bullet block and the
+# Highlights section collector break only on the strong heading shapes
+# (period header needs a year; date header needs "ended" or a month —
+# "Three Months" has neither), so a fragment rides along as a bullet
+# continuation (BlackRock: the "SUMMARY OF NONOPERATING INCOME" table's
+# header follows the expense bullets, and the fragments tail the stored
+# rows). Batch 174.
+_PERIOD_FRAGMENT_WORDS = frozenset(
+    "three six nine twelve month months ended year years full quarter quarters".split()
+)
+
+
+def _is_bare_period_fragment(ln: str) -> bool:
+    """True for a standalone period-header fragment line."""
+    if _BULLET_LEAD_RE.match(ln):
+        return False
+    words = [w.strip(",.").lower() for w in ln.split()]
+    if not 1 <= len(words) <= 4:
+        return False
+    return all(w in _PERIOD_FRAGMENT_WORDS for w in words)
+
+
 # One token of a flattened date header ("Quarter Ended September 30, Nine
 # Months Ended September 30,"): period words, month names, and day/year
 # numbers, with trailing commas stripped. The all-words-must-match rule
@@ -4306,13 +4335,18 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 or _TABLE_WORD_UNITS_RE.match(ln)
                 or _is_lede_table_heading(ln)
                 or _is_lede_period_header(ln)
+                or _is_bare_period_fragment(ln)
             ):
                 break  # a table starts where the bullets end (AppLovin's
                 # "First Quarter 2026 Financial Guidance Summary" heading
                 # after the bullets): the block ends here, the heading is
                 # not a bullet continuation. Only the strong heading shapes
                 # break — data rows and labels stay out, so a figure-dense
-                # bullet continuation is never cut. Batch 153.
+                # bullet continuation is never cut. Batch 153. Batch 174:
+                # a bare period fragment ("Three Months") is the same
+                # signal — BlackRock's nonoperating-income table header
+                # follows the expense bullets, and the fragments tail the
+                # block as continuations.
             bullets.append(ln)
             if (
                 # Batch 158: the terminal-punctuation check sees through a
@@ -4388,6 +4422,7 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 or _is_lede_table_heading(follow)
                 or _is_lede_period_header(follow)
                 or _is_lede_date_header(follow)
+                or _is_bare_period_fragment(follow)
             ):
                 hit_table = True
                 break  # a table starts where the highlights end (AppLovin's
@@ -4398,6 +4433,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # Batch 154: a date header ("Three Months Ended June 30,")
                 # breaks too — it is the table's period header, and without
                 # it Instacart's financial section ends on the orphan line.
+                # Batch 174: a bare period fragment ("Three Months") is the
+                # same signal — the period header needs a year and the date
+                # header needs "ended" or a month, so the fragment alone
+                # matches neither and would be collected as content.
             collected.append(follow)
             if len(collected) >= 12:
                 break
