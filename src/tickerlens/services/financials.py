@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 import threading
 import time
 
@@ -11,7 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from tickerlens.data.edgar import EdgarClient, normalize_cik
+from tickerlens.data.edgar import (
+    EdgarClient,
+    companyfacts_with_predecessors,
+    normalize_cik,
+)
 from tickerlens.data.filings import (
     extract_management_guidance,
     extract_press_release_highlights,
@@ -93,6 +98,15 @@ _QUARTERLY_FILING_FORMS = frozenset({"10-Q", "10-K", "10-Q/A", "10-K/A"})
 # cik -> (checked_at_monotonic, latest_filing_date_processed)
 _filings_check_state: dict[str, tuple[float, str | None]] = {}
 _filings_check_lock = threading.Lock()
+
+# Batch 89: the per-quarter 8-K exhibit crawl inside
+# _enrich_press_release_highlights is the unbounded latency source on page
+# render paths — measured 26s for HSY and >240s for NLY on first view, from
+# up to 8 sequential large SEC HTML downloads (1 10-K + 8 ex-99 exhibits).
+# The budget bounds the added latency per visit; unfilled rows keep their NULLs
+# and the existing any-None lazy triggers (detail backfill, enrich, refresh)
+# complete them on later visits — progressive, self-healing, never raising.
+DISCLOSURE_BACKFILL_BUDGET_SECONDS = 30.0
 
 
 def _latest_quarterly_filing_date(submissions: dict) -> str | None:
@@ -332,7 +346,20 @@ def _quarter_label_for_report_date(
     stored row; None when labeling is unsafe.
     """
     if newest_end is not None and newest_label is not None:
-        walked = _walk_label(newest_label, _quarter_steps(newest_end, report_date))
+        # Batch 117: _quarter_steps is forward-only (max(1, ...) floor, built
+        # for the xbrl sequence repair which always passes earlier < later
+        # and negates explicitly). A middle-gap filing predates the newest
+        # stored row — DOW/URI landed Q3 FY2026 while Q2 was still missing,
+        # and the floored +1 step walked Q3 forward to "Q4" instead of back
+        # to Q2. Sign the steps here, mirroring the repair path's convention;
+        # _walk_label already walks predecessors for negative steps.
+        if report_date == newest_end:
+            return f"{newest_label[1]} FY{newest_label[0]}"
+        if report_date > newest_end:
+            steps = _quarter_steps(newest_end, report_date)
+        else:
+            steps = -_quarter_steps(report_date, newest_end)
+        walked = _walk_label(newest_label, steps)
         if walked is not None:
             return f"{walked[1]} FY{walked[0]}"
     if fiscal_year_end and len(fiscal_year_end) == 4 and fiscal_year_end.isdigit():
@@ -773,6 +800,58 @@ def _seed_time_enrichment(db: Session, cik: str, ticker: str) -> None:
             logger.warning("seed-time quote fetch failed for %s", ticker, exc_info=True)
 
 
+def _is_blank_disclosure(value: str | None) -> bool:
+    """True when a stored disclosure field holds no content (batch 149).
+
+    None or whitespace-only both count as missing: an empty string is not
+    a previously-good value, so the enrichment fill and its triggers must
+    treat it exactly like None, or the row can never self-heal.
+    """
+    return value is None or not value.strip()
+
+
+_QUARTER_LABEL_RE = re.compile(r"\bQ([1-4])\s+FY(\d{4})\b")
+
+
+def _correct_stale_source_label(
+    stored: str | None, live: str | None, fiscal_period: str | None
+) -> str | None:
+    """Corrected source label when the stored quarter is a pre-batch-52
+    fossil, else None.
+
+    Rows enriched before the batch-52 count-back fix carry a "Q1" source
+    label for a Q3 (or Q2) quarter — the old labeler counted forward from
+    Q1 in a mid-cycle window. The live discovery label is correct now,
+    but the backfill only fills blank fields, so a wrong-but-present label
+    stayed wrong forever (14 rows: NFLX/PLUG/AMZN/XOM/... Q3 FY2024
+    stored as "Q1 FY2024"). Correct it only on a two-against-one vote:
+    the stored quarter disagrees with the live quarter, the live quarter
+    equals the row's XBRL fiscal_period, and the fiscal years agree — so
+    only the quarter moves, never the year. The Feb-year-end FY-offset
+    convention question (stored FY vs live FY disagreeing) is untouched,
+    and a row whose own fiscal_period is suspect (e.g. fiscal_year 2021
+    on a 2024 row) never corrects, because the live quarter cannot match
+    its fiscal_period.
+    """
+    if not stored or not live or not fiscal_period:
+        return None
+    sm = _QUARTER_LABEL_RE.search(stored)
+    lm = _QUARTER_LABEL_RE.search(live)
+    if sm is None or lm is None:
+        return None
+    if sm.group(1) == lm.group(1):
+        return None  # quarters agree — nothing stale
+    if sm.group(2) != lm.group(2):
+        return None  # fiscal years disagree — the offset-convention
+        # question, not a fossil; leave the label alone
+    if f"Q{lm.group(1)}" != fiscal_period:
+        return None  # live quarter does not match the row's own fiscal
+        # quarter — the stored label is not the odd one out
+    return re.sub(
+        r"\bQ[1-4](?=\s+FY\d{4})", f"Q{lm.group(1)}", stored, count=1
+    )
+
+
 class FinancialsService:
     """Financial statement extraction, persistence, and enrichment service."""
 
@@ -791,7 +870,7 @@ class FinancialsService:
     ) -> list[QuarterlyFinancials]:
         normalized_cik = normalize_cik(cik)
         submissions = self.edgar_client.submissions(normalized_cik)
-        companyfacts = self.edgar_client.companyfacts(normalized_cik)
+        companyfacts = companyfacts_with_predecessors(self.edgar_client, normalized_cik)
         return extract_recent_quarterly_financials(
             companyfacts,
             fiscal_year_end=submissions.get("fiscalYearEnd"),
@@ -824,7 +903,7 @@ class FinancialsService:
         # The disk cache has a TTL, but the pull only happens when the
         # freshness check suspects new data, so it must see the current feed.
         submissions = self.edgar_client.submissions(cik, fresh=True)
-        companyfacts = self.edgar_client.companyfacts(cik, fresh=True)
+        companyfacts = companyfacts_with_predecessors(self.edgar_client, cik, fresh=True)
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
@@ -951,8 +1030,13 @@ class FinancialsService:
                 db2 = self._session or get_session()
                 try:
                     # Fill highlights for the new quarter; only touches rows
-                    # missing them, never wipes on transient failure.
-                    self._enrich_press_release_highlights(db2, ticker, cik)
+                    # missing them, never wipes on transient failure. Batch 89:
+                    # time-budgeted — the quarterly refresh path must not hang
+                    # on a slow filer's exhibit crawl.
+                    self._enrich_press_release_highlights(
+                        db2, ticker, cik,
+                        deadline=time.monotonic() + DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+                    )
                     # Acknowledge ingested-but-unextractable middle gaps (batch
                     # 48): a refire that still yields no quarter for an
                     # in-window filing whose facts ARE in companyfacts is
@@ -996,7 +1080,7 @@ class FinancialsService:
         changed. Never raises.
         """
         try:
-            companyfacts = self.edgar_client.companyfacts(cik)
+            companyfacts = companyfacts_with_predecessors(self.edgar_client, cik)
             db = self._session or get_session()
             try:
                 company = db.get(Company, cik)
@@ -1075,7 +1159,7 @@ class FinancialsService:
             )
             if not missing:
                 return
-            companyfacts = self.edgar_client.companyfacts(cik)
+            companyfacts = companyfacts_with_predecessors(self.edgar_client, cik)
             revenue_facts = _revenue_duration_facts(companyfacts)
             new = sorted(
                 {m for m in missing if _is_structural_gap(revenue_facts, submissions, m)}
@@ -1092,8 +1176,18 @@ class FinancialsService:
                 "quarter acknowledgment failed for %s", cik, exc_info=True
             )
 
-    def enrich_company(self, ticker: str, session: Session | None = None) -> None:
-        """Update description, price, and market cap for an existing company."""
+    def enrich_company(
+        self,
+        ticker: str,
+        session: Session | None = None,
+        disclosure_budget_seconds: float | None = DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+    ) -> None:
+        """Update description, price, and market cap for an existing company.
+
+        ``disclosure_budget_seconds`` (batch 89) bounds the per-quarter 8-K
+        exhibit crawl so first-view renders never hang on a slow filer; the
+        remaining quarters self-heal on later visits. ``None`` = unbounded.
+        """
         cik = _resolve_cik(self.edgar_client, ticker)
         db = session or self._session or get_session()
         try:
@@ -1123,8 +1217,15 @@ class FinancialsService:
 
             # Press-release highlights are per-period and equally expensive; fill
             # only rows that don't have them yet, and never wipe a
-            # previously-good value on transient failure.
-            self._enrich_press_release_highlights(db, ticker, cik)
+            # previously-good value on transient failure. Batch 89: the
+            # exhibit crawl is time-budgeted — a slow filer must not hold a
+            # page render hostage; unfilled quarters self-heal on later visits.
+            deadline = (
+                None
+                if disclosure_budget_seconds is None
+                else time.monotonic() + disclosure_budget_seconds
+            )
+            self._enrich_press_release_highlights(db, ticker, cik, deadline=deadline)
 
             # One valuation snapshot per day — powers the "signal changed"
             # indicator on the Overview card (PRD §4.11).
@@ -1163,7 +1264,7 @@ class FinancialsService:
             return None, None
 
     def _enrich_press_release_highlights(
-        self, db: Session, ticker: str, cik: str
+        self, db: Session, ticker: str, cik: str, deadline: float | None = None
     ) -> None:
         """Fill missing per-period press-release highlights from 8-K ex-99 exhibits.
 
@@ -1171,6 +1272,19 @@ class FinancialsService:
         date (the stable period key — not FY/FP labels). Best-effort: rows
         without a matched exhibit keep None and render "Not available for this
         period"; a transient failure never wipes a previously-good value.
+
+        ``deadline`` is an absolute ``time.monotonic()`` timestamp (batch 89):
+        the per-quarter exhibit crawl stops when it passes, so page render
+        paths never block on a slow filer. Quarters are processed latest-first
+        so the budget fills the most valuable rows first (latest quarter =
+        AI-briefing context + detail default view); the remaining NULLs are
+        picked up by the next lazy trigger. ``None`` means unbounded.
+
+        Batch 149: "missing" means blank (None or whitespace-only), not just
+        None — a stored empty string is not a value, and the old ``is None``
+        checks let exactly one such row (PCAR Q1 FY2026, stored '') sit
+        unfillable forever: the lazy trigger fired on its NULL guidance,
+        but the highlights fill skipped it because '' is not None.
         """
         rows: list[QuarterlyFinancial] = (
             db.execute(
@@ -1179,18 +1293,30 @@ class FinancialsService:
             .scalars()
             .all()
         )
-        missing = [
-            r
-            for r in rows
-            if r.press_release_highlights is None
-            or r.management_guidance is None
-            or r.transcript_excerpts is None
-        ]
+        # Latest-first: under a deadline the most-viewed rows fill first.
+        missing = sorted(
+            (
+                r
+                for r in rows
+                if _is_blank_disclosure(r.press_release_highlights)
+                or _is_blank_disclosure(r.management_guidance)
+                or _is_blank_disclosure(r.transcript_excerpts)
+            ),
+            key=lambda r: r.period_end,
+            reverse=True,
+        )
         if not missing:
             return
 
         try:
-            periods = discover_earnings_filings(ticker, self.edgar_client, n_quarters=len(rows))
+            # Batch 97: pass the oldest stored period so discovery paginates
+            # far enough to cover it — the stored window can lag submissions
+            # when EDGAR companyfacts is behind (pending-filing cohort).
+            oldest = min(r.period_end for r in rows)
+            periods = discover_earnings_filings(
+                ticker, self.edgar_client, n_quarters=len(rows),
+                oldest_period_end=oldest,
+            )
         except Exception:
             logger.warning(
                 "Earnings-release discovery failed for %s", ticker, exc_info=True
@@ -1198,22 +1324,45 @@ class FinancialsService:
             return
         by_period_end = {p.period_end: p for p in periods}
 
-        for row in missing:
+        for i, row in enumerate(missing):
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.info(
+                    "Disclosure backfill budget expired for %s; %d quarter(s) deferred",
+                    ticker,
+                    len(missing) - i,
+                )
+                break
             period = by_period_end.get(row.period_end)
             if period is None:
                 continue
             hl, hl_src, gd, gd_src, ex, ex_src = self._fetch_press_release_disclosures(cik, period)
             # Never overwrite a previously-good value — only fill fields that
             # are still missing (a transient failure never wipes good data).
-            if hl is not None and row.press_release_highlights is None:
+            # Batch 149: blank ('' / whitespace) counts as missing, not good.
+            if hl is not None and _is_blank_disclosure(row.press_release_highlights):
                 row.press_release_highlights = hl
                 row.press_release_source = hl_src
-            if gd is not None and row.management_guidance is None:
+            if gd is not None and _is_blank_disclosure(row.management_guidance):
                 row.management_guidance = gd
                 row.management_guidance_source = gd_src
-            if ex is not None and row.transcript_excerpts is None:
+            if ex is not None and _is_blank_disclosure(row.transcript_excerpts):
                 row.transcript_excerpts = ex
                 row.transcript_source = ex_src
+            # Batch 171: correct a stale source label while this period is
+            # already re-fetched — a wrong-but-present label was never
+            # overwritten by the blank-only fills above, so the pre-batch-52
+            # "Q1" fossils stayed wrong forever. Only the quarter moves,
+            # only when live and the row's fiscal quarter agree.
+            for attr, live_src in (
+                ("press_release_source", hl_src),
+                ("management_guidance_source", gd_src),
+                ("transcript_source", ex_src),
+            ):
+                corrected = _correct_stale_source_label(
+                    getattr(row, attr), live_src, row.fiscal_period
+                )
+                if corrected is not None:
+                    setattr(row, attr, corrected)
 
     def _fetch_press_release_highlights(
         self, cik: str, period: EarningsPeriod
@@ -2112,8 +2261,17 @@ class FinancialsService:
         except Exception:
             detail = None
         rows = self.get_stored_quarters(ticker, session=session)
+        # SIC drives REIT-aware thesis copy in generate_ai_analysis (batch 88);
+        # a local Company lookup — no network, never raises the briefing.
+        sic: str | None = None
+        try:
+            db = session or self._session or get_session()
+            company = db.get(Company, overview.cik)
+            sic = company.sic if company else None
+        except Exception:
+            sic = None
         return generate_ai_analysis(
-            overview=overview, detail=detail, valuation=val, rows=rows
+            overview=overview, detail=detail, valuation=val, rows=rows, sic=sic
         )
 
     def refresh_watchlist_quotes(
@@ -2275,20 +2433,26 @@ class FinancialsService:
             # would render "Not available for this period" forever. Fill them
             # lazily on first detail view — best-effort and never raising; the
             # enrichment short-circuits once rows are filled and SEC responses
-            # are disk-cached, so repeat visits stay cheap.
+            # are disk-cached, so repeat visits stay cheap. Batch 89: the crawl
+            # is time-budgeted and latest-first — a slow filer adds at most
+            # DISCLOSURE_BACKFILL_BUDGET_SECONDS to the render, and the
+            # remaining NULLs self-heal on the next visit.
             # NOTE: the trigger must cover all three disclosure fields, not
             # just highlights — rows can have highlights filled while guidance
             # is still missing (e.g. AVGO/INTU before the batch-50 guidance
             # extractor fix); a highlights-only trigger would never backfill
             # them.
             if any(
-                r.press_release_highlights is None
-                or r.management_guidance is None
-                or r.transcript_excerpts is None
+                _is_blank_disclosure(r.press_release_highlights)
+                or _is_blank_disclosure(r.management_guidance)
+                or _is_blank_disclosure(r.transcript_excerpts)
                 for r in all_rows
             ):
                 try:
-                    self._enrich_press_release_highlights(db, ticker, cik)
+                    self._enrich_press_release_highlights(
+                        db, ticker, cik,
+                        deadline=time.monotonic() + DISCLOSURE_BACKFILL_BUDGET_SECONDS,
+                    )
                     if owns_session:
                         db.commit()
                 except Exception:

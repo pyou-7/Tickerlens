@@ -13,6 +13,11 @@ _RANGES: list[tuple[int, int, str]] = [
     (6000, 6199, "Banking"),
     (6200, 6299, "Securities & Investments"),
     (6300, 6399, "Insurance"),
+    # SIC 64xx is "Insurance Agents, Brokers, and Service" — batch 88:
+    # AON (sic 6411) fell in the unmapped 6400-6499 gap, so its overview
+    # sector was None while the valuation model already priced it on the
+    # insurer path (batch 70, _BANK_INSURER_SIC_RANGES covers 6300-6499).
+    (6400, 6499, "Insurance"),
     (6500, 6799, "Real Estate"),
     (7000, 7299, "Hospitality & Services"),
     (7300, 7369, "Business Services"),

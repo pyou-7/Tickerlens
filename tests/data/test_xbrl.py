@@ -4,8 +4,11 @@ import pytest
 
 from tickerlens.data.xbrl import (
     Metric,
+    PeriodMetric,
     UnsupportedFilerError,
     XbrlFact,
+    _detect_split_events,
+    _reconcile_eps_basic_diluted,
     _split_share_restatements,
     balance_sheet_metric,
     concept_facts,
@@ -2105,6 +2108,84 @@ def test_q4_eps_falls_back_when_eps_zero() -> None:
     assert metrics[dt.date(2025, 12, 31)].value == -8.17
 
 
+def _eps_pair(
+    end: dt.date, basic: float, diluted: float, fp: str = "Q4", fy: int = 2026
+) -> tuple[PeriodMetric, PeriodMetric]:
+    return (
+        PeriodMetric(
+            metric=Metric.EPS_BASIC, fy=fy, fp=fp, end=end, value=basic,
+            source_tag="EarningsPerShareBasic",
+        ),
+        PeriodMetric(
+            metric=Metric.EPS_DILUTED, fy=fy, fp=fp, end=end, value=diluted,
+            source_tag="EarningsPerShareDiluted",
+        ),
+    )
+
+
+def test_reconcile_eps_clamps_flipped_diluted_to_basic() -> None:
+    # BBY FY2026Q4-shaped: the batch-12 share-implied derivation produced
+    # 2.5584 basic / 2.5798 diluted — arithmetically impossible. The
+    # diluted leg is clamped to basic.
+    b, d = _eps_pair(dt.date(2026, 1, 31), 2.5584, 2.5798)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert len(fixed) == 1
+    assert fixed[0].value == 2.5584
+    assert fixed[0].end == dt.date(2026, 1, 31)
+
+
+def test_reconcile_eps_leaves_healthy_pairs_alone() -> None:
+    b, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.48)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == 1.48  # untouched
+
+
+def test_reconcile_eps_equalizes_loss_quarter_pair() -> None:
+    # Loss quarters: diluted must equal basic (anti-dilutive securities are
+    # excluded). DLTR FY2024Q4 filed −17.18/−17.17.
+    b, d = _eps_pair(dt.date(2025, 2, 1), -17.18, -17.17)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -17.18
+
+
+def test_reconcile_eps_ignores_unpaired_diluted() -> None:
+    _, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.50)
+    fixed = _reconcile_eps_basic_diluted([], [d])
+    assert fixed[0].value == 1.50  # no basic leg: no basis to judge
+
+
+def test_q4_eps_flip_never_reaches_rows() -> None:
+    # End-to-end: BBY FY2026-shaped facts (coarsely rounded 2dp 9M EPS)
+    # derive a flipped Q4 pair pre-fix (2.5584 basic vs 2.5798 diluted);
+    # the stored row must never carry diluted > basic.
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-02-02", "2025-11-01", 28_000_000_000, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 41_000_000_000, 2026, "FY"),
+        ],
+        net_income_values=[
+            ("2025-02-02", "2025-11-01", 528_000_000, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 1_069_000_000, 2026, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-02-02", "2025-11-01", 2.50, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 5.06, 2026, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-02-02", "2025-11-01", 2.48, 2026, "Q3"),
+            ("2025-02-02", "2026-01-31", 5.04, 2026, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="0131", periods=4
+    )
+    q4 = next(r for r in rows if r.fp == "Q4")
+    assert q4.eps_basic is not None and q4.eps_diluted is not None
+    assert q4.eps_diluted <= q4.eps_basic
+
+
 def _hal_like_companyfacts(
     *,
     cont_ops_annual_eps: float,
@@ -2813,6 +2894,85 @@ def test_stock_split_25_to_1_forward_detected_and_rescaled() -> None:
     assert by_end[dt.date(2025, 3, 31)] == 0.40
     assert by_end[dt.date(2025, 6, 30)] == 1.10
     assert by_end[dt.date(2026, 3, 31)] == 1.36
+
+
+def test_stock_split_7_to_1_forward_detected_and_rescaled() -> None:
+    # Mirror the live AAPL case (batch 122): a 7-for-1 split in 2014-06.
+    # The 7x ratio was missing from _SPLIT_RATIOS, so only the 2020 4:1
+    # event ever fired and pre-2014 facts rescaled 4x instead of 28x.
+    # The FY2014 10-K (filed 2014-10-27) restated Q1/Q2 FY2014 diluted EPS
+    # at exactly 1/7 (14.50 -> 2.07, 11.62 -> 1.66); Q4 FY2013 was never
+    # restated and must rescale via classification, like GE's Q4-2020.
+    companyfacts = {
+        "facts": {
+            "us-gaap": {
+                "EarningsPerShareDiluted": {
+                    "units": {
+                        "USD/shares": [
+                            fact("2013-06-30", "2013-09-28", 8.26, 2013, "Q4", filed="2013-10-30"),
+                            fact("2013-09-29", "2013-12-28", 14.50, 2014, "Q1", filed="2014-01-28"),
+                            fact("2013-12-29", "2014-03-29", 11.62, 2014, "Q2", filed="2014-04-24"),
+                            fact("2013-09-29", "2013-12-28", 2.07, 2014, "Q1", filed="2014-10-27"),
+                            fact("2013-12-29", "2014-03-29", 1.66, 2014, "Q2", filed="2014-10-27"),
+                            fact("2014-06-29", "2014-09-27", 1.42, 2014, "Q4", filed="2014-10-27"),
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "0926")
+    by_end = {item.end: item.value for item in series}
+    # Never-restated pre-split quarter rescales 7x to the post-split basis.
+    assert abs(by_end[dt.date(2013, 9, 28)] - 8.26 / 7) < 0.05
+    # Restated and native post-split facts sit on the latest basis already.
+    assert by_end[dt.date(2013, 12, 28)] == 2.07
+    assert by_end[dt.date(2014, 3, 29)] == 1.66
+    assert by_end[dt.date(2014, 9, 27)] == 1.42
+
+
+def _split_fact(start: str, end: str, val: float, filed: str) -> XbrlFact:
+    return XbrlFact(
+        start=dt.date.fromisoformat(start),
+        end=dt.date.fromisoformat(end),
+        val=val,
+        filed=dt.date.fromisoformat(filed),
+        form="10-Q",
+    )
+
+
+def test_split_detection_rejects_disagreeing_corroboration() -> None:
+    # Mirror the live CRM case (batch 122): the Aug-2018 10-Q restated
+    # Q2 quarterly basic EPS 0.02 -> 0.06 (3x) and 6M basic EPS
+    # 0.01 -> 0.07 (7x). No split happened — a real split restates every
+    # comparative at one ratio — so the two disagreeing votes must not
+    # fabricate a 7x event (which had inflated CRM's 2008-2011 EPS 7x).
+    facts = [
+        _split_fact("2017-05-01", "2017-07-31", 0.02, "2017-08-25"),
+        _split_fact("2017-05-01", "2017-07-31", 0.06, "2018-08-31"),
+        _split_fact("2017-02-01", "2017-07-31", 0.01, "2017-08-25"),
+        _split_fact("2017-02-01", "2017-07-31", 0.07, "2018-08-31"),
+    ]
+    assert _detect_split_events(facts) == []
+
+
+def test_split_detection_keeps_agreeing_cluster_despite_stray_vote() -> None:
+    # Two groups restated at 1/7 by one filing, plus a stray group
+    # restated 3x by the same filing: the event still fires at the
+    # agreeing scale, and the stray period is not marked pre-split.
+    facts = [
+        _split_fact("2013-09-29", "2013-12-28", 14.50, "2014-01-28"),
+        _split_fact("2013-09-29", "2013-12-28", 2.07, "2014-10-27"),
+        _split_fact("2013-12-29", "2014-03-29", 11.62, "2014-04-24"),
+        _split_fact("2013-12-29", "2014-03-29", 1.66, "2014-10-27"),
+        _split_fact("2014-03-30", "2014-06-28", 0.50, "2014-07-22"),
+        _split_fact("2014-03-30", "2014-06-28", 1.50, "2014-10-27"),
+    ]
+    events = _detect_split_events(facts)
+    assert len(events) == 1
+    assert events[0].date == dt.date(2014, 10, 27)
+    assert abs(events[0].scale - 1 / 7) < 0.01
+    assert events[0].period_ends == {dt.date(2013, 12, 28), dt.date(2014, 3, 29)}
 
 
 def test_reverse_split_8_to_1_detected_and_rescaled() -> None:
@@ -3715,6 +3875,9 @@ def _oxy_discontinued_facts(interim_val: float) -> dict:
 
 
 def _oxy_revenue_facts() -> dict:
+    """Live OXY shape: 2025 quarters plus the 2025 10-K's restatement of
+    FY2024 Revenues ($26,725M → $22,019M, OxyChem's 2024 revenues removed)
+    — the re-presentation proof the batch-120 guard requires."""
     return {
         "Revenues": {
             "units": {
@@ -3730,6 +3893,14 @@ def _oxy_revenue_facts() -> dict:
                         "2025-01-01", "2025-12-31", 21_593_000_000, 2025, "FY",
                         filed="2026-02-18",
                     ),
+                    fact(
+                        "2024-01-01", "2024-12-31", 26_725_000_000, 2024, "FY",
+                        filed="2025-02-18",
+                    ),
+                    fact(
+                        "2024-01-01", "2024-12-31", 22_019_000_000, 2024, "FY",
+                        filed="2026-02-18",
+                    ),
                 ]
             }
         }
@@ -3737,12 +3908,17 @@ def _oxy_revenue_facts() -> dict:
 
 
 def test_discontinued_basis_break_detected() -> None:
-    """Batch 85 (live OXY case): 9M discontinued-ops income tagged 0 in the
-    10-Q but nonzero in the 10-K for the same fiscal year — the FY start is
-    a basis break."""
+    """Batch 85 (live OXY case) + batch 120: 9M discontinued-ops income
+    tagged 0 in the 10-Q but nonzero in the 10-K for the same fiscal
+    year, AND the 10-K restates a prior-year annual fact — the FY start
+    is a basis break."""
     from tickerlens.data.xbrl import _discontinued_basis_break_starts
 
-    companyfacts = {"facts": {"us-gaap": _oxy_discontinued_facts(0)}}
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_oxy_discontinued_facts(0), **_oxy_revenue_facts()}
+        }
+    }
     assert _discontinued_basis_break_starts(companyfacts) == {dt.date(2025, 1, 1)}
 
 
@@ -3775,7 +3951,8 @@ def test_discontinued_basis_break_skips_fabricated_q4() -> None:
 
 def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
     """The cash-flow un-cumulation (year − 9M) has the same exposure and
-    the same guard."""
+    the same guard. The fixture mirrors the OXY shape including a
+    prior-year OpCF restatement by the same 10-K."""
     us_gaap = {
         "NetCashProvidedByUsedInOperatingActivities": {
             "units": {
@@ -3783,6 +3960,10 @@ def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
                     fact("2025-01-01", "2025-09-30", 9_000_000_000, 2025, "Q3",
                          filed="2025-11-10"),
                     fact("2025-01-01", "2025-12-31", 10_000_000_000, 2025, "FY",
+                         filed="2026-02-18"),
+                    fact("2024-01-01", "2024-12-31", 11_000_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 10_500_000_000, 2024, "FY",
                          filed="2026-02-18"),
                 ]
             }
@@ -3793,3 +3974,457 @@ def test_discontinued_basis_break_skips_cash_flow_q4() -> None:
         {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
     )
     assert all(item.fp != "Q4" for item in series)
+
+
+def _vrsk_discontinued_facts() -> dict:
+    """Mirror the live VRSK case: the Energy business (discontinued since
+    2022) tags 9M 2024 discontinued-ops income 0 in the 10-Q and a $6.8M
+    residual gain in the 2024 10-K, while the FY2023 comparatives are
+    untouched across filings — no re-presentation, so no basis break."""
+    return {
+        "IncomeLossFromDiscontinuedOperationsNetOfTax": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 0, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-12-31", 6_800_000, 2024, "FY",
+                         filed="2025-02-26"),
+                    fact("2023-01-01", "2023-12-31", -154_000_000, 2023, "FY",
+                         filed="2024-02-21"),
+                    fact("2023-01-01", "2023-12-31", -154_000_000, 2023, "FY",
+                         filed="2025-02-26"),
+                ]
+            }
+        }
+    }
+
+
+def _vrsk_revenue_facts() -> dict:
+    """Live VRSK revenue facts: standalone quarters plus the 9M and FY
+    facts, with FY2023 comparatives identical across the 2023/2024 10-Ks."""
+    return {
+        "RevenueFromContractWithCustomerExcludingAssessedTax": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-03-31", 704_000_000, 2024, "Q1",
+                         filed="2024-05-01"),
+                    fact("2024-04-01", "2024-06-30", 716_800_000, 2024, "Q2",
+                         filed="2024-07-31"),
+                    fact("2024-07-01", "2024-09-30", 725_300_000, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-06-30", 1_420_800_000, 2024, "Q2",
+                         filed="2024-07-31"),
+                    fact("2024-01-01", "2024-09-30", 2_146_100_000, 2024, "Q3",
+                         filed="2024-10-30"),
+                    fact("2024-01-01", "2024-12-31", 2_881_700_000, 2024, "FY",
+                         filed="2025-02-26"),
+                    fact("2023-01-01", "2023-12-31", 2_681_400_000, 2023, "FY",
+                         filed="2024-02-21"),
+                    fact("2023-01-01", "2023-12-31", 2_681_400_000, 2023, "FY",
+                         filed="2025-02-26"),
+                ]
+            }
+        }
+    }
+
+
+def test_discontinued_basis_break_ignores_residual_gain_without_restatement() -> None:
+    """Batch 120 (live VRSK case): the 9M-zero → FY-nonzero discontinued
+    pattern alone is not a break — without a prior-year restatement by
+    the same 10-K, the item is a residual gain on an already-discontinued
+    business, not a reclassification."""
+    from tickerlens.data.xbrl import _discontinued_basis_break_starts
+
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_vrsk_discontinued_facts(), **_vrsk_revenue_facts()}
+        }
+    }
+    assert _discontinued_basis_break_starts(companyfacts) == set()
+
+
+def test_discontinued_basis_break_derives_vrsk_q4() -> None:
+    """End-to-end batch-120 regression: VRSK's Q4 2024 revenue derives as
+    FY − 9M = $735.6M, matching the $736M the Q4 2024 earnings release
+    reported — the quarter the old guard deleted."""
+    companyfacts = {
+        "facts": {
+            "us-gaap": {**_vrsk_discontinued_facts(), **_vrsk_revenue_facts()}
+        }
+    }
+    series = quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(735_600_000)
+    assert by_end[dt.date(2024, 9, 30)] == 725_300_000
+
+
+def _oxy_restated_prior_year_facts() -> dict:
+    """Live OXY shape for the year BEFORE the break: the 2025 10-K restated
+    FY2024 Revenues ($26,725M → $22,019M, OxyChem removed) while the 2024
+    Q3 10-Q's 9M fact ($19,965M) stays on the old basis. Pairing the
+    latest-wins FY with the 9M fact fabricates Q4 ($2,054M); the
+    contemporaneous pair (own-10-K FY − 9M) derives the as-reported Q4
+    ($6,760M)."""
+    return {
+        "Revenues": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 19_965_000_000, 2024, "Q3",
+                         filed="2024-11-08"),
+                    fact("2024-01-01", "2024-12-31", 26_725_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 22_019_000_000, 2024, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        }
+    }
+
+
+def test_derivation_vintage_uses_contemporaneous_pair() -> None:
+    """Batch 121 (live OXY case): a later 10-K's restatement of a prior-year
+    annual must not pair with the year's 9M fact — Q4 FY2024 derives as
+    own-10-K FY − 9M = $6,760M, not the mixed-basis $2,054M."""
+    companyfacts = {"facts": {"us-gaap": _oxy_restated_prior_year_facts()}}
+    series = quarterly_income_metric(companyfacts, Metric.REVENUE, "1231")
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(6_760_000_000)
+
+
+def test_derivation_vintage_cash_flow_uses_contemporaneous_pair() -> None:
+    """Batch 121: the cash-flow un-cumulation has the same exposure — a
+    restated prior-year OpCF annual must pair with the year's 9M fact via
+    the own-10-K leg ($11,000M − $8,000M = $3,000M, not $2,500M)."""
+    us_gaap = {
+        "NetCashProvidedByUsedInOperatingActivities": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 8_000_000_000, 2024, "Q3",
+                         filed="2024-11-08"),
+                    fact("2024-01-01", "2024-12-31", 11_000_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 10_500_000_000, 2024, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        },
+    }
+    series = quarterly_cash_flow_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(3_000_000_000)
+
+
+def test_values_differ_ignores_split_rounding() -> None:
+    """Batch 121: the vintage gate must not fire on split-rescale rounding
+    (NFLX: rescaled own-10-K 0.719 vs filed latest 0.72 is one rounding
+    step), while genuine restatements — at any scale — still fire."""
+    from tickerlens.data.xbrl import _values_differ
+
+    assert not _values_differ(0.719, 0.72)
+    assert not _values_differ(100.0, 100.0)
+    assert _values_differ(26_725_000_000.0, 22_019_000_000.0)
+    assert _values_differ(4.0, 3.9)
+
+
+def test_derivation_vintage_ignores_split_rounding_end_to_end() -> None:
+    """Batch 121: the EPS share-implied path keeps the filed latest annual
+    when the own-10-K value differs only by split-rounding (0.719 vs 0.72)
+    — Q4 EPS derives as 0.18 from the filed pair, not 0.179 from the
+    rescaled own leg."""
+    us_gaap = {
+        "EarningsPerShareBasic": {
+            "units": {
+                "USD/shares": [
+                    fact("2024-01-01", "2024-09-30", 0.54, 2024, "Q3",
+                         filed="2024-11-08"),
+                    fact("2024-01-01", "2024-12-31", 0.719, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 0.72, 2024, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        },
+        "NetIncomeLoss": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 540_000_000, 2024, "Q3",
+                         filed="2024-11-08"),
+                    fact("2024-01-01", "2024-12-31", 719_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                ]
+            }
+        },
+    }
+    series = quarterly_income_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.EPS_BASIC, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(0.18)
+
+
+def test_derivation_vintage_without_own_tenk_unchanged() -> None:
+    """Batch 121: when no 10-K annual fact exists for the start (annual
+    fact filed on a 10-Q only), there is no vintage evidence — the
+    derivation keeps the latest value instead of abstaining."""
+    us_gaap = {
+        "Revenues": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 750, 2024, "Q3",
+                         filed="2024-11-08"),
+                    {
+                        "start": "2024-01-01",
+                        "end": "2024-12-31",
+                        "val": 1000,
+                        "fy": 2024,
+                        "fp": "FY",
+                        "form": "10-Q",
+                        "filed": "2025-03-01",
+                    },
+                ]
+            }
+        },
+    }
+    series = quarterly_income_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.REVENUE, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(250)
+
+
+def test_derivation_vintage_both_restated_keeps_latest_pair() -> None:
+    """Batch 121 refinement (live AAPL FY2013 shape): the annual AND the
+    9M were both restated onto the new basis (later 10-K comparative +
+    later 10-Q comparative), so the latest legs already pair consistently
+    — substituting the own-10-K annual would mix bases the other way and
+    fail the coherence check. Q4 EPS derives from the latest pair."""
+    us_gaap = {
+        "EarningsPerShareBasic": {
+            "units": {
+                "USD/shares": [
+                    fact("2012-09-30", "2013-06-29", 31.67, 2013, "Q3",
+                         filed="2013-07-24"),
+                    fact("2012-09-30", "2013-06-29", 4.52, 2013, "Q3",
+                         filed="2014-07-23"),
+                    fact("2012-09-30", "2013-09-28", 40.03, 2013, "FY",
+                         filed="2013-10-30"),
+                    fact("2012-09-30", "2013-09-28", 5.72, 2013, "FY",
+                         filed="2014-10-27"),
+                ]
+            }
+        },
+        "NetIncomeLoss": {
+            "units": {
+                "USD": [
+                    fact("2012-09-30", "2013-06-29", 29_525_000_000, 2013, "Q3",
+                         filed="2013-07-24"),
+                    fact("2012-09-30", "2013-09-28", 37_037_000_000, 2013, "FY",
+                         filed="2013-10-30"),
+                ]
+            }
+        },
+    }
+    series = quarterly_income_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.EPS_BASIC, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    # Latest-pair derivation (~1.1917), not the own-pair value (~8.76)
+    # and not a coherence failure (row present).
+    assert 1.19 < by_end[dt.date(2013, 9, 28)] < 1.20
+
+
+def test_derivation_vintage_annual_restated_only_uses_own_pair() -> None:
+    """Batch 121 refinement (live AAPL FY2012 shape): the annual was
+    restated but the 9M was not (no later 10-Q comparative), so the
+    contemporaneous pair (own-10-K annual − 9M) is the consistent one —
+    Q4 EPS derives ~8.76, not the mixed-basis failure (no row)."""
+    us_gaap = {
+        "EarningsPerShareBasic": {
+            "units": {
+                "USD/shares": [
+                    fact("2011-09-25", "2012-06-30", 35.89, 2012, "Q3",
+                         filed="2012-07-25"),
+                    fact("2011-09-25", "2012-09-29", 44.64, 2012, "FY",
+                         filed="2012-10-31"),
+                    fact("2011-09-25", "2012-09-29", 6.38, 2012, "FY",
+                         filed="2014-10-27"),
+                ]
+            }
+        },
+        "NetIncomeLoss": {
+            "units": {
+                "USD": [
+                    fact("2011-09-25", "2012-06-30", 33_510_000_000, 2012, "Q3",
+                         filed="2012-07-25"),
+                    fact("2011-09-25", "2012-09-29", 41_733_000_000, 2012, "FY",
+                         filed="2012-10-31"),
+                ]
+            }
+        },
+    }
+    series = quarterly_income_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.EPS_BASIC, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert 8.76 < by_end[dt.date(2012, 9, 29)] < 8.77
+
+
+def test_derivation_vintage_cash_flow_both_restated_keeps_latest_pair() -> None:
+    """Batch 121 refinement on the cash-flow path: annual and 9M both
+    restated → latest legs pair consistently (Q4 = $11,000M − $7,000M =
+    $4,000M), not the own-annual mix ($5,000M)."""
+    us_gaap = {
+        "NetCashProvidedByUsedInOperatingActivities": {
+            "units": {
+                "USD": [
+                    fact("2024-01-01", "2024-09-30", 8_000_000_000, 2024, "Q3",
+                         filed="2024-11-08"),
+                    fact("2024-01-01", "2024-09-30", 7_000_000_000, 2024, "Q3",
+                         filed="2025-11-08"),
+                    fact("2024-01-01", "2024-12-31", 12_000_000_000, 2024, "FY",
+                         filed="2025-02-18"),
+                    fact("2024-01-01", "2024-12-31", 11_000_000_000, 2024, "FY",
+                         filed="2026-02-18"),
+                ]
+            }
+        },
+    }
+    series = quarterly_cash_flow_metric(
+        {"facts": {"us-gaap": us_gaap}}, Metric.OPERATING_CASH_FLOW, "1231"
+    )
+    by_end = {item.end: item.value for item in series}
+    assert by_end[dt.date(2024, 12, 31)] == pytest.approx(4_000_000_000)
+
+
+def test_repair_stale_fy_wraps_mtd_shape() -> None:
+    """Batch 89: MTD's Q1/Q2-2025 10-Qs tag 2025-03-31/2025-06-30 as fy=2024
+    (stale fiscal-year focus; verified against raw SEC JSON) while the 10-K
+    and Q3 10-Q use the ending-year convention. The Q4->Q1 wrap must increment
+    fy, so both rows move to FY2025."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2024, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2024, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2024, "Q3"), (2024, "Q4"),
+        (2025, "Q1"), (2025, "Q2"),
+        (2025, "Q3"), (2025, "Q4"),
+        (2026, "Q1"), (2026, "Q2"),
+    ]
+
+
+def test_repair_stale_fy_wraps_wday_cascade() -> None:
+    """Batch 89: WDAY's three 2025 10-Qs all carry the stale fy=2025; the
+    repair cascades through consecutive stale rows until the labels rejoin
+    the sequence at the 10-K-anchored FY2026Q4."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 10, 31)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 1, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 4, 30)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 7, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 10, 31)),
+        _xbrl_row(2026, "Q4", dt.date(2026, 1, 31)),
+        _xbrl_row(2027, "Q1", dt.date(2026, 4, 30)),
+        _xbrl_row(2027, "Q2", dt.date(2026, 7, 31)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2024, "Q3"), (2025, "Q4"),
+        (2026, "Q1"), (2026, "Q2"), (2026, "Q3"),
+        (2026, "Q4"), (2027, "Q1"), (2027, "Q2"),
+    ]
+
+
+def test_repair_stale_fy_wraps_skyd_held_target_untouched() -> None:
+    """Batch 89: SKYD's whole series uses a shifted convention, so the
+    "repaired" targets are held by later rows — the unheld-target guard must
+    leave the series alone instead of manufacturing collisions."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2025, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+    ]
+    before = [(r.fy, r.fp) for r in rows]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == before
+
+
+def test_repair_stale_fy_wraps_clean_sequence_untouched() -> None:
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2024, "Q3", dt.date(2024, 9, 30)),
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q2", dt.date(2025, 6, 30)),
+    ]
+    before = [(r.fy, r.fp) for r in rows]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == before
+
+
+def test_repair_stale_fy_wraps_gap_never_repaired() -> None:
+    """A genuine coverage gap (Q1 -> Q3) changes fp, so it can never match the
+    same-fp signature and is left alone — but the later stale wrap is still
+    repaired, since a gap earlier in the series does not legitimize it."""
+    from tickerlens.data.xbrl import _repair_stale_fy_wraps
+
+    rows = [
+        _xbrl_row(2025, "Q1", dt.date(2025, 3, 31)),
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2025, "Q1", dt.date(2026, 3, 31)),
+    ]
+    fixed = _repair_stale_fy_wraps(rows)
+    assert [(r.fy, r.fp) for r in fixed] == [
+        (2025, "Q1"), (2025, "Q3"), (2025, "Q4"), (2026, "Q1"),
+    ]
+
+
+def test_concept_facts_uses_regulated_revenue_when_revenues_stale():
+    """Batch 108 (Xcel Energy): the filer abandoned ``Revenues`` after 2019;
+    ``RegulatedAndUnregulatedOperatingRevenue`` runs current. The fresh
+    utility tag must win over the stale generic tag."""
+    cf = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            fact("2019-07-01", "2019-09-30", 3_013_000_000.0, 2019, "Q3",
+                                 filed="2019-10-25"),
+                        ]
+                    }
+                },
+                "RegulatedAndUnregulatedOperatingRevenue": {
+                    "units": {
+                        "USD": [
+                            fact("2026-04-01", "2026-06-30", 3_119_000_000.0, 2026, "Q2",
+                                 filed="2026-07-30"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    tag, facts = concept_facts(cf, Metric.REVENUE, staleness_window=(70, 115))
+    assert tag == "RegulatedAndUnregulatedOperatingRevenue"
+    assert facts[0].val == 3_119_000_000.0

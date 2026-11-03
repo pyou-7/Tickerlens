@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -942,6 +943,145 @@ def test_enrich_company_tolerates_no_matched_8k(session: Session) -> None:
 
     session.refresh(row)
     assert row.press_release_highlights is None
+
+
+def test_enrich_highlights_expired_deadline_fills_nothing(session: Session) -> None:
+    """Batch 89: an already-passed deadline fills zero rows and never raises."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    row = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+               fiscal_period="Q3", revenue=40_100)
+    session.add(row)
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [_er_period(period_end=dt.date(2025, 9, 28))])
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc._enrich_press_release_highlights(
+            session, "AAPL", cik, deadline=time.monotonic() - 1.0
+        )  # must not raise
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    session.refresh(row)
+    assert row.press_release_highlights is None
+    assert mock_edgar.fetch_text.call_count == 0  # no exhibit fetched
+
+
+def _highlights_by_period(session: Session, cik: str) -> dict:
+    from sqlalchemy import select as _select
+
+    return {
+        r.period_end: r.press_release_highlights
+        for r in session.execute(
+            _select(QuarterlyFinancial).where(QuarterlyFinancial.cik == cik)
+        ).scalars()
+    }
+
+
+def test_enrich_highlights_deadline_fills_latest_first(session: Session) -> None:
+    """Batch 89: when the budget expires mid-crawl the latest quarter fills and
+    older ones defer — the clock is controlled to expire after the first row."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    latest = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                  fiscal_period="Q3", revenue=40_100)
+    older = _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                 fiscal_period="Q2", revenue=38_000)
+    session.add_all([older, latest])  # inserted oldest-first on purpose
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    periods = [
+        _er_period(period_end=dt.date(2025, 6, 28), label="Q2 FY2025"),
+        _er_period(period_end=dt.date(2025, 9, 28), label="Q3 FY2025"),
+    ]
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, periods)
+    # One clock check per quarter: fresh before the first (latest) quarter,
+    # expired before the second — regardless of insertion order.
+    fake_clock = patch("tickerlens.services.financials.time")
+    try:
+        fake_clock.start().monotonic.side_effect = [0.0, 999.0]
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc._enrich_press_release_highlights(session, "AAPL", cik, deadline=10.0)
+    finally:
+        p1.stop(); p2.stop(); p3.stop(); fake_clock.stop()
+
+    # The private method does not commit — re-query rather than refresh, which
+    # would discard the unflushed mutations.
+    filled = _highlights_by_period(session, cik)
+    assert filled[dt.date(2025, 9, 28)] is not None
+    assert filled[dt.date(2025, 6, 28)] is None
+
+
+def test_enrich_highlights_empty_string_counts_as_missing(session: Session) -> None:
+    """Batch 149: a stored empty-string highlights field is missing, not good.
+
+    PCAR Q1 FY2026 sat at '' forever: the lazy trigger fired on its NULL
+    guidance, but the old ``is None`` fill check skipped highlights because
+    '' is not None. An empty row must fill like a NULL row, and a row with
+    real highlights must still never be overwritten.
+    """
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    blank = _row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                 fiscal_period="Q3", revenue=40_100)
+    blank.press_release_highlights = ""
+    good = _row(cik=cik, period_end=dt.date(2025, 6, 28), fiscal_year=2025,
+                fiscal_period="Q2", revenue=38_000)
+    good.press_release_highlights = "Existing highlights worth keeping"
+    session.add_all([good, blank])
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    periods = [
+        _er_period(period_end=dt.date(2025, 6, 28), label="Q2 FY2025"),
+        _er_period(period_end=dt.date(2025, 9, 28), label="Q3 FY2025"),
+    ]
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, periods)
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        svc._enrich_press_release_highlights(
+            session, "AAPL", cik, deadline=time.monotonic() + 10.0)
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    filled = _highlights_by_period(session, cik)
+    assert filled[dt.date(2025, 9, 28)]
+    assert filled[dt.date(2025, 9, 28)] != ""
+    assert filled[dt.date(2025, 6, 28)] == "Existing highlights worth keeping"
+
+
+def test_enrich_company_applies_disclosure_budget(session: Session) -> None:
+    """Batch 89: enrich_company time-boxes the disclosure crawl by default."""
+    cik = "0000320193"
+    session.add(_company(cik=cik))
+    session.add(_row(cik=cik, period_end=dt.date(2025, 9, 28), fiscal_year=2025,
+                     fiscal_period="Q3", revenue=40_100))
+    session.commit()
+
+    mock_edgar = MagicMock()
+    mock_edgar.cik_for_ticker.return_value = cik
+    p1, p2, p3, _ = _enrich_mocks(mock_edgar, [])
+    try:
+        svc = FinancialsService(edgar_client=mock_edgar, session=session)
+        with patch.object(
+            FinancialsService, "_enrich_press_release_highlights"
+        ) as enrich_mock, patch.object(
+            FinancialsService, "_fetch_risk_factors", return_value=(None, None)
+        ):
+            before = time.monotonic()
+            svc.enrich_company("AAPL", session=session)
+            after = time.monotonic()
+    finally:
+        p1.stop(); p2.stop(); p3.stop()
+
+    deadline = enrich_mock.call_args.kwargs["deadline"]
+    assert before + 29.0 <= deadline <= after + 31.0
 
 
 def test_get_detail_returns_highlights_for_selected_quarter(session: Session) -> None:

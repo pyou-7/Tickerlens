@@ -132,6 +132,12 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
             "RevenueFromContractWithCustomerIncludingAssessedTax",
             "SalesRevenueNet",
             "SalesRevenueGoodsNet",
+            # Utilities that report regulated/unregulated operating revenue
+            # instead of the generic tags (Xcel Energy abandoned ``Revenues``
+            # after 2019; ``RegulatedAndUnregulatedOperatingRevenue`` runs
+            # current). Only reached when the generic tags are stale/absent,
+            # so it never overrides a fresh generic tag. Batch 108.
+            "RegulatedAndUnregulatedOperatingRevenue",
         ),
         unit="USD",
     ),
@@ -393,6 +399,72 @@ def _has_discontinued_ops_facts(companyfacts: dict[str, Any]) -> bool:
     return False
 
 
+# Tags consulted for the batch-120 restatement check: a 10-K that
+# re-presents history restates a prior-year annual fact under one of
+# these primary income-statement tags (or under a discontinued-ops tag
+# itself). Revenue tags cover both the generic chain and the
+# contract-revenue chain; the list is deliberately primary-only — a
+# restatement of an obscure tag is not evidence the income statement
+# was re-presented.
+_RESTATEMENT_CHECK_TAGS: tuple[str, ...] = (
+    *_DISCONTINUED_OPS_TAGS,
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "SalesRevenueNet",
+    "SalesRevenueGoodsNet",
+    "NetIncomeLoss",
+    "EarningsPerShareBasic",
+    "EarningsPerShareDiluted",
+    "NetCashProvidedByUsedInOperatingActivities",
+)
+
+
+def _tenk_restates_prior_year(
+    companyfacts: dict[str, Any],
+    tenk_filed: dt.date,
+    break_start: dt.date,
+) -> bool:
+    """True when the 10-K filed on ``tenk_filed`` restates a prior-year
+    annual fact — i.e. it files a value for a (start, end) whose
+    earliest-filed 10-K value differs.
+
+    The comparison is per (tag, unit, start, end) so values are only
+    ever compared within one unit, and only facts filed by the 10-K in
+    question count as the restatement: a later 10-K's restatement says
+    nothing about the basis of the year under derivation. Prior-year
+    means any start earlier than the fiscal year being derived.
+    """
+    us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
+    for tag in _RESTATEMENT_CHECK_TAGS:
+        for unit_items in us_gaap.get(tag, {}).get("units", {}).values():
+            facts: list[XbrlFact] = []
+            for item in unit_items:
+                if (
+                    item.get("form") != "10-K"
+                    or not item.get("end")
+                    or not item.get("start")
+                ):
+                    continue
+                try:
+                    facts.append(XbrlFact.model_validate(item))
+                except Exception:
+                    continue
+            grouped: dict[tuple[dt.date, dt.date], list[XbrlFact]] = {}
+            for f in facts:
+                if f.start is None:
+                    continue
+                if 340 <= (f.end - f.start).days <= 380:
+                    grouped.setdefault((f.start, f.end), []).append(f)
+            for (start, _end), group in grouped.items():
+                if start >= break_start:
+                    continue
+                earliest = min(group, key=lambda f: f.filed)
+                for f in group:
+                    if f.filed == tenk_filed and f.val != earliest.val:
+                        return True
+    return False
+
+
 def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.date]:
     """FY start dates whose 10-K reclassified a component to discontinued
     ops after the last 10-Q — the interim and annual income-statement facts
@@ -407,14 +479,35 @@ def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.dat
     produced a $1.75B Q4 against a real ~$5.4B. A missing Q4 is honest; a
     mixed-basis Q4 is a fabrication.
 
-    Fires only on the filer's own proof: a tagged 9M interim zero followed
-    by a tagged nonzero annual for the same fiscal year. Filers with
-    ongoing discontinued ops tag nonzero interims and never trip it;
-    filers that don't tag the interim line at all are left alone
-    (fail-safe: no worse than today). Deliberately no materiality floor —
-    the derivation is then wrong by exactly the discontinued component's
-    9M amount, which companyfacts cannot supply, so any proven break
+    Fires only on the filer's own proof, in two parts. (1) A tagged 9M
+    interim zero followed by a tagged nonzero annual for the same fiscal
+    year: filers with ongoing discontinued ops tag nonzero interims and
+    never trip it; filers that don't tag the interim line at all are left
+    alone (fail-safe: no worse than today). (2) Batch 120: the fiscal
+    year's own 10-K must also restate a prior-year annual fact under a
+    primary income-statement tag — the re-presentation that proves the
+    10-K re-presents history on a new basis. Part (1) alone over-fires:
+    Verisk's FY2024 shows the same 9M-zero → FY-$6.8M shape, but the
+    $6.8M is a residual gain on the Energy business discontinued in 2022
+    ("for all periods presented" since then), so the 2024 10-Q and 10-K
+    continuing revenues are on the SAME basis — and the Q4 2024 earnings
+    release reports revenues of $736M, exactly FY − 9M ($2,881.7M −
+    $2,146.1M = $735.6M). The 2024 10-K restated no prior-year annual fact
+    (FY2023 revenues, net income, EPS and OpCF are byte-identical across
+    the 2023/2024/2025 10-Ks), so Verisk's FY2024 is not a break and its
+    Q4 derives. OXY's 2025 10-K, by contrast, restated FY2024 Revenues
+    from $26,725M to $22,019M (OxyChem's 2024 revenues removed), so the
+    FY2025 break stands. Deliberately no materiality floor — the
+    derivation is then wrong by exactly the discontinued component's 9M
+    amount, which companyfacts cannot supply, so any proven break
     abstains.
+
+    Accepted residual risk: a component acquired and discontinued within
+    a single fiscal year leaves no prior-year comparative to restate, so
+    part (2) cannot catch it. That shape requires a same-year
+    acquire-and-dispose; every demonstrated reclassification (OXY) does
+    restate comparatives, and the fail-closed default is preserved for
+    all of those.
     """
     us_gaap = companyfacts.get("facts", {}).get("us-gaap", {})
     raw: list[XbrlFact] = []
@@ -445,7 +538,23 @@ def _discontinued_basis_break_starts(companyfacts: dict[str, Any]) -> set[dt.dat
                 and mf.val == 0
                 and mf.filed < af.filed
             ):
-                breaks.add(af.start)
+                # The fiscal year's own 10-K is the earliest 10-K to file
+                # an annual fact for this start (later 10-Ks file the same
+                # period only as a comparative). Its restatement of a
+                # prior-year annual fact is the re-presentation proof.
+                own_tenk_filed = min(
+                    f.filed
+                    for f in raw
+                    if f.form == "10-K"
+                    and f.start == af.start
+                    and f.start is not None
+                    and f.end is not None
+                    and 340 <= (f.end - f.start).days <= 380
+                )
+                if _tenk_restates_prior_year(
+                    companyfacts, own_tenk_filed, af.start
+                ):
+                    breaks.add(af.start)
                 break
     return breaks
 
@@ -500,6 +609,10 @@ def extract_recent_quarterly_financials(
     # only). Basic wins wherever it exists; diluted fills only missing ends,
     # so the displayed "EPS (Basic)" never blanks for a filed quarter.
     eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
+    # Batch 87: diluted EPS can never exceed basic EPS; the independent
+    # batch-12 Q4 derivations can invert the ranking on filing-rounded
+    # inputs (BBY FY2026Q4). Clamp the corrupted diluted leg to basic.
+    eps_diluted = _reconcile_eps_basic_diluted(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
     # FFO components (batch 72): funds from operations = net income +
@@ -583,7 +696,8 @@ def extract_recent_quarterly_financials(
             )
         )
     rows = _dedupe_period_labels(rows)
-    return _repair_sequence_breaks(rows)
+    rows = _repair_sequence_breaks(rows)
+    return _repair_stale_fy_wraps(rows)
 
 
 def _fill_missing_eps_basic(
@@ -610,6 +724,42 @@ def _fill_missing_eps_basic(
                 source_tag=m.source_tag,
             )
     return sorted(by_end.values(), key=lambda item: item.end)
+
+
+def _reconcile_eps_basic_diluted(
+    basic: list[PeriodMetric], diluted: list[PeriodMetric]
+) -> list[PeriodMetric]:
+    """Clamp diluted EPS to basic EPS wherever the ranking inverts.
+
+    Diluted EPS can never exceed basic EPS — anti-dilutive securities are
+    excluded from the diluted share count, never added — so any
+    diluted > basic pair is corrupt by definition. The batch-12
+    share-implied Q4 derivation computes the two legs independently, and
+    filing-rounded 9M inputs get 3x leverage through the
+    (12·FY_avg − 9·9M_avg)/3 share-month residual, so a 2-decimal 9M EPS
+    can invert the ranking (BBY FY2026Q4 derived 2.5584 basic vs 2.5798
+    diluted). The diluted leg is the corrupted one; clamp it to basic —
+    the two differ by fractions of a percent, so no information is lost.
+    This also subsumes the batch-12 "residual sub-cent flips" limitation
+    (DLTR FY2025Q4: 2.5434/2.548) and corrects loss quarters, where
+    diluted must equal basic (DLTR FY2024Q4: −17.18/−17.17).
+    """
+    by_end = {m.end: m for m in basic}
+    fixed: list[PeriodMetric] = []
+    for m in diluted:
+        b = by_end.get(m.end)
+        if b is not None and m.value > b.value:
+            logger.warning(
+                "diluted EPS %.4f exceeds basic EPS %.4f for %s %s — "
+                "clamping diluted to basic (arithmetically impossible)",
+                m.value,
+                b.value,
+                m.metric.value,
+                m.end,
+            )
+            m = m.model_copy(update={"value": b.value})
+        fixed.append(m)
+    return sorted(fixed, key=lambda item: item.end)
 
 
 def _successor_label(fy: int, fp: str) -> tuple[int, str] | None:
@@ -789,13 +939,58 @@ def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFi
     return rows
 
 
+def _repair_stale_fy_wraps(rows: list[QuarterlyFinancials]) -> list[QuarterlyFinancials]:
+    """Relabel quarters whose filer never incremented the fiscal-year focus.
+
+    Some filers' 10-Q XBRL templates carry a stale ``fy`` (fiscal-year focus):
+    MTD's Q1/Q2-2025 10-Qs tag 2025-03-31/2025-06-30 as fy=2024, and WDAY's
+    2025 10-Qs tag three quarters fy=2025 — while their 10-Ks and Q3 10-Qs use
+    the correct ending-year convention (verified against raw SEC JSON).
+    ``_dedupe_period_labels`` only arbitrates collisions and
+    ``_repair_sequence_breaks`` needs a 3-long backbone, so these
+    consistent-but-wrong runs slip through (batch 89).
+
+    The invariant is local and convention-independent: labels advance one
+    quarter-step per period, so a row claiming exactly one year behind the
+    successor expectation (same fp) is mislabeled — regardless of
+    beginning/end-year convention or 52/53-week calendars. Walk ends
+    ascending; relabel such rows — but only when the target label is unheld,
+    so a genuinely shifted convention (SKYD's FY2025Q4 -> FY2025Q1 wrap,
+    whose "fixed" targets are held by later rows) is left alone instead of
+    being collided. Cascading follows naturally because each row's expectation
+    derives from the previous row's final label; a genuine coverage gap
+    changes fp, so it can never match the same-fp signature.
+    """
+    ordered = sorted(rows, key=lambda r: r.end)
+    held = {(r.fy, r.fp) for r in ordered}
+    prev: tuple[int, str] | None = None
+    for row in ordered:
+        if prev is not None:
+            expected = _successor_label(*prev)
+            claim = (row.fy, row.fp)
+            if (
+                expected is not None
+                and claim != expected
+                and claim == (expected[0] - 1, expected[1])
+                and expected not in held
+            ):
+                held.discard(claim)
+                row.fy, row.fp = expected
+                held.add(expected)
+        prev = (row.fy, row.fp)
+    return rows
+
+
 # Stock splits restate per-share facts: the same (start, end) reported at two
 # filings whose values differ by an integer split ratio. Restated values are
 # exact divisions (7.19 -> 0.72), so a 3% tolerance is generous; anything
 # coarser risks mistaking an accounting restatement for a split.
 # 8: GE's 1-for-8 reverse split (2021-07-30); 25: BKNG's 25-for-1 split
 # (2026-04) — both multi-corroborated in live companyfacts (batch 51).
-_SPLIT_RATIOS = (2, 3, 4, 5, 8, 10, 20, 25, 100)
+# 7: AAPL's 7-for-1 split (2014-06-09) — 10 corroborating restatements at
+# 1/7 in live companyfacts (batch 122); without it only the 2020 4:1
+# event fired and pre-2014 facts rescaled by 4x instead of 28x.
+_SPLIT_RATIOS = (2, 3, 4, 5, 7, 8, 10, 20, 25, 100)
 _SPLIT_RATIO_TOLERANCE = 0.03
 # A lone (start, end) pair at a split-like ratio could be a data correction,
 # so an event needs corroboration from a second duration (e.g. the quarterly
@@ -1111,7 +1306,11 @@ def _detect_split_events(facts: list[XbrlFact]) -> list[_SplitEvent]:
     report values differing by ~a split ratio casts one vote for the later
     filing's date. An event fires only with enough corroborating groups (a
     lone split-like ratio could be a data correction), and duplicate events
-    on the same filing date collapse to their median scale.
+    on the same filing date collapse to their median scale. The
+    corroborating votes must also agree on the ratio: a real split restates
+    every comparative at one ratio, so votes that disagree with the median
+    (CRM's Aug-2018 10-Q restated its Q2 quarterly EPS 3x but its 6M EPS
+    7x — no split happened) are not corroboration.
     """
     by_period: dict[tuple[dt.date | None, dt.date], dict[dt.date, set[float]]] = {}
     for fact in facts:
@@ -1147,7 +1346,23 @@ def _detect_split_events(facts: list[XbrlFact]) -> list[_SplitEvent]:
             continue
         ratios = sorted(ratio for ratio, _ in corroborated)
         scale = ratios[len(ratios) // 2]
-        period_ends = {end for _, end in corroborated}
+        # A real split restates every comparative at one ratio: keep only
+        # the votes agreeing with the median scale. Mixed ratios (CRM's
+        # Aug-2018 10-Q: quarterly EPS restated 3x, 6M EPS 7x) are not a
+        # split, and the median of a mixed set would fabricate one.
+        agreeing = [
+            (ratio, end)
+            for ratio, end in corroborated
+            if abs(ratio - scale) / scale <= _SPLIT_RATIO_TOLERANCE
+        ]
+        if len(agreeing) < _SPLIT_MIN_CORROBORATING_GROUPS:
+            logger.info(
+                "skipping split-like ratios on %s: corroborating ratios disagree",
+                event_date,
+            )
+            continue
+        scale = sorted(ratio for ratio, _ in agreeing)[len(agreeing) // 2]
+        period_ends = {end for _, end in agreeing}
         logger.warning(
             "stock split detected: restated %s, rescaling earlier per-share facts by %s",
             event_date, scale,
@@ -1547,9 +1762,23 @@ def _cash_flow_series_for_tag(
         # Batch 85: same discontinued-ops basis-break guard as the income
         # path — a 10-K reclassification between the 10-Q and the 10-K
         # leaves the YTD and annual cash-flow facts on different bases.
+        # Batch 121: same derivation-vintage rule as _derive_q4_income —
+        # a later 10-K's restatement of a prior-year annual must not pair
+        # with the year's 9M fact; use the own-10-K contemporaneous leg,
+        # but only when the 9M itself was not restated (same refinement).
         if year and m9 and not (basis_break_starts and start in basis_break_starts):
+            year_val = year.val
+            own_val = _own_tenk_annual_value(facts, start)
+            own_m9 = _own_ytd_value(facts, m9.end)
+            m9_restated = own_m9 is not None and _values_differ(own_m9, m9.val)
+            if (
+                own_val is not None
+                and _values_differ(own_val, year.val)
+                and not m9_restated
+            ):
+                year_val = own_val
             results.append(
-                _metric_value(metric, source_tag, fy, "Q4", year.end, year.val - m9.val)
+                _metric_value(metric, source_tag, fy, "Q4", year.end, year_val - m9.val)
             )
 
     return sorted(results, key=lambda item: item.end)
@@ -2276,6 +2505,73 @@ def infer_fiscal_year(end: dt.date, fiscal_year_end: str) -> int:
     raise AssertionError("unreachable: a year-end always falls after the anchor")
 
 
+def _own_tenk_annual_value(facts: list[XbrlFact], start: dt.date) -> float | None:
+    """Earliest-filed 10-K annual value for a fiscal-year start — the year's
+    own 10-K number, on the basis the year's 10-Qs used.
+
+    Batch 121: a later 10-K may restate a prior-year annual fact onto a new
+    basis (OXY's 2025 10-K restated FY2024 Revenues $26,725M → $22,019M,
+    OxyChem removed) while the year's 9M 10-Q fact stays on the old basis —
+    so the latest-wins FY value paired with the 9M fact fabricates Q4
+    ($2,054M vs the as-reported $6,760M). The own-10-K value is the
+    contemporaneous leg: same basis as the 9M fact, so FY − 9M derives the
+    as-reported Q4. Returns None when no 10-K annual fact exists for the
+    start (no vintage evidence — the caller keeps current behavior).
+    """
+    candidates = [
+        f
+        for f in facts
+        if f.form == "10-K"
+        and f.start == start
+        and f.end is not None
+        and 340 <= (f.end - f.start).days <= 380
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: f.filed).val
+
+
+def _own_ytd_value(facts: list[XbrlFact], end: dt.date) -> float | None:
+    """Earliest-filed 9M fact for a 9M period end — the 10-Q's own number.
+
+    Batch 121 (refined): a later 10-Q comparative may itself restate the
+    9M fact onto a new basis (AAPL's 2014 10-Q restated 9M FY2013 EPS
+    31.67 → 4.52 on the post-split basis). When the 9M was restated, the
+    latest legs already pair consistently and the annual must NOT be
+    substituted — pairing an own-10-K annual with a restated 9M mixes
+    bases in the other direction. Returns None only when no 9M fact
+    exists for the end (impossible for a caller holding that fact).
+    """
+    candidates = [
+        f
+        for f in facts
+        if f.end == end
+        and f.start is not None
+        and 240 <= (f.end - f.start).days <= 290
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda f: f.filed).val
+
+
+def _values_differ(a: float, b: float) -> bool:
+    """True when two filed values genuinely differ — not filing-rounding noise.
+
+    A split restatement re-expresses the same economics at a new scale, and
+    after the split rescale the own-10-K value sits a rounding step away
+    from the filed latest value (NFLX: 7.19/10 = 0.719 vs filed 0.72).
+    Rounding both to the coarser filing precision collapses that noise; a
+    real restatement (OXY FY2024 Revenues $26,725M → $22,019M) survives it.
+    The blind spot is bounded by half the coarser precision unit (≤5¢ for
+    EPS, $0 for integer-dollar values) — immaterial next to the
+    derivation, and the latest value is the corrected one there anyway.
+    """
+    if a == b:
+        return False
+    places = min(_decimals(a), _decimals(b))
+    return round(a, places) != round(b, places)
+
+
 def _derive_q4_income(
     facts: list[XbrlFact],
     source_tag: str,
@@ -2299,6 +2595,7 @@ def _derive_q4_income(
     # lacks — the primary tag's annual fact always wins.
     fallback_by_start: dict[dt.date, XbrlFact] = {}
     fallback_tag: str | None = None
+    fallback_facts: list[XbrlFact] = []
     if eps_annual_fallback is not None:
         fallback_tag, fallback_facts = eps_annual_fallback
         fallback_by_start = {
@@ -2334,7 +2631,50 @@ def _derive_q4_income(
         if annual_fact is None:
             continue
         fy = _fact_fy(annual_fact)
-        value = annual_fact.val - ytd.val
+        # Batch 121: derivation-vintage rule. When a later filing restated
+        # this year's annual fact onto a new basis, the latest-wins value
+        # no longer pairs with the year's 9M fact — derive from the
+        # contemporaneous pair (own-10-K FY − 9M 10-Q) instead. The break
+        # years themselves never reach this code (basis_break_starts skips
+        # them above: there the own 10-K is already on the new basis, so
+        # no contemporaneous pair exists and abstention stays correct).
+        # Refined: substitute ONLY when the annual was restated and the
+        # 9M was not. If the 9M was restated too (a later 10-Q comparative
+        # on the new basis — AAPL FY2013), the latest legs already pair
+        # consistently and substitution would mix bases the other way.
+        # The NI annual gets the same per-pair substitution so the EPS
+        # share-implied path stays on one basis. When no 10-K annual fact
+        # exists for the start there is no vintage evidence and the
+        # derivation is unchanged.
+        annual_calc = annual_fact
+        ni_calc = ni_lookup.get(start)
+        source_facts = fallback_facts if from_fallback else facts
+        own_val = _own_tenk_annual_value(source_facts, start)
+        own_ytd = _own_ytd_value(facts, ytd.end)
+        ytd_restated = own_ytd is not None and _values_differ(own_ytd, ytd.val)
+        if (
+            own_val is not None
+            and _values_differ(own_val, annual_fact.val)
+            and not ytd_restated
+        ):
+            annual_calc = annual_fact.model_copy(update={"val": own_val})
+            if ni_calc is not None and ni_facts:
+                ni_own = _own_tenk_annual_value(ni_facts, start)
+                ni_ytd_own = _own_ytd_value(ni_facts, ni_calc[1].end)
+                ni_ytd_restated = (
+                    ni_ytd_own is not None
+                    and _values_differ(ni_ytd_own, ni_calc[1].val)
+                )
+                if (
+                    ni_own is not None
+                    and _values_differ(ni_own, ni_calc[0].val)
+                    and not ni_ytd_restated
+                ):
+                    ni_calc = (
+                        ni_calc[0].model_copy(update={"val": ni_own}),
+                        ni_calc[1],
+                    )
+        value = annual_calc.val - ytd.val
         if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
             # Per-share values must not be un-cumulated by subtraction: the
             # annual and 9M figures divide by different share counts, so
@@ -2342,7 +2682,7 @@ def _derive_q4_income(
             # basic/diluted ranking, as it did for DUOL's FY2025 Q4
             # ($0.94 diluted vs $0.88 basic, arithmetically impossible).
             # Derive Q4 from net income and implied share counts instead.
-            ni_pair = ni_lookup.get(start)
+            ni_pair = ni_calc
             if from_fallback:
                 # The fallback annual is continuing-operations EPS while
                 # the 9M and NI pairs are totals. The derivation is only
@@ -2352,7 +2692,7 @@ def _derive_q4_income(
                 # plain-subtraction fallback would mix the two bases.
                 # Fail closed: reject the substitute rather than derive.
                 if ni_pair is None or not _shares_coherent(
-                    annual_fact.val,
+                    annual_calc.val,
                     ytd.val,
                     ni_pair[0].val,
                     ni_pair[1].val,
@@ -2360,7 +2700,7 @@ def _derive_q4_income(
                     require_positive=True,
                 ):
                     continue
-                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                implied = _implied_q4_eps(annual_calc, ytd, ni_pair)
                 if implied is None:
                     continue
                 value = implied
@@ -2376,16 +2716,16 @@ def _derive_q4_income(
                 # while any scale error diverges ~100%. Loss years abstain
                 # (non-positive inputs) and keep the existing behavior.
                 if ni_pair is not None and not _shares_coherent(
-                    annual_fact.val,
+                    annual_calc.val,
                     ytd.val,
                     ni_pair[0].val,
                     ni_pair[1].val,
                     _PRIMARY_SHARES_TOLERANCE,
                 ):
                     continue
-                implied = _implied_q4_eps(annual_fact, ytd, ni_pair)
+                implied = _implied_q4_eps(annual_calc, ytd, ni_pair)
                 value = implied if implied is not None else _round_like_inputs(
-                    annual_fact.val, ytd.val, value
+                    annual_calc.val, ytd.val, value
                 )
         results.append(
             _metric_value(

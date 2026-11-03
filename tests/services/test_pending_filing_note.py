@@ -116,6 +116,33 @@ def test_quarter_label_walks_from_newest_row() -> None:
     assert label == "Q2 FY2026"
 
 
+def test_quarter_label_walks_backward_from_newest_row() -> None:
+    # Batch 117 (DOW/URI shape): Q3 FY2026 landed while Q2 was still
+    # missing. The old forward-only step walked Q3 forward to "Q4 FY2026";
+    # the missing quarter is one step BACK: Q2 FY2026.
+    label = _quarter_label_for_report_date(
+        dt.date(2026, 6, 30), "1231",
+        dt.date(2026, 9, 30), (2026, "Q3"),
+    )
+    assert label == "Q2 FY2026"
+
+
+def test_quarter_label_walks_backward_across_year_boundary() -> None:
+    label = _quarter_label_for_report_date(
+        dt.date(2025, 12, 31), "1231",
+        dt.date(2026, 3, 31), (2026, "Q1"),
+    )
+    assert label == "Q4 FY2025"
+
+
+def test_quarter_label_same_end_returns_newest_label() -> None:
+    label = _quarter_label_for_report_date(
+        dt.date(2026, 9, 30), "1231",
+        dt.date(2026, 9, 30), (2026, "Q3"),
+    )
+    assert label == "Q3 FY2026"
+
+
 def test_quarter_label_falls_back_to_fiscal_year_end() -> None:
     # Sep year-end filer (e.g. Visa): 2026-06-30 is Q3 FY2026.
     label = _quarter_label_for_report_date(
@@ -188,6 +215,29 @@ def test_note_for_ingestion_lag() -> None:
     assert "10-Q filed Jul 28, 2026" in note
     assert "EDGAR" in note
     assert "Q1 FY2026" in note  # the quarter still shown
+
+
+def test_note_for_middle_gap_labels_missing_quarter() -> None:
+    # Batch 117 (DOW shape): Q3 FY2026 stored, Q2 10-Q filed but not
+    # ingested. The note must name the MISSING quarter (Q2), never the
+    # next one (Q4) — the pre-fix walk produced "Q4 FY2026 results".
+    subs = _subs(
+        ("10-Q", "2026-10-23", "2026-09-30"),
+        ("10-Q", "2026-07-24", "2026-06-30"),
+        ("10-Q", "2026-04-24", "2026-03-31"),
+    )
+    note = _pending_filing_note(
+        subs, _facts("2026-09-30", "2026-03-31"),
+        ["2026-03-31", "2026-09-30"], "2026-04-24", set(),
+        fiscal_year_end="1231",
+        newest_end=dt.date(2026, 9, 30),
+        newest_label=(2026, "Q3"),
+    )
+    assert note is not None
+    assert "Q2 FY2026" in note
+    assert "10-Q filed Jul 24, 2026" in note
+    assert "Q4 FY2026" not in note
+    assert "Q3 FY2026" in note  # the quarter still shown
 
 
 def test_note_names_multiple_pending_quarters() -> None:
