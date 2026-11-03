@@ -458,6 +458,18 @@ _LEDE_BARE_UNITS_LOWER_RE = re.compile(
     r"^in (millions|billions|thousands), except",
 )
 
+# A bare units declaration with no "except" tail (batch 182): CSX's
+# reconciliation table heads with "Dollars in millions," on its own
+# line and the "except per share amounts" continuation plus the column
+# labels on the next — the "Dollars in" form of _LEDE_BARE_UNITS_RE
+# requires ", except", so the split form escaped both it and the
+# paren-form units regexes. A line that IS just the declaration is
+# never prose: a sentence never consists solely of "Dollars in
+# millions,".
+_LEDE_BARE_UNITS_DOLLARS_RE = re.compile(
+    r"^dollars? in (millions|billions|thousands),?$", re.IGNORECASE
+)
+
 # A "% change" table footnote glued onto a quote attribution (batch 180):
 # Visa flattens its summary-table footnote ("% change is calculated over
 # the comparable prior-year period."), the table's period header ("Q3
@@ -825,6 +837,11 @@ def _is_lede_table_header(ln: str) -> bool:
     for w in words:
         if _LEDE_YEAR_RE.fullmatch(w.strip(",")):
             continue  # a bare year is a period token, not a word
+        if w.strip(",") in ("-", "–", "—"):
+            continue  # Batch 182: a bare dash token is a separator,
+            # not a word — Brown & Brown's "Diluted Net Income Per
+            # Share - Adjusted" is a column label, and the dash was
+            # the only thing keeping the capital-led check out.
         w2 = re.sub(r"\d+$", "", w)
         if not w2 or not w2[0].isupper():
             return False
@@ -1467,6 +1484,14 @@ def _is_lede_table_line(ln: str) -> bool:
         return True
     if _LEDE_BARE_UNITS_LOWER_RE.match(ln):
         return True
+    # Batch 182: a bare "Dollars in millions," units line (CSX's split
+    # declaration) and its "except per share amounts ..." continuation
+    # glued to the column labels — both are the table's own header,
+    # never narrative.
+    if _LEDE_BARE_UNITS_DOLLARS_RE.match(ln):
+        return True
+    if _is_lede_split_units_continuation(ln):
+        return True
     # Batch 180: a "% change" table footnote glued onto a quote
     # attribution (Visa) — the footnote and the period header are the
     # table's own text, and the attribution without its quote is a
@@ -1593,7 +1618,12 @@ def _is_bare_highlights_heading(ln: str) -> bool:
 # A horizontal-rule line: a flattened <hr> or a row of underscores/dashes
 # in the exhibit (Meta's releases carry a 36-underscore rule between the
 # Highlights bullets and the footnote). It is never content. Batch 157.
-_RULE_LINE_RE = re.compile(r"^([_\-*=])\1{7,}$")
+_RULE_LINE_RE = re.compile(r"^(?:([_\-*=])\1{7,}|#+(\s+#+)*)$")
+# Batch 182: the second alternative is a hash separator — Amex
+# flattens its "###" end-of-release marker as the line "# # #",
+# which was the tail of every Amex highlights block (5 quarters).
+# A line of nothing but "#" (spaced or not) is a separator, never
+# content; the final-assembly filter strips it for both paths.
 
 # A table-intro sentence standing alone as a line ("The following table
 # summarizes the key financial performance measures for the third quarter
@@ -1735,6 +1765,229 @@ def _is_lede_conf_call_heading(ln: str) -> bool:
             continue
         return False
     return True
+
+
+def _is_lede_recon_heading(ln: str) -> bool:
+    """True for a reconciliation-table section heading in the lede
+    ("GAAP/Adjusted (non-GAAP) Operating Earnings Reconciliation" —
+    Constellation, 5 cache quarters; "Reconciliation of Commissions
+    and Fees" — Brown & Brown, 7; "Reconciliation of GAAP to Non-GAAP
+    Measures1" — CSX). It heads the reconciliation table, so it is
+    never highlights — but the batch-178 budget freeing lets the loop
+    reach it, and it consumes a budget line (and in the Highlights
+    section path it is collected as content, with its boilerplate
+    intro paragraph behind it). Guards: short (2-10 words),
+    capital-led (small connector words allowed; a parenthesized
+    qualifier like "(non-GAAP)" is transparent), unterminated,
+    figure-free, no headline verb, and it must carry "reconcil".
+    A sub-headline naming a reconciliation ("Company Provides
+    Reconciliation of ...") is kept by the verb veto; a prose
+    mention is terminated ("Please see a reconciliation ...") or
+    lowercase-led, so neither qualifies. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 10:
+        return False
+    if "reconcil" not in s.lower():
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s):
+        return False
+    for w in words:
+        if w.startswith("("):
+            continue  # parenthesized qualifier, e.g. "(non-GAAP)"
+        clean = w.strip(",;:()\"'")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_recon_heading_wrap(ln: str) -> bool:
+    """True for the wrapped continuation of a reconciliation heading
+    (Brown & Brown: "Reconciliation of Commissions and Fees" / "to
+    Organic Revenue" — one heading split across two lines). Only
+    consulted immediately after a skipped recon heading, so the
+    position is the evidence: a short lowercase-led fragment there is
+    the heading's wrap tail, never prose. Guards: short (1-6 words),
+    unterminated, figure-free, no $/%, first word lowercase.
+    Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if _LEDE_FIGURE_RE.search(s):
+        return False
+    words = s.split()
+    if not 1 <= len(words) <= 6:
+        return False
+    return words[0][0].islower()
+
+
+def _is_lede_segment_heading(ln: str) -> bool:
+    """True for a business-segment section heading in the lede
+    ("North America Automotive Parts Group (\"North America
+    Automotive\")" — Genuine Parts, 2 cache quarters; the 4-word
+    form "Automotive Parts Group (\"Automotive\")" is already caught
+    by the table-line short-label rule, the 8-word form escapes it).
+    The heading introduces the segment paragraph below it, which is
+    real content — so the heading itself is skipped and the paragraph
+    is kept, freeing the budget line the dangling heading consumed.
+    Guards: ends with Group ("<alias>"), short (3-10 words),
+    capital-led (small connector words allowed; the parenthesized
+    alias words are heading words too), unterminated, figure-free.
+    A prose line ending in a group name is terminated or
+    lowercase-led, so it never qualifies. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if not re.search(r"\bGroup\s*\(\"[^\"]+\"\)$", s):
+        return False
+    words = s.split()
+    if not 3 <= len(words) <= 10:
+        return False
+    for w in words:
+        if w.startswith("("):
+            continue  # alias opener, e.g. '("North'
+        clean = w.strip(",;:()\"'")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_lede_call_announcement(ln: str) -> bool:
+    """True for a conference-call announcement line that the batch-166
+    notice regex misses (CSX, 6 quarters: "CSX executives will conduct
+    a conference call with the investment community this afternoon,
+    October 16, at 4:30 p.m. Eastern Time. Investors, media and the
+    public may listen to the conference call by dialing 1-888-510-2008.
+    ..."). The batch-166 regex needs "conference call" AND "webcast" /
+    "replay" on one line; CSX splits the notice — the announcement
+    line carries the call + time + dial-in but no webcast, and the
+    webcast lives on the next line. Guards: a future-tense scheduling
+    verb ("will conduct/host/hold") before "conference call", plus a
+    time or dial-in detail — a prose mention ("on the conference call,
+    management said ...") has neither, and a bare heading-shaped
+    announcement ("Company to Host Conference Call to Discuss Q3
+    Results") has no time/dial-in, so the conf-call-heading guard's
+    kept announcements stay kept. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if not re.search(
+        r"will (?:conduct|host|hold)\b[^.]*\bconference call\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(
+        re.search(r"\d{1,2}:\d{2}\s*[ap]\.?m\.?|dial", s, re.IGNORECASE)
+    )
+
+
+def _is_lede_webcast_continuation(ln: str) -> bool:
+    """True for the webcast second half of a split conference-call
+    notice (CSX: "In conjunction with the call, a live webcast will
+    be accessible and presentation materials will be posted ... .
+    Following the earnings call, a webcast replay ... will be
+    archived ..."). Only consulted immediately after a skipped call
+    notice, so the position is the evidence: the line opens "In
+    conjunction with the call" and carries "webcast" — a real prose
+    sentence never opens that way right after a call announcement.
+    Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    return bool(
+        re.match(
+            r"in conjunction with the call\b.*\bwebcast\b",
+            s,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _is_lede_report_pointer(ln: str) -> bool:
+    """True for a pointer sentence to where the full announcement
+    lives (CSX, 12 cache quarters: "This earnings announcement, as
+    well as additional detailed financial information, is contained
+    in the CSX Quarterly Financial Report available through the
+    company's website ... and on Form 8-K ..."; American Express, 12
+    quarters: "This earnings release should be read in conjunction
+    with the company's statistical tables ..."). It is a document-tail
+    pointer, never highlights — but the freed lede budget reaches it
+    once the notice above it drops, and it consumes a budget line.
+    Guards: opens "This earnings announcement / press release /
+    earnings release" and contains "is contained in" or "should be
+    read in conjunction with", or opens "See information regarding"
+    and contains "presented later in this press release" (Brown &
+    Brown, 12 quarters: "See information regarding non-GAAP measures
+    presented later in this press release."). A highlights sentence
+    never opens either way. The opener is load-bearing: Charter's
+    "The information in this press release should be read in
+    conjunction with ..." is mid-paragraph boilerplate, not a
+    line-opener, so it never qualifies. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    low = s.lower()
+    if re.match(
+        r"this (?:earnings announcement|press release|earnings release)\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return (
+            "is contained in" in low
+            or "should be read in conjunction with" in low
+        )
+    if re.match(r"see information regarding\b", s, re.IGNORECASE):
+        return "presented later in this press release" in low
+    return False
+
+
+def _is_lede_split_units_continuation(ln: str) -> bool:
+    """True for the continuation of a split units declaration glued to
+    table column labels (CSX: "except per share amounts Operating
+    Income Operating Margin Net" — the second half of the "Dollars in
+    millions," units line, flattened with the recon table's column
+    headers). Guards: opens with "except per share (amounts|data)",
+    unterminated, and carries a table metric word after the units
+    phrase — a wrapped prose fragment starting "except ..." carries
+    no metric word. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    m = re.match(r"except per share (?:amounts|data)\b", s, re.IGNORECASE)
+    if not m:
+        return False
+    return bool(_LEDE_TABLE_HEADER_METRIC_RE.search(s[m.end():]))
 
 
 def _is_lede_footnote_attribution(ln: str) -> bool:
@@ -2147,7 +2400,15 @@ _FOOTNOTE_DEF_SENTENCE_RE = re.compile(
 # Forecasted Data\u201d)") — a cross-reference wrapped in parens, never
 # narrative. Batch 173.
 _FOOTNOTE_POINTER_RE = re.compile(
-    r"^(?:\d{1,3}[.)]?\s+|\(+)(See|Refer to)\b", re.IGNORECASE
+    # Batch 182: the number may be GLUED to its word ("1See the
+    # Non-GAAP Measures section ..." — CSX's recon-table footnote,
+    # flattened without the space; Aflac's "1Refer to previously
+    # defined ..." is the same shape, terminated). The batch-178
+    # glued-number precedent: a digit glued to "See"/"Refer to" is a
+    # pointer by construction — no prose opens that way — so the space
+    # is optional. The verb is the guard, as before.
+    r"^(?:\d{1,3}[.)]?\s*|\(+)(See|Refer to)\b",
+    re.IGNORECASE,
 )
 
 
@@ -4725,8 +4986,16 @@ def extract_press_release_highlights(
                 # shareholders,", "Dear Shareholders," — or the split
                 # "Fellow" / "Shareholders," form) is a greeting, never
                 # lede content. Batch 169.
-            if _CONFERENCE_CALL_NOTICE_RE.search(ln):
+            if _CONFERENCE_CALL_NOTICE_RE.search(ln) or _is_lede_call_announcement(ln):
                 i += 1
+                # Batch 182: a split notice's webcast second half
+                # ("In conjunction with the call, a live webcast ...")
+                # is the same notice — consume it with the announcement
+                # so it never dangles as a lede line.
+                if i < len(lede_lines) and _is_lede_webcast_continuation(
+                    lede_lines[i]
+                ):
+                    i += 1
                 continue  # investor-conference-call notice (Emerson: the
                 # "Today, beginning at 3:30 p.m. ... will discuss the ...
                 # results during an investor conference call ... live
@@ -4742,6 +5011,12 @@ def extract_press_release_highlights(
                 # announcement, never highlights; the batch-166 regex
                 # needs "conference call", so this shape slipped
                 # through. Batch 181.
+            if _is_lede_report_pointer(ln):
+                i += 1
+                continue  # Batch 182: a pointer sentence to the full
+                # report ("This earnings announcement ... is contained
+                # in the CSX Quarterly Financial Report ...") is
+                # document-tail boilerplate, never highlights.
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
@@ -4807,6 +5082,36 @@ def extract_press_release_highlights(
                 # notice, About, forward-looking statements) — never
                 # highlights. The quarter/results guard in the
                 # predicate keeps call announcements in the lede.
+            if _is_lede_recon_heading(ln):
+                # Batch 182: a reconciliation-table section heading
+                # ("GAAP/Adjusted (non-GAAP) Operating Earnings
+                # Reconciliation", "Reconciliation of Commissions and
+                # Fees") — the table's own title, never highlights.
+                # SKIPPED, not a break: the table's rows are skipped
+                # below and real prose after the table is still
+                # collected (CSX's CEO quote and volume paragraph
+                # follow its recon table — a break would lose them).
+                # A wrapped heading's continuation ("to Organic
+                # Revenue") goes with it — at most two lines, only
+                # while the wrap shape holds.
+                i += 1
+                wraps = 0
+                while (
+                    wraps < 2
+                    and i < len(lede_lines)
+                    and _is_recon_heading_wrap(lede_lines[i])
+                ):
+                    i += 1
+                    wraps += 1
+                continue
+            if _is_lede_segment_heading(ln):
+                i += 1
+                continue  # Batch 182: a business-segment section
+                # heading ("North America Automotive Parts Group
+                # (\"North America Automotive\")" — Genuine Parts) heads
+                # the segment paragraph below it, which is real content
+                # — so only the heading is skipped, freeing the budget
+                # line the dangling heading consumed.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
@@ -5203,6 +5508,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             if (
                 _TABLE_UNITS_RE.match(follow)
                 or _TABLE_WORD_UNITS_RE.match(follow)
+                or _LEDE_BARE_UNITS_DOLLARS_RE.match(follow)
+                or _is_lede_recon_heading(follow)
+                or _CONFERENCE_CALL_NOTICE_RE.search(follow)
+                or _is_lede_call_announcement(follow)
                 or _is_lede_table_heading(follow)
                 or _is_lede_period_header(follow)
                 or _is_lede_date_header(follow)
@@ -5214,6 +5523,12 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # ends here, the heading is not highlights. Only the strong
                 # heading shapes break — data rows stay out, so a section
                 # whose bullets are figure-dense is never cut. Batch 153.
+                # Batch 182: a conference-call notice breaks collection
+                # the same way (CSX: the notice + webcast + pointer
+                # lines were collected as section content in 3 quarters
+                # because the collector has no notice handling — the
+                # lede loop's notice skip never runs on the section
+                # path).
                 # Batch 154: a date header ("Three Months Ended June 30,")
                 # breaks too — it is the table's period header, and without
                 # it Instacart's financial section ends on the orphan line.
@@ -5308,6 +5623,16 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                     # section — the same dangling heading as in the lede
                     # loop (Disney); the bullets after it are the
                     # content. Batch 173.
+                    j += 1
+                    continue
+                if _is_lede_report_pointer(collected[j]):
+                    # Report-pointer sentence inside a Highlights
+                    # section (American Express: "This earnings release
+                    # should be read in conjunction with the company's
+                    # statistical tables ...") — the same document-tail
+                    # pointer as in the lede loop; the section collector
+                    # is the path that actually serves Amex, so it needs
+                    # the skip too. Batch 182.
                     j += 1
                     continue
                 if not _is_lone_bullet_marker(collected[j]):
