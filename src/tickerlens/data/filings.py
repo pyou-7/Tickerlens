@@ -476,6 +476,67 @@ _LEDE_QUOTE_ATTRIBUTION_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A quote attribution split across wrapped lines (Emerson Q4 FY2024):
+# the budget line ends "...said Emerson President and Chief Executive
+# Officer" and the speaker's name plus the quote's second half sit on
+# the next line ("Lal Karsanbhai. "We have done an exceptional job
+# ..."). The finish rule reads the budget line as a complete item —
+# it ends in a role noun, so neither the wrap-tail test (a function
+# word) nor the batch-180 attribution-tail test (a colon-ended
+# attribution) fires — and breaks, orphaning the quote continuation.
+# The shape: a quote verb followed by a role title at the line end,
+# with no comma between verb and role — a complete attribution names
+# the speaker on the same line ("said Jane Smith, President and CEO",
+# comma after the name), so the comma is the guard that keeps a
+# finished attribution finished. Batch 181.
+_LEDE_QUOTE_VERB_RE = re.compile(
+    r"\b(said|says|commented|noted|added|stated)\b", re.IGNORECASE
+)
+_LEDE_SPLIT_ATTRIBUTION_ROLE_RE = re.compile(
+    r"\b(?:(?:President|Chairman|Chair|Chair-Elect)\s+and\s+)?"
+    r"(?:Chief Executive Officer|Chief Financial Officer|"
+    r"Chief Operating Officer|CEO|CFO|COO|President|Chairman|Chair|"
+    r"Chief Executive|Chief Financial|Chief Operating)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_split_quote_attribution(ln: str) -> bool:
+    """True for a quote attribution whose speaker name sits on the
+    next line: a quote verb plus a role title at the line end, no comma
+    between verb and role. The quote it introduces continues past the
+    budget line, so the finish rule must treat the item as unfinished.
+    A complete attribution ("said Jane Smith, President and CEO") has
+    the comma and never qualifies; a bare role line has no verb and
+    never qualifies."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    verb = _LEDE_QUOTE_VERB_RE.search(s)
+    if not verb:
+        return False
+    if "," in s[verb.start() :]:
+        return False
+    return bool(_LEDE_SPLIT_ATTRIBUTION_ROLE_RE.search(s))
+
+
+def _lede_quote_is_open(lines: list[str]) -> bool:
+    """True when the lede's quotes are unbalanced — an opening quote
+    mark with no closing mark yet. A multi-sentence CEO quote closes
+    after its last sentence, not after its first: the finish rule's
+    sentence-terminated break must not fire while the quote that the
+    budget line opened is still open (Emerson Q4 FY2024: the second
+    quote sentence ends "…Emerson Management System." and the third
+    sentence "Emerson's leading technology … fiscal 2025." still
+    belongs to the same quote). Curly quotes pair by kind; straight
+    quotes toggle by parity. The overrun cap (4 lines) still bounds
+    the pull-in, so a stray mark can cost at most a few lines.
+    Batch 181."""
+    opens = sum(ln.count("“") for ln in lines)
+    closes = sum(ln.count("”") for ln in lines)
+    straights = sum(ln.count('"') for ln in lines)
+    return (opens - closes) + (straights % 2) > 0
+
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
 # Full-line (possibly repeated for multi-period headers) so a prose
@@ -483,11 +544,15 @@ _LEDE_QUOTE_ATTRIBUTION_TAIL_RE = re.compile(
 _PERCENT_CHANGE_WORDS_RE = re.compile(r"^(percent change\s*)+$", re.IGNORECASE)
 
 # One flattened table cell on its own line (batch 143): a lone "$", a
-# bare number ("1,757,093", "(1,371,420 )", "2024"), or a period header
-# ("Three Months Ended", "12 Weeks Ended 12 Weeks Ended"). Simon's
-# "Financial Highlights" table splits every cell across lines, so no
-# line carries both $ and % and no units line exists at all.
-_BARE_CELL_RE = re.compile(r"^(\$|\(?[\d,\s]+\)?)$")
+# bare number ("1,757,093", "(1,371,420 )", "2024"), a lone $ amount
+# ("$ 0.44" — a flattened table cell, not a metric value: a metric
+# value carries a scale word or suffix, "$50.2 billion" / "$1.2B",
+# which the number-only class never matches; batch 181, CSX's
+# recon-table EPS cell), or a period header ("Three Months Ended",
+# "12 Weeks Ended 12 Weeks Ended"). Simon's "Financial Highlights"
+# table splits every cell across lines, so no line carries both $ and
+# % and no units line exists at all.
+_BARE_CELL_RE = re.compile(r"^(\$|\(?[\d,\s]+\)?|\$\s?[\d,().]+)$")
 _PERIOD_HEADER_RE = re.compile(
     r"^(((three|six|nine|twelve)\s+months\s+ended\s*)+"
     r"|(\d+\s+weeks\s+ended\s*)+"
@@ -726,7 +791,7 @@ def _is_lede_colon_heading(ln: str) -> bool:
 # ("Non-GAAP1,2" -> "non-gaap", "EPS2" -> "eps"); "Earnings" joins the
 # metric list for the same pair of lines.
 _LEDE_TABLE_HEADER_METRIC_RE = re.compile(
-    r"\b(EPS|Revenue|Income|Margin|EBITDA|Sales|Cash|Profit|Dividend|Earnings)\b",
+    r"\b(EPS|Revenue|Income|Margin|EBITDA|EBITA|EBIT|Sales|Cash|Profit|Dividend|Earnings)\d?\b",
     re.IGNORECASE,
 )
 _LEDE_TABLE_HEADER_QUALIFIERS = frozenset(
@@ -743,13 +808,23 @@ def _is_lede_table_header(ln: str) -> bool:
     if _is_sentence_terminated(s):
         return False
     words = s.split()
-    if not 4 <= len(words) <= 8:
+    # Batch 181: the floor moves 4 -> 3 — Emerson's "Adjusted Segment
+    # EBITA4" is a 3-word column label (metric + qualifier), and the
+    # capital-led + metric + qualifier guards already keep prose out.
+    # A bare year token is transparent in the capital-led check (FICO's
+    # "Fourth Quarter Fiscal 2024 GAAP Revenue" is a period phrase plus
+    # a metric label, not prose) — the year is already excluded from
+    # the repeated-word/qualifier list below, so only this loop needed
+    # the skip.
+    if not 3 <= len(words) <= 8:
         return False
     if not _LEDE_TABLE_HEADER_METRIC_RE.search(s):
         return False
     if _LEDE_HEADLINE_VERB_RE.search(s):
         return False  # sub-headline, not a column header
     for w in words:
+        if _LEDE_YEAR_RE.fullmatch(w.strip(",")):
+            continue  # a bare year is a period token, not a word
         w2 = re.sub(r"\d+$", "", w)
         if not w2 or not w2[0].isupper():
             return False
@@ -1266,6 +1341,101 @@ def _is_lede_recon_row(ln: str) -> bool:
     return False
 
 
+def _is_table_intro_only(ln: str) -> bool:
+    """True when a line IS a table-intro sentence, not a paragraph that
+    merely opens with one. Batch 181: Emerson's Q3 FY2025 guidance
+    paragraph opens "The following table summarizes the fiscal year
+    2025 guidance framework." and continues in the same flattened
+    line with real guidance prose ("Net and underlying sales guidance
+    of ~3.5% ... GAAP EPS is now expected to be ~$4.08 ...") — the
+    batch-156 branch dropped the whole paragraph as table residue,
+    and the guidance-table rows leaked into the freed budget instead.
+    The batch-157 trailing rule already knew this ("Emerson's guidance
+    paragraph ... must never be dropped") but only applied at the
+    tail; the lede-loop branch had no such guard. The guard is the
+    remainder after the intro sentence's first terminator: empty
+    (a standalone intro, terminated or not — Cigna's unterminated
+    "The following table summarizes The Cigna Group's medical
+    customers") means table-only; a remainder carrying a $ figure is
+    substantive prose. Measured over the cache: 219 of 220 intro
+    lines are single-sentence, exactly 1 (Emerson Q3 FY2025) carries
+    $ prose after the intro, 0 are multi-sentence without $. The
+    remainder test errs toward prose: a decimal inside the intro
+    sentence only lengthens the remainder, so a $ there still saves
+    the line."""
+    m = _TABLE_INTRO_RE.search(ln)
+    if not m:
+        return False
+    end = len(ln)
+    for punct in (".", "!", "?"):
+        idx = ln.find(punct, m.end())
+        if idx != -1:
+            end = min(end, idx)
+    rest = ln[end + 1 :].strip() if end < len(ln) else ""
+    return not rest or "$" not in rest
+
+
+_LEDE_SINGLE_VALUE_RE = re.compile(r"~?\(?\$\s?\.?[\d,().]+[BMK]?\)?$")
+_LEDE_SINGLE_VALUE_VERB_RE = re.compile(
+    r"\b(was|were|is|are|has|have|had|increased|decreased|rose|fell|"
+    r"grew|represents|represent|included|includes|generated|totaled|"
+    r"reached|amounted|delivered|came|declined|improved|reflects|"
+    r"reflected|remains|remained)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_single_value_row(ln: str) -> bool:
+    """True for a guidance/balance-sheet table row carrying exactly one
+    $ value: a metric label plus a single bare amount ("Operating Cash
+    Flow ~$3.6B", "Free Cash Flow ~$3.2B", "Discrete taxes related to
+    AspenTech transaction $0.09", "IEEPA tariff refunds - ~($0.11)").
+    The data-row predicate needs 2 figures, so these single-column rows
+    leaked into the lede once the batch-178 budget freeing reached
+    Emerson's guidance table (and American's cash-flow table the same
+    way). Guards: unterminated and bullet-free (a bullet is narrative);
+    the line must END in the bare $ value (a prose $ figure carries a
+    scale word — "$135.7 million" — or "per share" after it); the label
+    is 2-12 words with no mid-line sentence boundary; and the label
+    carries no finite verb and does not end in a preposition ("to",
+    "of") — the shapes that separate a table row from a wrapped
+    summary line ("FULL-YEAR EARNINGS PER SHARE INCREASED 14% TO
+    $11.21", "GAAP Diluted EPS Increased 2% to $1.13", "BOOK VALUE
+    PER SHARE OF $99.08", "Adjusted* Diluted EPS of $2.58",
+    "reported net income of $374.2", "Board of Directors Declares
+    Quarterly Cash Dividend of $0.59"). A table-row label ends in a
+    noun, never a preposition. Measured over the cache: 140
+    single-value candidates end in "of", every one sampled a prose
+    summary line; "at" and "for" have zero attested candidates, so
+    they are not in the guard. Participles common in
+    table labels ("provided", "reported", "related", "adjusted") are
+    deliberately NOT in the verb list, so "Net cash provided by
+    operating activities $ 3,803" and "Gross profit, as reported
+    $ 2,917" still drop. A lone value ("$50.2 billion", no label) is
+    not a row — the label floor keeps the batch-157 lone-value rule.
+    Batch 181."""
+    if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
+        return False
+    if len(ln) > 120:
+        return False
+    if len(re.findall(r"\$\s?\.?[\d(]", ln)) != 1:
+        return False
+    m = _LEDE_SINGLE_VALUE_RE.search(ln)
+    if not m:
+        return False
+    label = ln[: m.start()].strip()
+    words = label.split()
+    if not 2 <= len(words) <= 12:
+        return False
+    if re.search(r"[.!?]\s", label):
+        return False
+    if _LEDE_SINGLE_VALUE_VERB_RE.search(label):
+        return False
+    if words[-1].lower() in {"to", "of"}:
+        return False
+    return True
+
+
 def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
     if _BULLET_LEAD_RE.match(ln):
@@ -1275,8 +1445,11 @@ def _is_lede_table_line(ln: str) -> bool:
     # is the table's own preamble, and without this it consumes a lede
     # line after a rejected table section. Only "summarizes" is matched:
     # "sets forth" is genuine prose in the wild (Crown Castle Q1 2026),
-    # so the verb is not generalized.
-    if _TABLE_INTRO_RE.search(ln):
+    # so the verb is not generalized. Batch 181: only when the intro
+    # sentence IS the line — a paragraph that opens with the intro and
+    # continues with real prose (Emerson's guidance paragraph) is
+    # content, not residue; _is_table_intro_only is the guard.
+    if _is_table_intro_only(ln):
         return True
     # Batch 162: a bare numbered footnote ("1) See Table A ...") is
     # table residue even though it is a terminated sentence — checked
@@ -1322,6 +1495,11 @@ def _is_lede_table_line(ln: str) -> bool:
     # runs long and its values are sparse, so it reads as prose to the
     # density rules but is still a table row.
     if _is_lede_recon_row(ln):
+        return True
+    # Batch 181: a single-value table row (one $ figure — Emerson's
+    # guidance table, American's cash-flow table) is residue too; the
+    # data-row predicate needs 2 figures, so these leaked.
+    if _is_lede_single_value_row(ln):
         return True
     if len(ln) > 60:
         return False
@@ -1512,6 +1690,51 @@ def _is_lede_title_line(ln: str) -> bool:
     load-bearing — without it the batch-177 keeps all drop. Batch 178.
     """
     return _is_trailing_heading(ln) and not _LEDE_HEADLINE_VERB_RE.search(ln)
+
+
+def _is_lede_conf_call_heading(ln: str) -> bool:
+    """True for a conference-call section heading in the lede
+    ("Conference Call and Upcoming Events" — Emerson; "Webcast and
+    Conference Calls" — AppLovin). It heads the boilerplate section
+    (call notice, investor-conference notice, About, forward-looking
+    statements), so it is never highlights — but the batch-178 budget
+    freeing lets the lede loop reach it once the rows above it are
+    skipped, and it consumes a budget line. Guards: short (2-8
+    words), capital-led (small connector words allowed), unterminated,
+    figure-free, no headline verb, and it must name the section
+    ("conference call" / "upcoming events"). An announcement names
+    the quarter or the results ("Company to Host Conference Call to
+    Discuss Q3 Results") and is kept — a bare section heading never
+    does. Batch 181."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 8:
+        return False
+    low = s.lower()
+    if "conference call" not in low and "upcoming events" not in low:
+        return False
+    if re.search(r"\bq[1-4]\b", low) or "results" in low or "earnings" in low:
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s):
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
 
 
 def _is_lede_footnote_attribution(ln: str) -> bool:
@@ -1717,6 +1940,27 @@ _CONFERENCE_CALL_NOTICE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# An investor-conference notice (Emerson: "Emerson will hold an
+# in-person and virtual investor conference on Thursday, Nov. 20 in
+# New York City. A live webcast of the investor conference will begin
+# at 8:00 a.m. ..." and "Emerson also announces it will host an
+# investor conference on Nov. 20, 2025 in New York City. Event
+# details will be distributed closer to this date.") is the same
+# class as the conference-call notice — an event announcement, never
+# highlights — but it says "conference", not "conference call", so
+# the batch-166 regex never fires on it and the freed lede budget
+# serves it. Two shapes: "will hold/host an investor conference"
+# (both attested lines), or an investor conference tied to a webcast
+# in the same sentence. The "(?! call)" guard keeps a conference
+# CALL notice on the batch-166 regex (it already skips those) and
+# keeps "investor conference call" from matching this one. Batch 181.
+_INVESTOR_CONFERENCE_NOTICE_RE = re.compile(
+    r"\bwill\s+(?:hold|host)\b[^.]*?\binvestor conference\b(?! call)"
+    r"|\binvestor conference\b(?! call)[^.]*?\bwebcast\b"
+    r"|\bwebcast\b[^.]*?\binvestor conference\b(?! call)",
+    re.IGNORECASE,
+)
+
 # A bare numbered footnote ("1) See Table A for information regarding
 # non-GAAP financial measures.", "1) The three months ended June 30,
 # 2025 are adjusted for M&A transaction costs of $1.4 million ...") —
@@ -1916,17 +2160,25 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
       - Terminated sentence: a wrapped bullet continuation ("12 of them
         in Texas") is unterminated, so it never opens — the termination
         test is what keeps wrapped prose out.
-      - 500-char cap: a footnote definition is one or two short
-        sentences — attested bare-numbered footnotes run to 470 chars
-        (Amex's participating-award footnote). Two longer ones still
-        sit above the cap and survive as tails — Moody's 556-char
+      - 1000-char cap: a footnote definition is one or two short
+        sentences — attested bare-numbered footnotes run to 984 chars
+        (Comcast's pro-forma footnote; Emerson's 699-char Copeland
+        discontinued-operations footnote, Moody's 556-char
         medium-term-EPS disclaimer, Amex's 671-char FX-adjusted
-        footnote — carried as a follow-up (a higher cap needs its own
-        evidence). Page/table mega-lines start with a bare number too
-        (Affirm's page-flattened letter lines; Ford's flattened
-        highlights table, a 3000-char line) and are far longer — the
-        cap keeps them out, and the Affirm lines are unterminated
-        besides, so the termination test excludes them.
+        footnote). Batch 181 raised the cap from 500: the 500–1000
+        band is footnotes throughout (~190 attested lines, every one
+        sampled a definition), and the one non-footnote sampled is
+        Affirm's 913-char page-flattened chart title, which is
+        harmless to skip. Above 1000 the population is dominated by
+        page/table mega-lines (Affirm's shareholder-letter lines,
+        Ford's 3000-char flattened highlights table, BofA's
+        balance-sheet table) with only a few real footnotes
+        interspersed (Nike's 1071-char segment footnote, Ford's
+        1179-char guidance footnote), so the cap stays at 1000 and
+        those longer ones survive as tails. Page/table mega-lines
+        start with a bare number too and are far longer — the cap
+        keeps them out, and the Affirm lines are unterminated besides,
+        so the termination test excludes them.
       - Capital after the number: a footnote sentence starts capitalized
         ("1 Net debt is ...", "2 Comp sales ...", "3 Source: ..."). A
         wrapped bullet continuation starts with a lowercase quantity
@@ -1941,7 +2193,7 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
         followed by a lowercase letter — "3M reports ..." is digit +
         single capital + space, so a company name never opens a block.
     """
-    if len(ln) > 500 or not _is_sentence_terminated(ln):
+    if len(ln) > 1000 or not _is_sentence_terminated(ln):
         return False
     return bool(re.match(r"^\d{1,3}(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
 
@@ -4481,6 +4733,15 @@ def extract_press_release_highlights(
                 # webcast ... replay ..." line) is never highlights; it
                 # backfills the lede once the footnotes are dropped.
                 # Batch 166.
+            if _INVESTOR_CONFERENCE_NOTICE_RE.search(ln):
+                i += 1
+                continue  # investor-conference notice (Emerson: "will
+                # hold an in-person and virtual investor conference on
+                # Thursday, Nov. 20 ..." / "will host an investor
+                # conference on Nov. 20, 2025 ...") — an event
+                # announcement, never highlights; the batch-166 regex
+                # needs "conference call", so this shape slipped
+                # through. Batch 181.
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
@@ -4538,6 +4799,14 @@ def extract_press_release_highlights(
                 # never highlights. The verb veto in the predicate keeps
                 # sub-headlines ("Q2 ORGANIC SALES AND ADJUSTED EPS
                 # EXCEED OUTLOOK") in the lede.
+            if _is_lede_conf_call_heading(ln):
+                i += 1
+                continue  # Batch 181: a conference-call section
+                # heading ("Conference Call and Upcoming Events") heads
+                # the boilerplate tail (call notice, investor-conference
+                # notice, About, forward-looking statements) — never
+                # highlights. The quarter/results guard in the
+                # predicate keeps call announcements in the lede.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
@@ -4598,6 +4867,7 @@ def extract_press_release_highlights(
                         marker_seen
                         or bool(_LEDE_WRAP_TAIL_RE.search(lede[-1]))
                         or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]))
+                        or _is_lede_split_quote_attribution(lede[-1])
                     )
                     finish_sentence = not marker_seen and finish_item
                 if not finish_item:
@@ -4607,7 +4877,7 @@ def extract_press_release_highlights(
                     break  # a new bullet starts past the budget — stop at
                     # the item boundary rather than starting a bullet we
                     # cannot finish. Batch 165.
-                if finish_sentence and _is_sentence_terminated(lede[-1]) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]):
+                if finish_sentence and _is_sentence_terminated(lede[-1]) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]) and not _lede_quote_is_open(lede):
                     break  # the unfinished sentence just terminated — the
                     # next line starts a new item, not a continuation.
                     # Batch 180: a quote attribution ("... commented on
@@ -4620,6 +4890,13 @@ def extract_press_release_highlights(
                     # (The _is_sentence_terminated ":" branch stays: for
                     # the table-line gate a colon-ended line is a complete
                     # heading unit.)
+                    # Batch 181: an open quote suppresses the stop too —
+                    # a multi-sentence quote's first sentence terminating
+                    # does not end the quote ("…Emerson Management
+                    # System." is followed by "Emerson's leading
+                    # technology … fiscal 2025." in the same quote), so
+                    # the next line still belongs to the item. The
+                    # overrun cap (4 lines) still bounds the pull-in.
                     # Batch 165.
                 if overrun >= 4:
                     break  # finishing cap: at most 4 lines past the budget
