@@ -896,6 +896,14 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
 # Lauder's summary table flattens "$0.44" as "$ .44"), so the optional
 # dot is part of the $ figure too.
 _LEDE_DATA_ROW_RE = re.compile(r"\$\s?\.?[\d(]")
+# Batch 183: a $-to-$ range ("$7.50 to $8.00") is a guidance statement,
+# never a table row — a row's values are separate columns. Batch 178
+# guarded only the 81-120 band with this; the <=80 branch and the
+# >=40% density branch still classified short ranges as rows (GPC's
+# 55-char "Reaffirms 2026 Outlook for Adjusted EPS of $7.50 to $8.00"
+# sub-headline; the dense "EPS $7.50 to $8.00"). Shared here so every
+# $-carrying branch uses the same exemption.
+_LEDE_DOLLAR_RANGE_RE = re.compile(r"\$\s?\.?[\d,().]+\s+to\s+\$", re.IGNORECASE)
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
 # A table's symbol legend ("NM = not meaningful" — Allstate defines the
 # NM cell value below its Consolidated Highlights table). A short
@@ -1111,6 +1119,27 @@ def _is_lede_table_title(ln: str) -> bool:
     )
 
 
+def _is_lede_dollar_range_statement(ln: str) -> bool:
+    """True for a guidance-range STATEMENT: a $-to-$ range carried by a
+    label or subject (at least 4 alphabetic words besides "to"). Batch
+    183: GPC's "Reaffirms 2026 Outlook for Adjusted EPS of $7.50 to
+    $8.00" (6 words), AXP's FY2025 guidance line, BBY's "Expects FY25
+    Non-GAAP Diluted EPS of $5.75 to $6.20", Cencora's raised-guidance
+    line. A bare range fragment ("$10.40 to $11.00" — Moody's
+    outlook-table cell flattened onto its own line) has no words and
+    stays a data row: served, it would dangle in the lede as a bare
+    pair of numbers with no subject.
+    """
+    if not _LEDE_DOLLAR_RANGE_RE.search(ln):
+        return False
+    words = [
+        tok
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)?", ln)
+        if tok.lower() != "to"
+    ]
+    return len(words) >= 4
+
+
 def _is_lede_data_row(ln: str) -> bool:
     """True for a table data row: carries at least 2 figures and figures
     are at least 40% of its tokens ("Net income (loss) per share—diluted
@@ -1171,10 +1200,22 @@ def _is_lede_data_row(ln: str) -> bool:
     Trane's Wingdings "l" EPS bullet ("l GAAP continuing EPS of $3.43;
     adjusted continuing EPS* of $3.37, up 21 percent") trips the
     $-figures branch (2 $ figures in 78 chars) without it.
+    Batch 183: the $-to-$ range exemption is hoisted out of the 81-120
+    band to the top of this predicate — a range is a guidance statement
+    at any length, so the <=80 branch and the >=40% density branch
+    (which both returned True for any 2-$ line) no longer eat short
+    guidance sub-headlines. GPC's 55-char "Reaffirms 2026 Outlook for
+    Adjusted EPS of $7.50 to $8.00" and the dense "EPS $7.50 to $8.00"
+    both classified as data rows before this fix. The exemption is a
+    STATEMENT, not any range: _is_lede_dollar_range_statement requires
+    >=4 alphabetic words, so a bare range fragment ("$10.40 to $11.00"
+    — Moody's outlook-table cell on its own line) stays a data row.
     """
     if _BULLET_LEAD_RE.match(ln):
         return False
     if _is_sentence_terminated(ln):
+        return False
+    if _is_lede_dollar_range_statement(ln):
         return False
     figures = _LEDE_FIGURE_RE.findall(ln)
     if len(figures) < 2:
@@ -1237,11 +1278,7 @@ def _is_lede_data_row(ln: str) -> bool:
             and ln[:1] not in "▪■·○◦"
             and _is_lede_figure_token(tokens[-1])
             and not _LEDE_YEAR_RE.fullmatch(tokens[-1].rstrip(","))
-            and not re.search(
-                r"\$\s?\.?[\d,().]+\s+to\s+\$",
-                ln,
-                re.IGNORECASE,
-            )
+            and not _LEDE_DOLLAR_RANGE_RE.search(ln)
             and not re.search(
                 r"\$\s?\.?[\d,().]+\s+"
                 r"(?:billions?|millions?|thousands?|trillions?)\b",
@@ -5151,6 +5188,20 @@ def extract_press_release_highlights(
                 continue  # table residue (unit lines, outlook-table
                 # headings/headers, data rows) never consumes lede budget
                 # and never gets stored — batch 153
+            if _is_lede_dollar_range_statement(ln) and not any(
+                _is_sentence_terminated(x) for x in lede
+            ):
+                # Batch 183: a guidance-range sub-headline ("Reaffirms
+                # 2026 Outlook for Adjusted EPS of $7.50 to $8.00") is
+                # served but never consumes lede budget — it sits with
+                # the headline, and counting it starved the results
+                # paragraph (AXP's dateline), the CEO quote (BBY) or
+                # the final bullet (GPC). Bounded to the pre-body zone
+                # (no terminated line collected yet): a range statement
+                # past the dateline is body prose, not a sub-headline.
+                lede.append(ln)
+                i += 1
+                continue
             if content_lines >= 6:
                 if finish_item is None:
                     # First line past the budget: decide once whether the
