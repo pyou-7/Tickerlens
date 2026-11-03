@@ -1673,6 +1673,135 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
     )
 
 
+def _is_lede_flat_table_label_shape(ln: str) -> bool:
+    """Shape-only half of _is_lede_flat_table_label: a flattened table
+    row's label line — figure-less and unterminated, 2-12 words. The
+    guards mirror _is_lede_table_label (terminated lines are prose; any
+    figure means a data row or a prose fragment; bullets are content; a
+    mid-line sentence boundary is prose), plus a quote-verb veto (a
+    wrapped quote attribution — \"X, Chief Executive Officer, said,\" —
+    is figure-less and unterminated too), a headline-verb veto (a
+    sub-headline, never a row label) and an all-caps veto (same). A
+    colon-ended line is a heading, not a label — the colon-heading skip
+    upstream already handles it, and _is_sentence_terminated counts
+    \":\" as a terminator. Batch 185.
+    """
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if re.search(r"[.!?]\s", s):
+        return False
+    if _LEDE_FIGURE_RE.search(s):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 12 or len(s) > 120:
+        return False
+    if s.isupper():
+        return False
+    if _is_lede_table_header(s):
+        return False  # a capital-led metric header is a header, not a
+        # label — the loop's table-header skip handles it upstream.
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    return True
+
+
+def _is_lede_flat_table_label(ln: str, prev_ln: str) -> bool:
+    """True for a flattened table row's label line directly below a table
+    header block. Brown & Brown flattens its reconciliation tables one
+    cell per line, so a label (\"Diluted net income per share\",
+    \"Change in estimated acquisition earn-out payables\") survives
+    _drop_table_fragment_runs — its $-value rows drop as a fragment run,
+    but the 5-6-word label is too long for the heading fold (4 words)
+    and too lowercase-led for the table-header predicate — and the lede
+    loop then collects it as its last budget lines (7 quarters). The
+    label sits directly below the table's header block (date/period
+    header, table header/title/heading, units line, recon heading, or
+    bare period fragment), which is what separates it from a wrapped
+    prose fragment: prose follows prose, never a period header. The
+    previous line must be a header-block line, not another label — a
+    wrapped sub-headline (Apple's "Services revenue reaches new
+    all-time high" below "June quarter records for Revenue and EPS",
+    Estée Lauder's wrapped sub-headlines) looks exactly like a run of
+    labels, so a label-shaped previous line never qualifies. The
+    _is_lede_table_label next-line check cannot see these labels —
+    their values rows were already dropped by the fragment-run dropper,
+    so in lede_lines the next line is the next label, not a data row.
+    Batch 185.
+    """
+    if not _is_lede_flat_table_label_shape(ln):
+        return False
+    prev = prev_ln.strip()
+    if not prev:
+        return False
+    return (
+        _is_lede_date_header(prev)
+        or _is_lede_period_header(prev)
+        or _is_lede_table_heading(prev)
+        or _is_lede_table_header(prev)
+        or _is_lede_table_title(prev)
+        or bool(_TABLE_UNITS_RE.match(prev))
+        or bool(_TABLE_WORD_UNITS_RE.match(prev))
+        or _is_lede_recon_heading(prev)
+        or _is_bare_period_fragment(prev)
+    )
+
+
+def _is_lede_table_mode_residue(ln: str) -> bool:
+    """True for a line inside a table region the lede loop is skipping
+    past: anything that is not narrative prose. Once the loop has seen
+    a flattened table label (batch 185), the lines that follow are
+    table rows until real prose resumes — a terminated sentence, a
+    bullet, or the boilerplate break — so an unterminated or
+    colon-ended line is residue, however long (a wrapped balance-sheet
+    row, a cash-flow label); a "Note:" line is a footnote even when
+    terminated. Bullets and terminated prose are never residue: a
+    quote or paragraph after the table (CSX) is still collected, which
+    is why this is a skip-and-continue mode and not a break. Batch 185.
+    """
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if re.match(r"note\s*:", s, re.IGNORECASE):
+        return True
+    stripped = s.rstrip().rstrip("”\"'’)]}")
+    if stripped.endswith(":"):
+        return True  # a colon-ended line is a heading, not prose
+    if _is_sentence_terminated(s):
+        # A company-name line ("Brown & Brown, Inc.") ends in a period
+        # that is an abbreviation, not a sentence terminator — it is
+        # residue, not the prose that ends table mode.
+        last = stripped.rsplit(None, 1)[-1].lower().rstrip(".") if stripped else ""
+        if last in {"inc", "corp", "ltd", "co", "llc", "plc", "lp", "llp"}:
+            return True
+        # A flattened multi-column table row joined with "respectively"
+        # ("Treasury stock, at cost 20 shares at 2024, 20 shares at
+        # 2023, respectively.") is terminated but is not prose — the
+        # per-column values are the row, and collecting it leaks a
+        # balance-sheet row into the highlights (BRO 2024-03-31, blast
+        # 185). The year requirement keeps a plain narrative
+        # "..., respectively." sentence (no year) collectible.
+        if stripped.lower().endswith("respectively.") and re.search(
+            r"\b(?:19|20)\d{2}\b", s
+        ):
+            return True
+        return False
+    return True
+
+
+def _is_lede_nongaap_section_heading(ln: str) -> bool:
+    """True for a bare "Non-GAAP Financial Measures" section heading.
+    The definitions prose under it is boilerplate, never highlights —
+    a supplement packet (EOG) whose TOC and tables fill the lede would
+    otherwise serve the definitions once table mode skips the tables.
+    Only the bare heading qualifies (optional trailing colon): a
+    sentence that merely mentions non-GAAP measures is prose. Batch 185.
+    """
+    return ln.strip().rstrip(":").strip().lower() == "non-gaap financial measures"
+
+
 def _is_lede_table_tail_continuation(ln: str) -> bool:
     """True for a line inside a trailing table run: short, unterminated,
     and figure/marked/label-shaped. A wrapped prose fragment is longer
@@ -2201,8 +2330,13 @@ def _is_lone_bullet_marker(ln: str) -> bool:
     last two glyphs the DB audit found standing alone: the black small
     square ("▪", PNC's lists) and the en dash ("–", Simon's lists) —
     the hyphen-minus was already covered, the en dash was not.
+    Batch 185 adds the em dash ("—"): Brown & Brown's flattened
+    tables leave lone "—" empty cells standing on their own lines,
+    and _BULLET_LEAD_RE already treats "—" as a bullet marker — but
+    without this entry the lone dash was collected as a content line
+    (and cleared table mode), letting the next table's labels in.
     """
-    return ln in ("●", "•", "·", "○", "▪", "-", "–", "*")
+    return ln in ("●", "•", "·", "○", "▪", "-", "–", "—", "*")
 
 
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
@@ -5031,6 +5165,18 @@ def extract_press_release_highlights(
         content_lines = 0
         overrun = 0
         marker_seen = False
+        # Batch 185: set when a flattened table label is skipped — the
+        # lines that follow are table rows until real prose (a terminated
+        # sentence or a bullet) resumes and clears it.
+        in_table = False
+        # Batch 185: set when a real table row (a _is_lede_table_line
+        # skip — a data row, unit line or period header) is seen while
+        # in table mode. Mode residue (labels, TOC entries) does not
+        # count: a TOC-only packet enters mode on its supplement title
+        # and skips nothing but residue, so prose reached with no
+        # table row seen is filler after a TOC, not narrative after a
+        # table (batch 126 guard — see the normal-append break below).
+        table_seen = False
         # Batch 165: decided once, at the first line past the budget —
         # whether the item at the budget is unfinished. finish_sentence
         # is the wrap-tail trigger: the unfinished item is a sentence,
@@ -5043,6 +5189,18 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
+            if in_table and _is_lede_nongaap_section_heading(ln):
+                # Batch 185: the non-GAAP definitions section is
+                # boilerplate — nothing after it is highlights (EOG's
+                # supplement packet: the TOC + tables fill the lede, and
+                # the definitions prose would otherwise be served once
+                # table mode skips the tables). Only in table mode: a
+                # definitions heading ahead of the narrative is not a
+                # reason to stop. This sits at the top of the loop body
+                # because _is_lede_title_line (batch 178) also matches
+                # the bare heading and would skip it before the break
+                # below could run.
+                break
             block = _footnote_def_block_len(lede_lines, i)
             if block:
                 i += block
@@ -5235,11 +5393,39 @@ def extract_press_release_highlights(
                 i += 1
                 continue  # a table row's label line (its values are the
                 # next line, itself a data row) — batch 160
+            if _is_lede_flat_table_label(
+                ln, lede_lines[i - 1] if i > 0 else ""
+            ):
+                # Batch 185: a flattened table row's label directly below
+                # a table header block (Brown & Brown: the label's
+                # $-values were already dropped as a fragment run, so the
+                # label is the only table line the loop can still see —
+                # skipping it alone just lets the next table's labels
+                # fill the budget instead). Skip it and enter table mode:
+                # the lines that follow are table rows until real prose
+                # resumes. NOT a break — a quote or paragraph after the
+                # table (CSX) is still collected; the batch-159
+                # table-title break would lose it, and the v1 break did
+                # (AAPL/AXP/CCI/COF/CSX/EL/FDX, blast 185).
+                in_table = True
+                table_seen = False
+                i += 1
+                continue
             if _is_lede_table_line(ln):
+                if in_table:
+                    table_seen = True
                 i += 1
                 continue  # table residue (unit lines, outlook-table
                 # headings/headers, data rows) never consumes lede budget
                 # and never gets stored — batch 153
+            if in_table and _is_lede_table_mode_residue(ln):
+                # Batch 185: inside a table region, an unterminated or
+                # colon-ended line is another table row, not narrative —
+                # skip it and stay in table mode. Terminated prose and
+                # bullets fall through below, are collected, and clear
+                # the mode.
+                i += 1
+                continue
             if _is_lede_dollar_range_statement(ln) and not any(
                 _is_sentence_terminated(x) for x in lede
             ):
@@ -5252,6 +5438,8 @@ def extract_press_release_highlights(
                 # (no terminated line collected yet): a range statement
                 # past the dateline is body prose, not a sub-headline.
                 lede.append(ln)
+                in_table = False  # Batch 185: narrative resumes.
+                table_seen = False
                 i += 1
                 continue
             if content_lines >= 6:
@@ -5309,10 +5497,36 @@ def extract_press_release_highlights(
                 if overrun >= 4:
                     break  # finishing cap: at most 4 lines past the budget
                 lede.append(ln)
+                in_table = False  # Batch 185: narrative resumes.
+                table_seen = False
                 overrun += 1
                 i += 1
                 continue
+            if (
+                in_table
+                and content_lines == 0
+                and not table_seen
+                and not _is_inline_bullet_start(ln)
+            ):
+                # Batch 185: prose reached in table mode with no content
+                # collected and no real table row seen since the mode
+                # started is filler after a TOC, not narrative after a
+                # table. A supplement packet enters mode on its
+                # supplement title ("Supplemental Financial and Operating
+                # Data Page"), skips its TOC entries as residue, and
+                # would otherwise serve the boilerplate/filler that
+                # follows (batch 126: a TOC-only packet must stay None).
+                # A real table leaves table rows behind (data rows, unit
+                # lines, period headers set table_seen), so a quote or
+                # paragraph after it is still collected (CSX); bullets
+                # are exempt — a bullet is a narrative item, never
+                # filler. Once any content exists the mode is a table
+                # inside a real lede, and prose after it is collected
+                # as before (BRO's pointer sentence).
+                break
             lede.append(ln)
+            in_table = False  # Batch 185: narrative resumes.
+            table_seen = False
             content_lines += 1
             i += 1
         lede = _trim_lede_table_tail(lede)
