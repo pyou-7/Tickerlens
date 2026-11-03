@@ -458,6 +458,24 @@ _LEDE_BARE_UNITS_LOWER_RE = re.compile(
     r"^in (millions|billions|thousands), except",
 )
 
+# A "% change" table footnote glued onto a quote attribution (batch 180):
+# Visa flattens its summary-table footnote ("% change is calculated over
+# the comparable prior-year period."), the table's period header ("Q3
+# 2024") and the CEO-quote attribution ("Ryan McInerney, Chief Executive
+# Officer, Visa, commented on the results:") onto one line. The footnote
+# fragment is the table's own text and the attribution without its quote
+# is a dangling fragment, so the glued line is table residue — dropping
+# it frees the lede budget for the quote itself, which follows the table.
+# Both halves are required: a bare "% change is calculated ..." line is
+# a footnote-definition block (caught elsewhere), and a bare attribution
+# ("... commented on the results:") is a legitimate quote intro the
+# colon-heading veto protects.
+_LEDE_PCT_CHANGE_FOOTNOTE_RE = re.compile(r"% change is calculated", re.IGNORECASE)
+_LEDE_QUOTE_ATTRIBUTION_TAIL_RE = re.compile(
+    r",\s*(?:commented|said|noted|added)(?:\s+on\s+the\s+results)?\s*:\s*$",
+    re.IGNORECASE,
+)
+
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
 # Full-line (possibly repeated for multi-period headers) so a prose
@@ -640,7 +658,12 @@ def _is_lede_heading_fragment(ln: str) -> bool:
 # the idiom); otherwise the line must be a bare noun phrase — no verb
 # at all. A quote attribution ("Sundar Pichai, CEO of Google and
 # Alphabet, said:") is never a heading: dropping it would orphan the
-# quote, so "said"/"says" vetoes. Batch 177. Batch 178: the bare-phrase
+# quote, so "said"/"says" vetoes. Batch 180: "commented"/"comments"
+# joins the veto — the same attribution shape ("Ryan McInerney, Chief
+# Executive Officer, Visa, commented on the results:") was classified
+# as a colon heading and dropped, orphaning the quote it introduces;
+# "noted"/"added" were already vetoed via _LEDE_COLON_VERB_RE.
+# Batch 177. Batch 178: the bare-phrase
 # bound moves 8 -> 12 words — a table's label line is the same shape
 # one word longer ("Weighted average yields on debt and other income
 # producing securities(7):" — Ares Capital, 10 words, no verb), and a
@@ -667,7 +690,7 @@ def _is_lede_colon_heading(ln: str) -> bool:
     if "$" in s or "%" in s:
         return False
     body = s[:-1].strip()
-    if re.search(r"\b(said|says)\b", body, re.IGNORECASE):
+    if re.search(r"\b(said|says|commented|comments)\b", body, re.IGNORECASE):
         return False  # quote attribution — never a heading
     words = body.split()
     if not words:
@@ -1271,6 +1294,12 @@ def _is_lede_table_line(ln: str) -> bool:
         return True
     if _LEDE_BARE_UNITS_LOWER_RE.match(ln):
         return True
+    # Batch 180: a "% change" table footnote glued onto a quote
+    # attribution (Visa) — the footnote and the period header are the
+    # table's own text, and the attribution without its quote is a
+    # dangling fragment.
+    if _is_lede_footnote_attribution(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     # Anchored unit lines (a mid-sentence "(dollars ...)" parenthetical
@@ -1483,6 +1512,24 @@ def _is_lede_title_line(ln: str) -> bool:
     load-bearing — without it the batch-177 keeps all drop. Batch 178.
     """
     return _is_trailing_heading(ln) and not _LEDE_HEADLINE_VERB_RE.search(ln)
+
+
+def _is_lede_footnote_attribution(ln: str) -> bool:
+    """True for a table footnote glued onto a quote attribution (Visa,
+    7 quarters: "% change is calculated over the comparable prior-year
+    period. Q3 2024 Ryan McInerney, Chief Executive Officer, Visa,
+    commented on the results:"). The footnote fragment is the summary
+    table's own note, the period header is the table's column header,
+    and the attribution without its quote is a dangling fragment — the
+    glued line is table residue, not narrative. Both halves are required:
+    a bare "% change is calculated ..." line is a footnote-definition
+    block, and a bare attribution is a legitimate quote intro (the
+    colon-heading veto protects "... said:" lines). Batch 180.
+    """
+    return bool(
+        _LEDE_PCT_CHANGE_FOOTNOTE_RE.search(ln)
+        and _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(ln)
+    )
 
 
 def _clean_highlights_result(result: str) -> str:
@@ -3105,15 +3152,14 @@ _HEADLINE_WRAP_TAIL_RE = re.compile(
 # wrap tail: it separates independent clauses, and Coinbase's letter ends
 # a paragraph with one right before its footnote block ("...than any other
 # company;" / "1 Coinbase Total Trading Volume ...") — treating it as a
-# wrap pulled the footnote definition in as "continuation". A complete
-# statement does NOT match, even without terminal punctuation: a figure
-# bullet ("•Share repurchases and dividends of $5.1B", "•Diluted EPS was
-# $0.78") and a complete clause ("...up 181% and 148% year over year,
-# respectively") end the item, so the prose and tables that follow are
-# never pulled in as "continuation". Deliberately wider than the headline
-# wrap tail (which lacks "across" — the attested Skydance tail) and
-# narrower than a bare "no terminal punctuation" test (which would fire
-# on every period-less figure bullet).
+# wrap pulled the footnote definition in as "continuation". A complete statement does NOT match, even without terminal punctuation:
+# a figure bullet ("•Share repurchases and dividends of $5.1B", "•Diluted
+# EPS was $0.78") and a complete clause ("...up 181% and 148% year over
+# year, respectively") end the item, so the prose and tables that follow
+# are never pulled in as "continuation". Deliberately wider than the
+# headline wrap tail (which lacks "across" — the attested Skydance tail)
+# and narrower than a bare "no terminal punctuation" test (which would
+# fire on every period-less figure bullet).
 _LEDE_WRAP_TAIL_RE = re.compile(
     r"(\b(and|or|of|for|to|with|in|on|at|the|a|an|across|including|through|"
     r"under|over|between|among|per|via|from|by|as|into|upon|toward|towards|"
@@ -4543,9 +4589,15 @@ def extract_press_release_highlights(
                     # that follow are never pulled in as "continuation".
                     # The decision is snapshotted: a continuation line's own
                     # ending is an arbitrary wrap point, not evidence the
-                    # item finished. Batch 165.
-                    finish_item = marker_seen or bool(
-                        _LEDE_WRAP_TAIL_RE.search(lede[-1])
+                    # item finished. Batch 165. Batch 180: a quote
+                    # attribution ("... commented on the results:") is an
+                    # unfinished item too — its colon introduces the quote
+                    # — even though neither the wrap tail nor the sentence
+                    # rules see it that way.
+                    finish_item = (
+                        marker_seen
+                        or bool(_LEDE_WRAP_TAIL_RE.search(lede[-1]))
+                        or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]))
                     )
                     finish_sentence = not marker_seen and finish_item
                 if not finish_item:
@@ -4555,9 +4607,19 @@ def extract_press_release_highlights(
                     break  # a new bullet starts past the budget — stop at
                     # the item boundary rather than starting a bullet we
                     # cannot finish. Batch 165.
-                if finish_sentence and _is_sentence_terminated(lede[-1]):
+                if finish_sentence and _is_sentence_terminated(lede[-1]) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]):
                     break  # the unfinished sentence just terminated — the
                     # next line starts a new item, not a continuation.
+                    # Batch 180: a quote attribution ("... commented on
+                    # the results:") is not terminated here — the colon
+                    # introduces the quote, so an attribution landing on
+                    # the budget line still pulls its quote in. Any other
+                    # colon-ended item (a table intro like Berkshire's
+                    # "Net earnings includes:") keeps the old stop: its
+                    # continuation is the table's label lines, not prose.
+                    # (The _is_sentence_terminated ":" branch stays: for
+                    # the table-line gate a colon-ended line is a complete
+                    # heading unit.)
                     # Batch 165.
                 if overrun >= 4:
                     break  # finishing cap: at most 4 lines past the budget
