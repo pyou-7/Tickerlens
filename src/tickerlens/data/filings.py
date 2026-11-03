@@ -348,10 +348,45 @@ _FINANCIAL_LINE_RE = re.compile(
 # headings that way, and without it the leading-bullet block swallows the
 # heading plus the table-intro sentence as a bullet continuation.
 _HIGHLIGHTS_HEADING_RE = re.compile(
-    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
+    # Batch 184: the leading-"Highlights" branch is narrowed to
+    # heading-shaped tails (of/from/for/include + unterminated rest).
+    # The old bare "^highlights?\b" matched ANY line starting with the
+    # word — including Chipotle's all-caps sub-headlines ("HIGHLIGHTS
+    # RETURN TO POSITIVE COMPARABLE SALES AND TRANSACTIONS IN JUNE",
+    # "HIGHLIGHTS POSITIVE COMPARABLE SALES"), which sit between the
+    # headline and the dateline and carry real news (June comps turned
+    # positive while the quarter was down 4%). The lede loop, the
+    # trailing trim, the block boundary and the section collector all
+    # treat a match as a heading, so the sub-headline was dropped
+    # everywhere. Attested heading shapes after a leading "Highlights"
+    # (full-cache survey, 17 distinct lines): bare, "OF SEGMENT
+    # RESULTS", "FROM THE QUARTER/YEAR", "from the report include:",
+    # "for the ... are listed below:". A prose sentence starting
+    # "Highlights of the March quarter, ... are on page five ..." is
+    # excluded by the terminator guard, and a flattened-prose fragment
+    # ("highlights based suggested destinations ...") by the tail-word
+    # guard. The trailing-word branch is unchanged ("Selected Revenue
+    # Highlights", "Q1 2025 Financial Highlights (unaudited)").
+    r"^highlights?\b[\s:–—-]+(?:of|from|for|include)\b[^.!?]*$"
+    r"|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$",
+    re.IGNORECASE,
 )
 
-# A "Highlights" section that is really a financial data table (Lilly's
+# Batch 184: the section collector keeps the BROAD anchor — a line
+# starting with "Highlights" anchors a Highlights section even when
+# it is content, not a heading. Chipotle's all-caps sub-headlines
+# ("HIGHLIGHTS RETURN TO POSITIVE COMPARABLE SALES AND TRANSACTIONS
+# IN JUNE") anchor the section that serves the dateline, the bullets,
+# the CEO quote and the prose after them; Delta's pointer sentence
+# ("Highlights of the March quarter, ... are on page five ...")
+# anchors the section that serves the CEO quotes after it. The
+# narrowed _HIGHLIGHTS_HEADING_RE above is the definition of a real
+# heading (used where a match means drop/break); this regex is only
+# the "a section starts here" signal, and _extract_highlights_sections
+# decides per anchor whether the line itself is content.
+_HIGHLIGHTS_SECTION_ANCHOR_RE = re.compile(
+    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
+)
 # "Selected Revenue Highlights" product table, Waste Management's "HIGHLIGHTS
 # FOR the fourth quarter" EBITDA table): units parentheticals ("(Dollars in
 # millions)"), "% Change" column headers, or data rows dense with $ and %.
@@ -711,6 +746,23 @@ def _is_lede_heading_fragment(ln: str) -> bool:
     if not words:
         return False
     if not ln.isupper() or not any(c.isalpha() for c in ln):
+        return False
+    # Batch 184: an all-caps line leading with "Highlights" that is NOT
+    # a highlights heading (per _HIGHLIGHTS_HEADING_RE) is a sub-headline
+    # — Chipotle Q3 2025's "HIGHLIGHTS POSITIVE COMPARABLE SALES" sits
+    # between the headline and the dateline and carries the quarter's
+    # news — not a section-heading fragment. The regex is the single
+    # definition of a highlights heading, so its heading shapes
+    # ("HIGHLIGHTS", "HIGHLIGHTS OF SEGMENT RESULTS", "HIGHLIGHTS FROM
+    # THE QUARTER") still return True here; only the content shapes
+    # escape. Placed before the word-count branches so it covers the
+    # 5–8-word band too, where the verb veto would otherwise drop a
+    # verb-less sub-headline ("RETURN" is not a headline verb — and
+    # must not become one, or "Return on Equity" table labels escape
+    # the table-header predicate).
+    if re.match(r"highlights?\b", ln, re.IGNORECASE) and not (
+        _HIGHLIGHTS_HEADING_RE.search(ln)
+    ):
         return False
     if len(words) <= 4:
         return True
@@ -5545,10 +5597,34 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
     """
     sections: list[list[str]] = []
     for i, ln in enumerate(lines):
-        if not _HIGHLIGHTS_HEADING_RE.search(ln) or len(ln) > 120:
+        if not _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln) or len(ln) > 120:
             continue
         collected: list[str] = []
+        # Batch 184: a section anchored by a leading-"Highlights"
+        # sub-headline serves the anchor as its first content line — the
+        # anchor is the release's own sub-headline, not a title. The
+        # shape is all-caps and unterminated (Chipotle's "HIGHLIGHTS
+        # RETURN TO POSITIVE ..." / "HIGHLIGHTS POSITIVE COMPARABLE
+        # SALES"); a real heading never qualifies (the narrowed regex
+        # says so), and a terminated prose pointer (Delta's "Highlights
+        # of the March quarter, ... are on page five ...") stays a
+        # heading-only anchor, so the quotes after it are still served
+        # without the pointer sentence itself.
+        if (
+            re.match(r"highlights?\b", ln, re.IGNORECASE)
+            and not _HIGHLIGHTS_HEADING_RE.search(ln)
+            and ln.isupper()
+            and not ln.rstrip().endswith((".", "!", "?", "…"))
+        ):
+            collected.append(ln)
         hit_table = False
+        n_follow = 0  # Batch 184: the cap counts FOLLOW lines only — a
+        # prepended sub-headline anchor (above) is headline-adjacent
+        # content, not part of the section's 12-line budget. Counting
+        # it would shift every line by one and drop the section's last
+        # line (Chipotle's revenue prose) for no reason; for sections
+        # without a prepended anchor n_follow == len(collected), so
+        # behavior is byte-identical.
         for follow in lines[i + 1:]:
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
@@ -5588,7 +5664,8 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # header needs "ended" or a month, so the fragment alone
                 # matches neither and would be collected as content.
             collected.append(follow)
-            if len(collected) >= 12:
+            n_follow += 1
+            if n_follow >= 12:
                 break
         if hit_table and (
             len("\n".join(collected)) < 150
