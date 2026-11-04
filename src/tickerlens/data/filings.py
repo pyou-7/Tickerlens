@@ -119,7 +119,15 @@ _MAX_HEADLINE_CHARS = 300
 # Lines that mark the start of boilerplate we never want in highlights.
 _BOILERPLATE_RE = re.compile(
     r"^(about\s|forward-looking|safe harbor|contacts?(\s|:)|press\s+contacts?|"
-    r"investor\s+contacts?|note to editors|###)",
+    r"investor\s+contacts?|note to editors|###|"
+    # Batch 188: the safe-harbor intro itself — "This press release
+    # contains forward-looking statements that are intended to qualify
+    # for the safe-harbor provisions ..." (ED, AAPL, ADI, ADSK and
+    # 277 other distinct intros in the cache survey). The bare
+    # "forward-looking" alternative only matches when the line STARTS
+    # with it; the intro starts with "This press release contains",
+    # so ED's lede ran on into the safe-harbor paragraph.
+    r"this\s+(press\s+release|release|announcement)\s+contains\s+forward-looking)",
     re.IGNORECASE,
 )
 
@@ -212,7 +220,16 @@ _ADMIN_LINE_RE = re.compile(
     # the 48-char bound in _looks_like_masthead_residue and became the
     # headline). A headline never starts with a house number and ends with
     # a ZIP. Batch 107.
-    r"|^\d{1,6}\s+\S.*\b\d{5}(?:-\d{4})?\s*$",
+    r"|^\d{1,6}\s+\S.*\b\d{5}(?:-\d{4})?\s*$"
+    # All-caps title + page marker ("CON EDISON REPORTS 2026 FIRST QUARTER
+    # EARNINGS page 2" — Con Edison repeats the release title at the top of
+    # each page). The (?-i:...) scope matters: the regex is IGNORECASE, so
+    # the prefix class must be case-sensitive — a line with any lowercase
+    # letter in the prefix is prose, not a title (AJG's "…ratios using
+    # reported revenues on page 1" table labels, AAL's "Oct. 22, 2026 |
+    # Page 10" footers). A real headline never ends with a page marker.
+    # Batch 188. Survey: 14 distinct lines, all ED.
+    r"|^(?-i:[^a-z]+)\s+page\s+\d+$",
     re.IGNORECASE,
 )
 
@@ -575,14 +592,27 @@ def _lede_quote_is_open(lines: list[str]) -> bool:
     budget line opened is still open (Emerson Q4 FY2024: the second
     quote sentence ends "…Emerson Management System." and the third
     sentence "Emerson's leading technology … fiscal 2025." still
-    belongs to the same quote). Curly quotes pair by kind; straight
-    quotes toggle by parity. The overrun cap (4 lines) still bounds
-    the pull-in, so a stray mark can cost at most a few lines.
-    Batch 181."""
-    opens = sum(ln.count("“") for ln in lines)
-    closes = sum(ln.count("”") for ln in lines)
-    straights = sum(ln.count('"') for ln in lines)
-    return (opens - closes) + (straights % 2) > 0
+    belongs to the same quote). The marks pair on a stack: a curly
+    open pushes, a curly close pops, and a straight quote pops when
+    one is open and pushes when none is — so a curly open closed by
+    a straight mark (Bristol Myers' "…to patients."" and Cintas'
+    "…professional manner."") counts as closed, not open. Without
+    the stack, the mixed style reads as an open quote and the finish
+    rule pulls the table chrome below it (BMY's "$ in millions,
+    except per share amounts" header, CTAS's guidance-table
+    fragments). The overrun cap (4 lines) still bounds the pull-in,
+    so a stray mark can cost at most a few lines. Batch 181;
+    stack pairing batch 188."""
+    depth = 0
+    for ln in lines:
+        for ch in ln:
+            if ch == "“":
+                depth += 1
+            elif ch == "”":
+                depth = max(0, depth - 1)
+            elif ch == '"':
+                depth = depth + 1 if depth == 0 else depth - 1
+    return depth > 0
 
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
@@ -894,7 +924,12 @@ def _is_lede_table_header(ln: str) -> bool:
             # not a word — Brown & Brown's "Diluted Net Income Per
             # Share - Adjusted" is a column label, and the dash was
             # the only thing keeping the capital-led check out.
-        w2 = re.sub(r"\d+$", "", w)
+        # Batch 188: a parenthesized capital word ("(Loss)" — AJG's
+        # "Net Earnings (Loss) EBITDAC Diluted Net Earnings" column
+        # header) is capital-led: strip the parens before the check.
+        # A parenthesized lowercase word ("(in", "(loss") still fails,
+        # and a bare "(" is empty after the strip.
+        w2 = re.sub(r"\d+$", "", w).lstrip("(").rstrip(")")
         if not w2 or not w2[0].isupper():
             return False
     lowered = [
@@ -1129,6 +1164,38 @@ def _is_lede_asof_date(ln: str) -> bool:
     return bool(_LEDE_ASOF_DATE_RE.match(ln.strip()))
 
 
+_LEDE_SUMMARY_RESULTS_ANCHOR_RE = re.compile(
+    r"^Summary of Financial Results(?:\s*-\s*(.*))?$", re.IGNORECASE
+)
+
+
+def _is_lede_summary_results_title(ln: str) -> bool:
+    """True for AJG's summary-table title: "Summary of Financial
+    Results" plus an optional " - <period>" tail of period/date
+    tokens only ("First Quarter", "Six-Months ended June 30",
+    "Year Ended December 31", the wrapped "Fourth"). The anchor is
+    the guard — no narrative line starts with it, and the tail-token
+    gate keeps a prose continuation ("... for the first quarter")
+    out — so the dated forms are titles even though they carry
+    figures ("June 30", "December 31"). Batch 188."""
+    s = ln.strip()
+    m = _LEDE_SUMMARY_RESULTS_ANCHOR_RE.match(s)
+    if not m:
+        return False
+    tail = (m.group(1) or "").strip()
+    if not tail:
+        return True
+    words = [w.strip(",") for w in tail.split()]
+    if not words or len(words) > 8:
+        return False
+    return all(
+        _LEDE_DATE_TOKEN_RE.match(w)
+        or w.lower() in ("first", "second", "third", "fourth")
+        or re.fullmatch(r"(six|nine|twelve)-months?", w, re.IGNORECASE)
+        for w in words
+    )
+
+
 def _is_lede_table_title(ln: str) -> bool:
     """True for a table's title line: an unterminated, figure-less line
     that pairs a period phrase with table vocabulary ("Non-GAAP Financial
@@ -1141,9 +1208,14 @@ def _is_lede_table_title(ln: str) -> bool:
     ("financial measures", "non-gaap", "financial summary"), so a prose
     fragment like "a summary of results for the three months ended"
     fails; bullet-led lines never qualify, so a bullet carrying a period
-    phrase is never mistaken for a title. Batch 159."""
+    phrase is never mistaken for a title. Batch 159. Batch 188: AJG's
+    "Summary of Financial Results - First Quarter" title carries no
+    "ended" period phrase, so the anchored shape above is checked
+    first, before the figure guard (its dated forms carry a day)."""
     if _BULLET_LEAD_RE.match(ln) or ln[:1] in "▪■·○":
         return False
+    if _is_lede_summary_results_title(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     if _LEDE_FIGURE_RE.search(ln):
@@ -2067,15 +2139,27 @@ def _is_lede_recon_heading(ln: str) -> bool:
     never highlights — but the batch-178 budget freeing lets the loop
     reach it, and it consumes a budget line (and in the Highlights
     section path it is collected as content, with its boilerplate
-    intro paragraph behind it). Guards: short (2-10 words),
+    intro paragraph behind it). Guards: short (1-10 words),
     capital-led (small connector words allowed; a parenthesized
     qualifier like "(non-GAAP)" is transparent), unterminated,
     figure-free, no headline verb, and it must carry "reconcil".
     A sub-headline naming a reconciliation ("Company Provides
     Reconciliation of ...") is kept by the verb veto; a prose
     mention is terminated ("Please see a reconciliation ...") or
-    lowercase-led, so neither qualifies. Batch 182."""
+    lowercase-led, so neither qualifies. Batch 182. Batch 188:
+    AJG's segment recon headings end with a units parenthetical
+    and a colon ("Brokerage Segment Reported GAAP to Adjusted
+    Non-GAAP Reconciliations (dollars in millions):",
+    "Reconciliations (continued) (dollars in millions):") — the
+    trailing parenthetical groups and colon are stripped before
+    the guards, so the heading shape is judged on the heading
+    itself; a bare "Reconciliations" is a heading too, so the
+    floor is 1 word."""
     s = ln.strip()
+    # Batch 188: strip trailing parenthetical groups and a colon —
+    # a colon-ended recon heading is still a heading, and the units
+    # parenthetical is not part of the heading shape.
+    s = re.sub(r"(\s*\([^)]*\))+\s*:?$", "", s).strip()
     if not s or _BULLET_LEAD_RE.match(s):
         return False
     if _is_sentence_terminated(s):
@@ -2083,7 +2167,7 @@ def _is_lede_recon_heading(ln: str) -> bool:
     if "$" in s or "%" in s:
         return False
     words = s.split()
-    if not 2 <= len(words) <= 10:
+    if not 1 <= len(words) <= 10:
         return False
     if "reconcil" not in s.lower():
         return False
@@ -2258,6 +2342,30 @@ def _is_lede_report_pointer(ln: str) -> bool:
         )
     if re.match(r"see information regarding\b", s, re.IGNORECASE):
         return "presented later in this press release" in low
+    if re.match(r"see\b", s, re.IGNORECASE) and "beginning on page" in low:
+        # Batch 188: AJG's recon-table pointer ("See "Information
+        # Regarding Non-GAAP Measures" beginning on page 8 of 17.")
+        # — a document-tail pointer, never highlights. The "See"
+        # opener plus a page reference is load-bearing: a highlights
+        # sentence never opens with "See" and points at a page.
+        # Survey: 7 distinct lines, all AJG.
+        return True
+    if re.match(r"see attachment\b", s, re.IGNORECASE):
+        # Batch 188: Con Edison's attachment pointer ("See Attachment
+        # A to this press release for a reconciliation of ...") — the
+        # same document-tail pointer class. Survey: 10 distinct
+        # lines, all ED.
+        return "to this press release for" in low
+    if low.startswith(
+        "percentage comparisons throughout this press release "
+        "are calculated for"
+    ):
+        # Batch 188: Citigroup's methodology note ("Percentage
+        # comparisons throughout this press release are calculated
+        # for the first quarter 2026 versus the first quarter 2025,
+        # unless otherwise specified.") — boilerplate, never
+        # highlights. Survey: 11 distinct lines, all C.
+        return True
     return False
 
 
@@ -2999,6 +3107,64 @@ def _footnote_def_block_len(
         cur = nxt
         def_words |= _def_words(nxt)
     return n
+
+
+# Batch 188: the adjustment-item glossary that follows the recon tables
+# in some releases — a run of "Term - definition" lines, e.g. AJG's
+# "Interest, banking costs and debt - At March 31, 2026, Gallagher had
+# $9,550 million of borrowings ..." / "Clean energy-related - For 2026,
+# this consists of ..." / "Acquisition costs - Consists mostly of ..."
+# (8 consecutive lines in AJG 2026 Q1/Q2), EFX's "Legal settlement - ... /
+# Antitrust litigation costs - ... / Adjusted EBITDA and EBITDA margin -
+# Management defines ...". Cache survey (1,699 exhibits): only 4 runs of
+# >=3 such lines exist, and all 4 are glossaries. A lone "Term -
+# sentence" line is never a glossary — datelines ("COLUMBUS, Ohio, July
+# 30, 2025 - American Electric Power ... today reported ...") share the
+# shape, so the term must carry no digits and no month name, and only a
+# run of 3+ counts. Bulleted definitions ("•Net gains (losses) on
+# divestitures, which are ...") are excluded: they live under the
+# "Information Regarding Non-GAAP Measures" heading, past the "About"
+# break, and never reach the lede loop.
+_GLOSSARY_TERM_RE = re.compile(r"^([A-Z][A-Za-z, '&()/-]{0,60}) - ([A-Z].*)$")
+_GLOSSARY_TERM_MONTH_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\b"
+)
+
+
+def _is_glossary_def_line(ln: str) -> bool:
+    """One line of a definition glossary: "Term - definition sentence."
+
+    Term is a short (<=6 words) digit-free phrase; the definition is a
+    terminated sentence starting with a capital letter.
+    """
+    if ln[:1] in "•▪■·○◦◾":
+        return False
+    m = _GLOSSARY_TERM_RE.match(ln)
+    if not m:
+        return False
+    term = m.group(1)
+    if not 1 <= len(term.split()) <= 6:
+        return False
+    if re.search(r"\d", term) or _GLOSSARY_TERM_MONTH_RE.search(term):
+        return False
+    # A definition never opens with a bare month name — that is a
+    # dateline whose location split off as the term ("Bethesda, MD -
+    # April 20, 2026 - AGNC ... today announced ...").
+    if _GLOSSARY_TERM_MONTH_RE.match(m.group(2)):
+        return False
+    return _is_sentence_terminated(ln)
+
+
+def _glossary_def_block_len(lines: list[str], i: int) -> int:
+    """Length of a glossary-definition block starting at lines[i], or 0.
+
+    Counts consecutive glossary lines; returns 0 unless the run is >=3.
+    """
+    n = 0
+    while i + n < len(lines) and _is_glossary_def_line(lines[i + n]):
+        n += 1
+    return n if n >= 3 else 0
 
 
 # A rounding note (batch 167): Coinbase's shareholder letters carry a
@@ -5287,6 +5453,14 @@ def extract_press_release_highlights(
                 # item at the budget: the key line and its continuations
                 # are skipped before the budget logic ever sees them.
                 # Batch 162 (bare numbered form); batch 166 (the block).
+            block = _glossary_def_block_len(lede_lines, i)
+            if block:
+                i += block
+                continue  # Batch 188: a run of >=3 "Term - definition"
+                # glossary lines (AJG's adjustment-item definitions after
+                # the recon tables) is never lede content — without the
+                # skip, the freed budget from the batch-188 header fixes
+                # let the loop fill itself with glossary paragraphs.
             note = _rounding_note_block_len(lede_lines, i) or (
                 _asterisk_note_block_len(lede_lines, i)
             )
@@ -5414,6 +5588,17 @@ def extract_press_release_highlights(
                 # A wrapped heading's continuation ("to Organic
                 # Revenue") goes with it — at most two lines, only
                 # while the wrap shape holds.
+                # Batch 188: entering table mode — the recon table's
+                # row labels follow the heading, and a label whose
+                # next line is another label (AJG's nested "Base
+                # Commissions and Fees" / "Less supplemental
+                # revenues ..." chain) matches no table predicate, so
+                # without the mode it is served as content once the
+                # budget frees up. In table mode the unterminated
+                # labels are residue; terminated prose after the table
+                # still clears the mode and is collected.
+                in_table = True
+                table_seen = False
                 i += 1
                 wraps = 0
                 while (
@@ -5440,7 +5625,18 @@ def extract_press_release_highlights(
                 # content exists; before any content, skip the title
                 # and keep looking — the table's rows are skipped below
                 # and real bullets after the table are still collected.
-                if lede:
+                # Batch 188: AJG's "Summary of Financial Results"
+                # title is skipped, never a break — it heads the
+                # summary table at the top of the release (or the
+                # six-months table mid-release), and the narrative
+                # lede (pretax paragraphs, CEO quote) follows the
+                # table. The dateline paragraph's tail lines are
+                # collected as content ahead of the title in the older
+                # quarters, so the break-on-content rule would fire on
+                # boilerplate, not narrative, and lose the quote
+                # (blast 188: 10 quarters). The generic table-title
+                # break stays for titles that follow real prose.
+                if lede and not _is_lede_summary_results_title(ln):
                     break
                 i += 1
                 continue
@@ -5537,6 +5733,17 @@ def extract_press_release_highlights(
                         or bool(_LEDE_WRAP_TAIL_RE.search(lede[-1]))
                         or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]))
                         or _is_lede_split_quote_attribution(lede[-1])
+                        # Batch 188: an open quote is unfinished by
+                        # definition — the budget line opened a quote
+                        # that hasn't closed (AJG 2024: the budget
+                        # lands mid-quote once the title drops, and
+                        # without this the quote is cut at "bedrock
+                        # culture"). Batch 181 already suppresses the
+                        # sentence-terminated break while a quote is
+                        # open; this extends the same insight to the
+                        # finish decision. The 4-line overrun cap
+                        # still bounds the pull-in.
+                        or _lede_quote_is_open(lede)
                     )
                     finish_sentence = not marker_seen and finish_item
                 if not finish_item:

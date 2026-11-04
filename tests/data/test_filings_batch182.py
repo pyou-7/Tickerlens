@@ -179,7 +179,14 @@ def test_recon_heading_attested_lines():
     assert not _is_lede_recon_heading(
         "Reconciliation of NOI of consolidated entities:"
     )
-    assert not _is_lede_recon_heading(
+    # Batch 188 revision: "Reconciliations (continued) (dollars in
+    # millions):" was pinned here as a caption, but it heads AJG's
+    # continued recon tables (line 122 follows the Brokerage recon
+    # table) and the lede loop serves it as content once the budget
+    # frees up — the trailing parentheticals and colon are stripped
+    # before the guards, so it is a heading now. The NOI caption
+    # above still fails on its lowercase words.
+    assert _is_lede_recon_heading(
         "Reconciliations (continued) (dollars in millions):"
     )
     # A bullet is narrative, never a heading.

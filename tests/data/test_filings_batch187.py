@@ -90,17 +90,23 @@ def test_ajg_2026_lede_serves_quote_not_table() -> None:
     # and the quote, not the table's labels and dash value rows.
     # The two table header lines ("Summary of Financial Results -
     # First Quarter", "Net Earnings (Loss) EBITDAC Diluted Net
-    # Earnings") are a separate class — the "(Loss)" paren token
-    # defeats the table-header capital-led check and the title line
-    # carries no "ended" period phrase — and are still served; they
-    # are carried forward, not folded into this batch.
+    # Earnings") are dropped by batch 188, not this one — the
+    # "(Loss)" paren token defeats the table-header capital-led
+    # check and the title line carries no "ended" period phrase —
+    # and are asserted absent in test_filings_batch188.py. The
+    # dateline carries the webcast conference-call sentence, as
+    # the real release does, so the loop skips it (batch 188: a
+    # bare dateline collected as content would make the table-title
+    # branch break instead of skipping).
     hl = extract_press_release_highlights(
         _contact_release_html(
             "ARTHUR J. GALLAGHER & CO. ANNOUNCES FIRST QUARTER 2026 "
             "FINANCIAL RESULTS",
             "ROLLING MEADOWS, IL, April 30, 2026 — Arthur J. "
             "Gallagher & Co. (NYSE: AJG) today reported its financial "
-            "results for the quarter ended March 31, 2026.",
+            "results for the quarter ended March 31, 2026. Management "
+            "will host a webcast conference call to discuss these "
+            "results on Thursday, April 30, 2026 at 5:15 p.m. ET.",
             "Summary of Financial Results - First Quarter",
             "Revenues Before",
             "Reimbursements",
