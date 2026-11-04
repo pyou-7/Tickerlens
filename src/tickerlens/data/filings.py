@@ -1192,6 +1192,42 @@ def _is_lede_dollar_range_statement(ln: str) -> bool:
     return len(words) >= 4
 
 
+_LEDE_DASH_TOKENS = frozenset({"—", "–", "-"})
+
+
+def _is_lede_dash_value_row(ln: str) -> bool:
+    """True for a flattened table value row whose cells are dash
+    placeholders and figures: "– – 65 33 87 44 0.25 0.13" (AJG 2026).
+    Batch 187: AJG's 2026 summary tables flatten each adjustment row
+    as a label line plus a values line, and the values line starts
+    with dash cells for the empty revenue columns — so _BULLET_LEAD_RE
+    matches it ("– " / "— " lead) and the batch-175 bullet guard in
+    _is_lede_data_row exempted the whole row, which in turn kept its
+    label from _is_lede_table_label (the next line was not a data
+    row). Both the label and the values then filled the 6-line lede
+    budget as fake bullets, starving the CEO quote. The shape is
+    wordless by construction — every token is a dash placeholder or a
+    figure token, the first token is a dash, at least one figure is
+    present — so it can never be a bullet: a bullet always carries
+    words. A dashes-only line (no figure) is a lone bullet marker,
+    not a value row; a terminated line is prose, not a row.
+    """
+    if _is_sentence_terminated(ln):
+        return False
+    tokens = ln.split()
+    if len(tokens) < 2 or tokens[0] not in _LEDE_DASH_TOKENS:
+        return False
+    figures = 0
+    for tok in tokens:
+        if tok in _LEDE_DASH_TOKENS:
+            continue
+        if _is_lede_figure_token(tok):
+            figures += 1
+            continue
+        return False
+    return figures >= 1
+
+
 def _is_lede_data_row(ln: str) -> bool:
     """True for a table data row: carries at least 2 figures and figures
     are at least 40% of its tokens ("Net income (loss) per share—diluted
@@ -1262,7 +1298,15 @@ def _is_lede_data_row(ln: str) -> bool:
     STATEMENT, not any range: _is_lede_dollar_range_statement requires
     >=4 alphabetic words, so a bare range fragment ("$10.40 to $11.00"
     — Moody's outlook-table cell on its own line) stays a data row.
+    Batch 187: a dash-led WORDLESS line of dash placeholders and
+    figures ("– – 65 33 87 44 0.25 0.13" — AJG 2026) is a value row,
+    not a bullet, so it is exempt from the batch-175 bullet guard
+    below: _is_lede_dash_value_row runs first and returns True before
+    the guard can refuse it. A bullet always carries words, so the
+    exemption cannot catch a real bullet.
     """
+    if _is_lede_dash_value_row(ln):
+        return True
     if _BULLET_LEAD_RE.match(ln):
         return False
     if _is_sentence_terminated(ln):
@@ -1544,9 +1588,12 @@ def _is_lede_single_value_row(ln: str) -> bool:
 
 def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
-    if _BULLET_LEAD_RE.match(ln):
+    # Batch 187: a dash-led wordless value row ("– – 65 33 87 44
+    # 0.25 0.13" — AJG 2026) is a table row, not a bullet, so it is
+    # exempt from this guard exactly as it is from the batch-175
+    # guard in _is_lede_data_row. A real bullet always carries words.
+    if _BULLET_LEAD_RE.match(ln) and not _is_lede_dash_value_row(ln):
         return False
-    # Batch 156: a table-intro sentence ("The following table summarizes
     # ...") is table residue even though it is a terminated sentence — it
     # is the table's own preamble, and without this it consumes a lede
     # line after a rejected table section. Only "summarizes" is matched:
