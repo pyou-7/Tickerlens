@@ -3482,17 +3482,28 @@ _CONTACT_HEADER_RE = re.compile(
 # words) and at least one must be an anchor (Officer/President/...), so
 # a prose line that merely mentions a role ("Our Chief Financial Officer
 # said ...") never matches — it carries verbs and other words.
+# Batch 189: the abbreviations CEO/CFO/COO are role vocabulary too —
+# a wrapped attribution tail ("Chairman and CEO.", "President and
+# CEO.") is the same dangling fragment as the spelled-out form, and
+# without them the tail consumes a lede budget line and the finish
+# rule reads it as a complete item, orphaning the quote body that
+# follows (AJG Q4 FY2025). Full-cache survey: only 4 distinct lines
+# newly match ("CEO and Co-Founder" x9, "President and CEO." x3,
+# "CHAIR AND CEO" x2, "Chairman and CEO." x1) — all bare role lines.
+# The abbreviations join the anchor set as well, so a "Group CEO"
+# shape matches; the 2-word floor still keeps a lone "CEO" out.
 _ROLE_TITLE_WORDS = frozenset(
     "president and chief executive financial operating commercial legal "
     "technology information marketing strategy people risk accounting "
     "senior vice officer director chairman chairwoman chair founder "
     "co-founder cofounder group global managing head investor relations "
     "general counsel secretary treasurer principal corporate development "
-    "business human resources administrative".split()
+    "business human resources administrative ceo cfo coo".split()
 )
 _ROLE_ANCHOR_WORDS = frozenset(
     "officer president chairman chairwoman chair director founder "
-    "co-founder cofounder head counsel secretary treasurer principal".split()
+    "co-founder cofounder head counsel secretary treasurer principal "
+    "ceo cfo coo".split()
 )
 
 
