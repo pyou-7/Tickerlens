@@ -1959,6 +1959,69 @@ def _is_lede_table_mode_residue(ln: str) -> bool:
     return True
 
 
+def _lede_wrapped_paragraph_head(run: list[str], ln: str) -> list[str]:
+    """Return the wrapped head lines of the paragraph whose tail is ln,
+    taken from the table-mode residue run — or [] when ln is not the
+    tail of such a paragraph (batch 191).
+
+    Arthur J. Gallagher's pretax paragraph sits inside the summary-table
+    region: its wrapped head lines are unterminated, so the lede loop
+    skips them as table-mode residue, and only the terminated tail is
+    served — a dangling fragment ("income taxes is shown on pages 14
+    and 15.") with no subject. The tail is a lowercase-led continuation
+    of the skipped paragraph, so the whole paragraph can be served by
+    prepending its head — budget-neutral, only the tail counts, so the
+    CEO quote after the paragraph keeps exactly the budget it had.
+
+    The naive alternative (treat lowercase-led terminated lines as
+    residue in table mode) is NOT what this does: that would eat the
+    CEO quote's own wrapped lines once the mode stays on past the
+    paragraph (batch 186 note). This only ever ADDS lines, never
+    removes, and only a coherent paragraph: the run is scanned back
+    from its end — continuations are lowercase-led (a year wrap,
+    "2024, the pretax impact ...", is the one digit-led continuation
+    allowed) — and the first capital-led line is the head. The run
+    usually opens with orphaned table labels ("Total Brokerage & Risk
+    Management, as adjusted *", the batch-185/186 label chains), which
+    the scan passes over because they sit before the head; a label can
+    never BE the head, because the head must end mid-sentence (a wrap
+    tail: trailing comma/dash or conjunction/preposition/article, per
+    _LEDE_WRAP_TAIL_RE) while a label ends in "*" or ")" or a noun.
+    A run with no capital-led head is a paragraph whose true head was
+    consumed by another branch — no join. A colon-ended line, a "Note:"
+    line, a company-name line or a "respectively." row anywhere in the
+    scanned suffix blocks the join, because _is_sentence_terminated
+    counts ":" as terminal and those lines are headings or table rows,
+    not paragraph wraps.
+    """
+    tail = ln.strip()
+    if len(tail) < 20 or not tail[0].islower():
+        return []  # a capital-led tail starts a new paragraph
+    if not _is_sentence_terminated(tail):
+        return []
+    if "“" in tail or "”" in tail or '"' in tail:
+        return []  # a quote tail belongs to a quote, not this paragraph
+    i = len(run) - 1
+    while i >= 0:
+        w = run[i].strip()
+        if len(w) < 40 or _is_sentence_terminated(w):
+            return []
+        if "“" in w or "”" in w or '"' in w:
+            return []
+        if w[0].islower() or re.match(r"\d{4},", w):
+            i -= 1
+            continue
+        break  # first capital-led line is the head candidate
+    if i < 0:
+        return []
+    head = run[i].strip()
+    if not head[0].isupper():
+        return []
+    if not _LEDE_WRAP_TAIL_RE.search(head):
+        return []  # a label ends in "*" or ")" or a noun, never mid-sentence
+    return run[i:]
+
+
 def _is_lede_nongaap_section_heading(ln: str) -> bool:
     """True for a bare "Non-GAAP Financial Measures" section heading.
     The definitions prose under it is boilerplate, never highlights —
@@ -5442,6 +5505,15 @@ def extract_press_release_highlights(
         # lines that follow are table rows until real prose (a terminated
         # sentence or a bullet) resumes and clears it.
         in_table = False
+        # Batch 191: consecutive lines skipped as table-mode residue
+        # since the last non-residue line, with a flag for whether the
+        # previous iteration ended in the residue branch. When a
+        # terminated line is collected in table mode, the run is the
+        # wrapped paragraph's head (batch 186's pretax-paragraph wart):
+        # the tail alone is a dangling fragment, so the head is
+        # prepended — budget-neutral, only the tail counts.
+        table_residue_run: list[str] = []
+        prev_was_residue = False
         # Batch 185: set when a real table row (a _is_lede_table_line
         # skip — a data row, unit line or period header) is seen while
         # in table mode. Mode residue (labels, TOC entries) does not
@@ -5459,6 +5531,12 @@ def extract_press_release_highlights(
         i = 0
         while i < len(lede_lines):
             ln = lede_lines[i]
+            # Batch 191: the residue run only spans consecutive
+            # residue-skipped lines — any other branch (a table row, a
+            # header skip, a collected line) breaks it.
+            if not prev_was_residue:
+                table_residue_run = []
+            prev_was_residue = False
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
@@ -5727,6 +5805,11 @@ def extract_press_release_highlights(
                 # skip it and stay in table mode. Terminated prose and
                 # bullets fall through below, are collected, and clear
                 # the mode.
+                # Batch 191: remember the skipped line — it may be the
+                # wrapped head of the paragraph whose terminated tail
+                # is collected below.
+                table_residue_run.append(ln)
+                prev_was_residue = True
                 i += 1
                 continue
             if _is_lede_dollar_range_statement(ln) and not any(
@@ -5838,6 +5921,18 @@ def extract_press_release_highlights(
                 # inside a real lede, and prose after it is collected
                 # as before (BRO's pointer sentence).
                 break
+            if in_table:
+                # Batch 191: the line being collected may be the tail of
+                # a paragraph whose wrapped head lines were skipped as
+                # table-mode residue — serve the whole paragraph, not
+                # the dangling tail alone. Budget-neutral: only the
+                # tail counts against the 6-line budget, so the CEO
+                # quote after the paragraph keeps exactly the budget
+                # it had. (The TOC-filler break above already ran, so
+                # this only fires once real content exists.)
+                head_lines = _lede_wrapped_paragraph_head(table_residue_run, ln)
+                if head_lines:
+                    lede.extend(head_lines)
             lede.append(ln)
             in_table = False  # Batch 185: narrative resumes.
             table_seen = False
