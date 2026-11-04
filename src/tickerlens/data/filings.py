@@ -1708,6 +1708,29 @@ def _is_lede_flat_table_label_shape(ln: str) -> bool:
     return True
 
 
+_LEDE_COMPACT_PERIOD_FRAGMENT_RE = re.compile(
+    r"^(?:\d+(?:st|nd|rd|th)\s+Q|\d+\s+Mths?)\s+\d{2}(?:\d{2})?$",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_compact_period_fragment(ln: str) -> bool:
+    """True for a compact flattened period fragment: AJG flattens its
+    summary-table column headers one cell per line — "3rd Q 25",
+    "9 Mths 25", "1st Q 26" (ordinal quarter or N months + a 2-digit
+    year; 4-digit years in the later tables). The bare-period and
+    period-header predicates never fire on these — "3rd"/"Q"/"25" are
+    not period words and the year is 2 digits — so a label directly
+    below one was not a flat table label (batch 185) and AJG's orphaned
+    labels ("Net (gains) losses on divestitures", "Effective income
+    tax rate impact") filled the lede budget in 10 quarters. A whole
+    line that is only the fragment is never prose: the full-line match
+    is the guard, and the cache survey attests the shape only in AJG
+    (370 occurrences, all AJG). Batch 186.
+    """
+    return bool(_LEDE_COMPACT_PERIOD_FRAGMENT_RE.match(ln.strip()))
+
+
 def _is_lede_flat_table_label(ln: str, prev_ln: str) -> bool:
     """True for a flattened table row's label line directly below a table
     header block. Brown & Brown flattens its reconciliation tables one
@@ -1718,8 +1741,10 @@ def _is_lede_flat_table_label(ln: str, prev_ln: str) -> bool:
     and too lowercase-led for the table-header predicate — and the lede
     loop then collects it as its last budget lines (7 quarters). The
     label sits directly below the table's header block (date/period
-    header, table header/title/heading, units line, recon heading, or
-    bare period fragment), which is what separates it from a wrapped
+    header, table header/title/heading, units line, recon heading,
+    bare period fragment, or compact period fragment — batch 186:
+    AJG's "3rd Q 25" / "9 Mths 25" column headers), which is what
+    separates it from a wrapped
     prose fragment: prose follows prose, never a period header. The
     previous line must be a header-block line, not another label — a
     wrapped sub-headline (Apple's "Services revenue reaches new
@@ -1746,6 +1771,7 @@ def _is_lede_flat_table_label(ln: str, prev_ln: str) -> bool:
         or bool(_TABLE_WORD_UNITS_RE.match(prev))
         or _is_lede_recon_heading(prev)
         or _is_bare_period_fragment(prev)
+        or _is_lede_compact_period_fragment(prev)
     )
 
 
