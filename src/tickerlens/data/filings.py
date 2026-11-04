@@ -1376,9 +1376,24 @@ def _is_lede_data_row(ln: str) -> bool:
     below: _is_lede_dash_value_row runs first and returns True before
     the guard can refuse it. A bullet always carries words, so the
     exemption cannot catch a real bullet.
+    Batch 190: a compact period fragment ("4th Q 25", "9 Mths 25" —
+    AJG's flattened summary-table column headers) is not a data row:
+    its two "figures" are a quarter ordinal and a 2-digit year, period
+    labels, not values — but the density rule reads them as figures
+    (2 of 3 tokens) and the line qualifies, so a heading directly
+    above one ("Summary of Financial Results - Fourth Quarter") is
+    misread as a table label by _is_lede_table_label's next-line
+    check. The full-cache survey finds 109 such misfires, all AJG,
+    all table chrome the other rules drop anyway — the misfire is
+    latent today (the batch-188 summary-title branch drops the
+    heading first) — but the predicate is wrong on its face, and the
+    exemption keeps it wrong nowhere else: a fragment is still table
+    residue via the _is_lede_table_line branch added in this batch.
     """
     if _is_lede_dash_value_row(ln):
         return True
+    if _is_lede_compact_period_fragment(ln):
+        return False
     if _BULLET_LEAD_RE.match(ln):
         return False
     if _is_sentence_terminated(ln):
@@ -1714,6 +1729,14 @@ def _is_lede_table_line(ln: str) -> bool:
     if _TABLE_UNITS_RE.match(ln) or _TABLE_WORD_UNITS_RE.match(ln):
         return True
     if _is_lede_table_heading(ln) or _is_lede_period_header(ln):
+        return True
+    # Batch 190: a compact period fragment ("4th Q 25" — AJG's
+    # flattened summary-table column header) is table residue even
+    # though it is no longer a data row (batch 190 exempts fragments
+    # from _is_lede_data_row, which was the only branch catching it
+    # here: period_header and table-cell both read False on it). A
+    # whole line that is only the fragment is never prose.
+    if _is_lede_compact_period_fragment(ln):
         return True
     if _is_lede_date_header(ln):
         return True
