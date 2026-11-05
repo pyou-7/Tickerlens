@@ -6478,6 +6478,19 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # _is_lede_table_line). Only before any bullet is collected;
             # mid-block lines keep the existing continuation behavior.
             # Batch 172.
+        if not bullets and _is_lede_colon_heading(ln):
+            continue  # Batch 195: a colon-ended list-intro heading
+            # ahead of the bullets ("Q1 FY25 (comparisons versus prior
+            # year):" — Air Products) carries no figures and no news;
+            # the list below it is the content. The lede loop already
+            # skips such headings (batch 177); the leading-bullet block
+            # never did, so the intro line broke the block at its first
+            # line and the financial bullets under it never competed.
+            # Only before any bullet is collected — a mid-block colon
+            # line is a continuation and is dropped post-selection by
+            # the batch-177 rule. When the line after the intro is not
+            # a bullet, the else branch below breaks the block exactly
+            # as before, so the skip alone can never create a block.
         block = _footnote_def_block_len(lines, idx)
         if block:
             # Footnote definition after a bullet ("1) See Table A ...",
@@ -6527,7 +6540,10 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             if (
                 _TABLE_UNITS_RE.match(ln)
                 or _TABLE_WORD_UNITS_RE.match(ln)
-                or _is_lede_table_heading(ln)
+                or (
+                    _is_lede_table_heading(ln)
+                    and not _next_content_line_is_bullet(lines, idx)
+                )
                 or _is_lede_period_header(ln)
                 or _is_bare_period_fragment(ln)
             ):
@@ -6540,7 +6556,12 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # a bare period fragment ("Three Months") is the same
                 # signal — BlackRock's nonoperating-income table header
                 # follows the expense bullets, and the fragments tail the
-                # block as continuations.
+                # block as continuations. Batch 195: the table-heading
+                # break fires only when the next content line is NOT a
+                # bullet — a bare "Guidance" heading that introduces
+                # bullets (Air Products) is a sub-heading, not a table
+                # title, so the heading is kept as a label line and the
+                # bullets below it stay in the block.
             bullets.append(ln)
             if (
                 # Batch 158: the terminal-punctuation check sees through a
@@ -6589,6 +6610,23 @@ def _is_section_footnote_line(ln: str) -> bool:
     )
 
 
+def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
+    """True when the first non-admin line after lines[idx] starts a bullet.
+
+    A guidance/outlook table heading ("First Quarter 2026 Financial
+    Guidance Summary") and a bare sub-heading ("Guidance") share the
+    _is_lede_table_heading shape, but only the first heads a table: the
+    second heads bullets. The look-ahead tells them apart — page-number
+    admin lines between the heading and its bullets are skipped, so a
+    page break between them does not hide the bullets. Batch 195.
+    """
+    for ln in lines[idx + 1 :]:
+        if _ADMIN_LINE_RE.match(ln):
+            continue
+        return bool(_BULLET_LEAD_RE.match(ln) or ln.startswith("·"))
+    return False
+
+
 def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
     """Return the content lines of every explicit "Highlights" section.
 
@@ -6631,7 +6669,7 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         # line (Chipotle's revenue prose) for no reason; for sections
         # without a prepended anchor n_follow == len(collected), so
         # behavior is byte-identical.
-        for follow in lines[i + 1:]:
+        for j, follow in enumerate(lines[i + 1 :], start=i + 1):
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
             if follow == "-more-":
@@ -6665,7 +6703,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 or _is_lede_recon_heading(follow)
                 or _CONFERENCE_CALL_NOTICE_RE.search(follow)
                 or _is_lede_call_announcement(follow)
-                or _is_lede_table_heading(follow)
+                or (
+                    _is_lede_table_heading(follow)
+                    and not _next_content_line_is_bullet(lines, j)
+                )
                 or _is_lede_period_header(follow)
                 or _is_lede_date_header(follow)
                 or _is_bare_period_fragment(follow)
@@ -6676,6 +6717,12 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # ends here, the heading is not highlights. Only the strong
                 # heading shapes break — data rows stay out, so a section
                 # whose bullets are figure-dense is never cut. Batch 153.
+                # Batch 195: the table-heading break does not fire when
+                # the next content line is a bullet — a bare "Guidance"
+                # heading that introduces bullets (Air Products) is a
+                # sub-heading, not a table title, so it is collected as
+                # a label line and the bullets below it stay in the
+                # section.
                 # Batch 182: a conference-call notice breaks collection
                 # the same way (CSX: the notice + webcast + pointer
                 # lines were collected as section content in 3 quarters
