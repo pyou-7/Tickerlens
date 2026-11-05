@@ -2757,10 +2757,22 @@ _TOC_ENTRY_RE = re.compile(r"^.+ \d{1,3}$")
 #     text attached — a spaced "* Foo" or mid-line asterisk is prose
 #     punctuation, not a legend (bullet "•" is a different char and is
 #     unaffected).
+#   - Batch 192: the hash marker "#", attached or spaced — Air Products
+#     keys its per-share footnote "#" ("#Earnings per share is calculated
+#     ...", "#Per share amounts are calculated ...", "# Per share amounts
+#     are calculated ...") and Coinbase its variance legend ("# - Denotes
+#     a variance of 100 percent or more."). Unlike "*", "#" never opens
+#     a bullet or prose in these exhibits (the cache survey finds only
+#     footnote definitions, legends, table fragments like DLR's "# of"
+#     and decorations "###" / "# # #"), so the spaced form is safe here
+#     where it is not for "*". A bare "###" separator opens a block of
+#     length 1 in practice — the next line is a heading, never a
+#     plausible wrap continuation.
 _FOOTNOTE_DEF_RE = re.compile(
     r"^\d{1,3}\s+(defined as|represents|includes|excludes|reflects)\b"
     r"|^(?=.{0,300}$)\d{1,3}\s+\S.*\b(are|is)\s+(detailed|defined|described|calculated|reconciled|set forth)\b"
-    r"|^[*†‡]\S",
+    r"|^[*†‡]\S"
+    r"|^#\s*\S",
     re.IGNORECASE,
 )
 
@@ -3299,12 +3311,20 @@ _ROUNDING_NOTE_CHAIN_RE = re.compile(
 # lead list is deliberately note-shaped: a highlights bullet never opens
 # with "Based on" / "As of" / "Net of" / "Below" / "Measures used" — and
 # the batch-165 "* Revenue grew 12 percent." bullet stays a bullet.
+# Batch 192 adds "Certain results": Air Products' non-GAAP legend —
+# "* Certain results in this release include references to non-GAAP
+# financial measures ..." (spaced form, Q2 FY2026) and "*Certain results
+# in this release, including in the highlights above, include references
+# ..." (attached form, Q1 FY2025) — served as section content in Q2
+# FY2026 because the asterisk-note block is the one path that drops
+# spaced-"*" notes and its lead list never covered this opener. The
+# "\s*" already covers both forms.
 # Known limitation: the "During" form ("*During the first quarter of 2024,
 # we revised our definition of ...") and the quoted-term form ("*‘Major’
 # stablecoins include ...") are not covered — neither is served by any
 # path today.
 _ASTERISK_NOTE_LEAD_RE = re.compile(
-    r"^\*\s*(Based on|As of|Net of|Below|Measures used)\b",
+    r"^\*\s*(Based on|As of|Net of|Below|Measures used|Certain results)\b",
     re.IGNORECASE,
 )
 
