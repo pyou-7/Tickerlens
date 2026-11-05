@@ -179,8 +179,14 @@ def test_anchor_attached_footnote_digit_compound_heading():
 
 
 def test_anchor_bare_word_plus_digit_is_not_a_heading():
-    # CRM's guidance-table column header, not a section heading.
-    assert not _is_guidance_heading("Guidance5")
+    # Batch 196 supersedes this: a bare word + digit IS a heading when
+    # it is the section heading — Cigna's outlook section is headed
+    # "OUTLOOK2" (OUTLOOK<sup>2</sup> in the HTML), and the 1,699-
+    # exhibit census shows CRM's "Guidance5" column header can never
+    # become the anchor (an earlier "Guidance" heading always precedes
+    # it). See tests/data/test_filings_batch196.py.
+    assert _is_guidance_heading("Guidance5")
+    assert _is_guidance_heading("OUTLOOK2")
 
 
 def test_anchor_quote_fragment_is_not_a_heading():

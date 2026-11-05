@@ -5161,11 +5161,27 @@ def _guidance_has_signal(collected: list[str]) -> bool:
 # (accidental but working) entry to its segment-outlook section;
 # (2) a footnote marker attached to the heading ("Financial
 # Guidance1" — DAL's real guidance heading) breaks the regex's \b,
-# so the match is also tried with trailing digits stripped — but only
-# when the stripped line is a compound heading: a bare word + digit
-# ("Guidance5" — CRM's guidance-table column header) is a table cell,
-# not a heading. A trailing ":" stays a heading (JNJ's "Full-year
-# 2026 guidance:").
+# so the match is also tried with trailing digits stripped. A trailing
+# ":" stays a heading (JNJ's "Full-year 2026 guidance:").
+# Batch 196: the digit-strip path no longer requires a compound heading.
+# Batch 193 required a space in the stripped line (\"Financial Guidance1\"
+# — DAL's real heading — vs \"Guidance5\" — CRM's guidance-table column
+# header, a table cell not a heading). But Cigna's outlook section is
+# headed by the BARE word with a superscript footnote digit (\"OUTLOOK2\"
+# in text — the HTML is OUTLOOK<sup>2</sup>), so CI's 2024-12-31,
+# 2025-03-31 and 2025-09-30 quarters extracted None while every other
+# CI quarter (\"2025 OUTLOOK2\", compound, already accepted) served
+# guidance. A census of the 1,699-exhibit cache finds exactly six
+# bare-word+digit guidance headings: CI's three OUTLOOK2 (all real
+# section headings, followed by outlook prose + metrics table),
+# CRM_2024-10-31's two Guidance5 (table column headers INSIDE the
+# guidance section — the extractor already anchors on the earlier
+# \"Guidance\" heading, so they can never become the anchor), and
+# EMR_2025-09-30's \"Guidance 2026\" (also after the earlier \"2026
+# Outlook\" anchor). A bare-word+digit line can only anchor when no
+# earlier guidance heading exists — i.e. when it IS the section
+# heading, as in CI — so accepting the stripped match is safe; the
+# full blast (batch 196) verifies only CI's three quarters change.
 def _is_guidance_heading(ln: str) -> bool:
     if len(ln) > 90:
         return False
@@ -5174,7 +5190,7 @@ def _is_guidance_heading(ln: str) -> bool:
     if _GUIDANCE_HEADING_RE.match(ln):
         return True
     stripped = ln.rstrip("0123456789").rstrip()
-    return " " in stripped and bool(_GUIDANCE_HEADING_RE.match(stripped))
+    return bool(_GUIDANCE_HEADING_RE.match(stripped))
 
 
 # Executive quote extraction pattern. Two common earnings-release formats:
