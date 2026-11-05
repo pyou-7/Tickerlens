@@ -5296,7 +5296,7 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     return best_section
 
 
-_BULLET_RUN_SPLIT_RE = re.compile(r"\s+•\s+")
+_BULLET_RUN_SPLIT_RE = re.compile(r"\s+[•●○]\s+")
 
 
 def _split_bullet_runs(lines: list[str]) -> list[str]:
@@ -5311,10 +5311,20 @@ def _split_bullet_runs(lines: list[str]) -> list[str]:
     and single-bullet lines are untouched. Continuation pieces keep a "• "
     prefix so downstream bullet logic (the lede, the batch-115
     bullet-headline strip) treats them as bullets. Batch 125.
+
+    Batch 197: the separator is any of •/●/○, not just •. Instacart's
+    shareholder letter, Booking's release, and Affirm's letter join
+    their bullet runs with " ● " (Instacart also " ○ " for sub-bullets),
+    so the •-only split never fired and all 10 cached CART quarters, 7
+    BKNG quarters, and AFRM 2024-12-31 extracted None — the "Financial
+    Highlights" bullets sit mid-line in a mega-line no anchor ever sees.
+    The downstream glyph set already treats ●/○ as bullets
+    (_BULLET_LEAD_RE, the lone-marker test), so the split only extends
+    the batch-125 mechanism to the glyphs the documents actually use.
     """
     out: list[str] = []
     for ln in lines:
-        if len(ln) > _MAX_HEADLINE_CHARS and ln.count("•") >= 2 and " • " in ln:
+        if len(ln) > _MAX_HEADLINE_CHARS and len(_BULLET_RUN_SPLIT_RE.findall(ln)) >= 2:
             pieces = [p.strip() for p in _BULLET_RUN_SPLIT_RE.split(ln)]
             pieces = [p for p in pieces if p]
             if len(pieces) > 1:
@@ -6359,6 +6369,9 @@ def extract_press_release_highlights(
         not headline
         and first_para
         and max(len(ln) for ln in first_para.split("\n")) > 1000
+        and not any(
+            _BULLET_LEAD_RE.match(ln) for ln in first_para.split("\n")
+        )
     ):
         # Page-image exhibit (Bank of America slide deck): the "lines" are
         # whole pages with no usable headline. A page-LINE is not a highlight;
@@ -6370,6 +6383,15 @@ def extract_press_release_highlights(
         # salutation fix stops the greeting becoming the headline, its
         # bullets were discarded as a "page-line"). A single line over
         # 1000 chars still trips the guard exactly as before.
+        # Batch 197: a bullet-led line exempts the paragraph — a real
+        # section's narrative paragraphs are flattened mega-lines too
+        # (Instacart's "Financial Update" prose runs 1200–2500 chars a
+        # line), so the guard discarded all 6 remaining CART quarters
+        # although their sections open with 8 genuine financial bullets.
+        # A page-line dump has no bullet lines (BAC's deck bullets became
+        # the headline via batch 125, so the guard never sees them; a
+        # risk-factor bullet run like Ford's early releases still returns
+        # None through the other gates, not this one).
         # Batch 163: a Workiva page-flattened release is the same shape but
         # carries real narrative behind a dateline — salvage its lede (and
         # an embedded title) instead of discarding it; a dateline-less page
