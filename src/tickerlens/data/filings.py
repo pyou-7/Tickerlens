@@ -2155,6 +2155,56 @@ def _is_trailing_heading(ln: str) -> bool:
     return True
 
 
+_TRAILING_COMPANY_SUFFIXES = frozenset(
+    {
+        "inc.",
+        "corp.",
+        "corporation",
+        "company",
+        "ltd.",
+        "co.",
+        "llc",
+        "group",
+        "holdings",
+        "n.v.",
+        "s.a.",
+    }
+)
+
+
+def _is_trailing_company_signature(ln: str) -> bool:
+    """True for a bare company-name signature at the tail of a highlights
+    body (batch 194): a short line of capitalized words ending in a
+    corporate suffix ("CarMax, Inc." — the page-2 header of CarMax's
+    release, pulled in when the "-more-" skip freed a section slot).
+    A prose sentence ending in a suffix ("... approved by Apple Inc.")
+    fails on its lowercase words; a quote attribution fails on length
+    and on its lowercase words too. The trim only ever pops the last
+    line, so a mid-text company name is untouched."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not words or len(words) > 6:
+        return False
+    if words[-1].strip(",;:").lower() not in _TRAILING_COMPANY_SUFFIXES:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
 def _is_lede_title_line(ln: str) -> bool:
     """True for an exhibit title line served mid-lede ("Capital One
     Third Quarter 2024 Earnings" — Capital One, 7 stored rows: the
@@ -2525,6 +2575,18 @@ def _clean_highlights_result(result: str) -> str:
             trimmed.pop()
             continue
         if _is_trailing_heading(last):
+            trimmed.pop()
+            continue
+        if last == "-more-":
+            # Batch 194: a page-continuation marker at the very tail
+            # (a path that bypasses the lede/section loops, e.g. the
+            # shareholder-letter or flat-table modes) is never content.
+            trimmed.pop()
+            continue
+        if _is_trailing_company_signature(last):
+            # Batch 194: a bare company-name signature at the very tail
+            # (CarMax's "CarMax, Inc." page-2 header, pulled in when the
+            # "-more-" skip freed a section slot) is page furniture.
             trimmed.pop()
             continue
         # Batch 178: a trailing bare units declaration (eBay's "in
@@ -5376,6 +5438,36 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
     return f"{headline}\n\n{text}".strip() if headline else text
 
 
+def _is_more_page_section_heading(ln: str) -> bool:
+    """True when a line right after a "-more-" page marker opens a new
+    section instead of continuing the lede (batch 194).
+
+    The shape mirrors the guidance collector's next-section heading
+    (batch 193) but without its follower check: the follower here is
+    usually a table, which that check does not accept. A paragraph
+    wrapped across the page break is never heading-shaped (its head is
+    sentence-case, or its previous line is unterminated — the caller
+    also requires the previously collected line to be terminated), and
+    a quote-attribution tail ends with a comma or colon, so both stay
+    collectable. All-caps lines are excluded the same way: a table
+    title after the break is caught by the loop's own table breaks.
+    """
+    s = ln.strip()
+    if not s or len(s) > 90:
+        return False
+    if _is_sentence_terminated(s) or s.endswith(","):
+        return False
+    if s.isupper() or _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if _DATELINE_LEAD_RE.match(s) or _GUIDANCE_PAREN_DATELINE_RE.match(s):
+        return False
+    if _is_lone_bullet_marker(s):
+        return False
+    return _is_guidance_title_case(s)
+
+
 def extract_press_release_highlights(
     document_html: str, max_chars: int = 4000
 ) -> str | None:
@@ -5752,6 +5844,9 @@ def extract_press_release_highlights(
         content_lines = 0
         overrun = 0
         marker_seen = False
+        # Batch 194: set when a "-more-" page marker is skipped — the
+        # next line is judged as a possible new-section heading (below).
+        after_more = False
         # Batch 185: set when a flattened table label is skipped — the
         # lines that follow are table rows until real prose (a terminated
         # sentence or a bullet) resumes and clears it.
@@ -5791,6 +5886,39 @@ def extract_press_release_highlights(
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
+            if ln == "-more-":
+                # Batch 194: a page-continuation marker, never content
+                # (the guidance collector skips it since batch 193; the
+                # lede loop never did — APD Q2 FY2026 served it plus
+                # the next section's heading as highlights). It never
+                # consumes budget, and the line after it is judged as a
+                # possible new-section heading below.
+                after_more = True
+                i += 1
+                continue
+            if after_more:
+                # Consumed by the very next line, whatever branch takes
+                # it — except a bare company-name page header, which is
+                # skipped transparently so the line after IT is judged
+                # (CarMax: "CarMax, Inc." + "Page 2 of 13" head page 2).
+                if _is_trailing_company_signature(ln):
+                    i += 1
+                    continue
+                # A heading-shaped line after a page break ends the lede:
+                # the previous section is over and the heading's content
+                # belongs to the next section
+                # (APD: "Fiscal 2026 Second Quarter Results by Business
+                # Segment" after the CEO quote). Not in table mode — a
+                # table label after the break is residue, not a heading
+                # (batch 185: prose after a table is still collected).
+                after_more = False
+                if (
+                    not in_table
+                    and lede
+                    and _is_sentence_terminated(lede[-1])
+                    and _is_more_page_section_heading(ln)
+                ):
+                    break
             if in_table and _is_lede_nongaap_section_heading(ln):
                 # Batch 185: the non-GAAP definitions section is
                 # boilerplate — nothing after it is highlights (EOG's
@@ -6492,6 +6620,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         ):
             collected.append(ln)
         hit_table = False
+        # Batch 194: a "-more-" page marker inside a Highlights
+        # section is never content, and a heading-shaped line right
+        # after it ends the section (same rule as the lede loop).
+        after_more = False
         n_follow = 0  # Batch 184: the cap counts FOLLOW lines only — a
         # prepended sub-headline anchor (above) is headline-adjacent
         # content, not part of the section's 12-line budget. Counting
@@ -6502,6 +6634,26 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         for follow in lines[i + 1:]:
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
+            if follow == "-more-":
+                # Batch 194: page-continuation marker, never content.
+                after_more = True
+                continue
+            if after_more:
+                # Consumed by the next line: a bare company-name page
+                # header is skipped transparently (CarMax: "CarMax,
+                # Inc." + "Page 2 of 13" head page 2), so the line after
+                # IT is judged as the section boundary.
+                if _is_trailing_company_signature(follow):
+                    continue
+                # A heading-shaped line ends the section (its content
+                # belongs to the next section), anything else continues it.
+                after_more = False
+                if (
+                    collected
+                    and _is_sentence_terminated(collected[-1])
+                    and _is_more_page_section_heading(follow)
+                ):
+                    break
             if _BOILERPLATE_RE.match(follow):
                 break
             if follow.isupper() and len(follow) <= 80:
