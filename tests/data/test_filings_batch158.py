@@ -189,8 +189,9 @@ def test_googl_q2_shaped_release_serves_full_quote() -> None:
     )
     assert hl is not None
     assert hl.split("\n\n")[0] == "Alphabet Announces Second Quarter 2026 Results"
-    assert "•Consolidated Alphabet revenues increased 24%" in hl
-    assert "•Net income available to common stockholders increased 298%" in hl
+    # Batch 198: live bullets are spaced after the glyph ("• Net ...").
+    assert "• Consolidated Alphabet revenues increased 24%" in hl
+    assert "• Net income available to common stockholders increased 298%" in hl
     assert "Sundar Pichai, CEO of Google and Alphabet, said:" in hl
     assert "across every part of our business." in hl
     assert "Gemini models now process 22 billion API tokens per minute" in hl

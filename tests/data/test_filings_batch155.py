@@ -101,8 +101,8 @@ def test_googl_q4_shaped_release_bullets_beat_table_section() -> None:
     assert hl.split("\n\n")[0] == (
         "Alphabet Announces Fourth Quarter and Fiscal Year 2024 Results"
     )
-    assert "•Consolidated Alphabet revenues in Q4 2024 increased 12%" in hl
-    assert "•Net income increased 28% and EPS increased 31% to $2.15." in hl
+    assert "• Consolidated Alphabet revenues in Q4 2024 increased 12%" in hl
+    assert "• Net income increased 28% and EPS increased 31% to $2.15." in hl
     assert "Sundar Pichai" in hl
     assert "The following table summarizes" not in hl
     assert "Quarter Ended December 31" not in hl
@@ -136,7 +136,7 @@ def test_googl_q3_shaped_release_keeps_bullets_without_dateline() -> None:
     )
     assert hl is not None
     assert hl.split("\n\n")[0] == "Alphabet Announces Third Quarter 2025 Results"
-    assert "•Consolidated Alphabet revenues in Q3 2025 increased 16%" in hl
+    assert "• Consolidated Alphabet revenues in Q3 2025 increased 16%" in hl
     assert "Sundar Pichai" in hl
     assert "MOUNTAIN VIEW" not in hl
     assert "The following table summarizes" not in hl
@@ -186,8 +186,8 @@ def test_googl_q1_shaped_release_unaudited_heading_ends_block() -> None:
     )
     assert hl is not None
     assert hl.split("\n\n")[0] == "Alphabet Announces First Quarter 2025 Results"
-    assert "•Consolidated Alphabet revenues in Q1 2025 increased 12%" in hl
-    assert "•The company announced a 5% increase to the dividend" in hl
+    assert "• Consolidated Alphabet revenues in Q1 2025 increased 12%" in hl
+    assert "• The company announced a 5% increase to the dividend" in hl
     assert "Sundar Pichai" in hl
     assert "Financial Highlights (unaudited)" not in hl
     assert "The following table summarizes" not in hl

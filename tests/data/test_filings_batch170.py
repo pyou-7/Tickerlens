@@ -31,7 +31,8 @@ def test_nflx_circle_sub_bullets_do_not_truncate_block() -> None:
             "Exhibit 99.1",
             "January 21, 2025",
             "Fellow shareholders,",
-            "•In 2024, we executed on our plan to reaccelerate growth.",
+        # Batch 198: live bullets are spaced after the glyph ("• Net ...").
+        "• In 2024, we executed on our plan to reaccelerate growth.",
             "◦For the year, revenue grew 16% and operating margin expanded "
             "six points to 27%. Operating income exceeded $10B for the "
             "first time in our history.",
@@ -63,7 +64,7 @@ def test_nflx_circle_sub_bullets_do_not_truncate_block() -> None:
     )
     assert hl is not None
     assert hl.split("\n\n")[0].startswith(
-        "•In 2024, we executed on our plan to reaccelerate growth."
+        "• In 2024, we executed on our plan to reaccelerate growth."
     )
     assert "Fellow shareholders" not in hl
     assert "For the year, revenue grew 16%" in hl

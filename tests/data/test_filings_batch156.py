@@ -149,9 +149,11 @@ def test_prose_first_release_serves_bullets_after_table() -> None:
         "Acme Corp Reports Fourth Quarter and Full Year 2025 Results"
     )
     assert "Acme delivered record revenue in the quarter" in hl
-    assert "•Revenue grew 12% to $5.2 billion in the fourth quarter" in hl
-    assert "•Net income was $1.4 billion, or $2.10 per diluted share" in hl
-    assert "•Operating cash flow reached $2.0 billion" in hl
+    # Batch 198: live bullets are spaced after the glyph ("• Net ..."),
+    # so the pinned expectations below use the spaced form.
+    assert "• Revenue grew 12% to $5.2 billion in the fourth quarter" in hl
+    assert "• Net income was $1.4 billion, or $2.10 per diluted share" in hl
+    assert "• Operating cash flow reached $2.0 billion" in hl
     assert "The following table summarizes" not in hl
     assert "Quarter Ended December 31" not in hl
     assert "Financial Highlights" not in hl

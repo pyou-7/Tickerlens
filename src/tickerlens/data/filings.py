@@ -7628,4 +7628,19 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)          # collapse runs of spaces
     text = re.sub(r" *\n *", "\n", text)          # trim spaces around newlines
     text = re.sub(r"\n{3,}", "\n\n", text)        # cap blank-line runs
-    return text.strip()
+    # Batch 198: a bullet glyph in its own inline element glues to its
+    # item text when the tags are stripped (\"&#8226;</font><font>Net
+    # sales...\" -> \"•Net sales...\") — the no-space inline join above is
+    # deliberate (DFIN span-splitting), but a line-leading bullet is never
+    # part of a split word, so restore the space after it. Stored rows
+    # from the older extractor already carry the spaced form (\"• Net
+    # sales...\"), and the served guidance/highlights cards render the
+    # glued form on ~1,400 of the 1,699 cached exhibits. Dashes are
+    # gated on a following letter: a dash before a digit or \"$\" is a
+    # table negative, not a bullet. Strip first: a leading space from a
+    # stripped opening tag would otherwise hide the first line's bullet
+    # from the ^ anchor (the final .strip() runs after these regexes).
+    text = text.strip()
+    text = re.sub(r"(?m)^([•●○◦▪■·])(\S)", r"\1 \2", text)
+    text = re.sub(r"(?m)^([–—])([A-Za-z])", r"\1 \2", text)
+    return text

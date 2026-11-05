@@ -103,9 +103,10 @@ def test_business_wire_release_serves_full_metric_block() -> None:
     )
     assert hl is not None
     assert "BUSINESS WIRE" not in hl
-    assert hl.count("•Net sales") == 1
-    assert "•Operating income increased" in hl
-    assert "•Net income increased" in hl
+    # Batch 198: live bullets are spaced after the glyph ("• Net ...").
+    assert hl.count("• Net sales") == 1
+    assert "• Operating income increased" in hl
+    assert "• Net income increased" in hl
     # The financial block wins the batch-102 ranking over the later business
     # bullets, so the Prime bullet is not in the live result (the stored row
     # keeps it — the backfill only fills blanks).
@@ -151,5 +152,5 @@ def test_period_label_end_to_end_q4() -> None:
     assert hl is not None
     assert "BUSINESS WIRE" not in hl
     assert "Fourth Quarter 2024" not in hl
-    assert "•Net sales increased" in hl
-    assert "•Operating income increased" in hl
+    assert "• Net sales increased" in hl
+    assert "• Operating income increased" in hl
