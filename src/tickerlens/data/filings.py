@@ -4880,9 +4880,240 @@ _GUIDANCE_HEADING_RE = re.compile(
 _FINANCIAL_TABLE_START_RE = re.compile(
     r"^(condensed\s+consolidated|consolidated\s+statements|unaudited\s+condensed|"
     r"reconciliation\s+of|gaap\s+to\s+non-gaap|non-gaap\s+financial|conference\s+call|webcast|"
-    r"earnings\s+webcast|quarterly\s+highlights|product\s+releases)\b",
+    # Batch 193: Axon's "Quarterly conference call and webcast" section
+    # heading (its call notice was collected as guidance once the
+    # footnote skip freed the line budget) — the bare "conference call"
+    # alternative never matches it because of the "Quarterly" prefix.
+    r"quarterly\s+conference\s+call|"
+    r"earnings\s+webcast|quarterly\s+highlights|product\s+releases|"
+    # Batch 193 (repair spot-check): Applied Materials' guidance
+    # section is followed by its results segment table headed "First
+    # Quarter Reportable Segment Information" (and "Fourth Quarter and
+    # Fiscal 2025 Reportable Segment Information") — the period-label
+    # exemption let collection past the guidance table and into the
+    # segment actuals ("Net revenue $ 5,356 $ 4,909"). A
+    # reportable-segment-information heading is always the
+    # reported-quarter results table, never guidance, so it ends the
+    # section. Up to five words may precede it.
+    r"(?:[a-z0-9]+[\s\-]+){0,5}reportable\s+segment\s+information)\b",
     re.IGNORECASE,
 )
+
+# Batch 193 (repair spot-check): General Mills' guidance section is
+# followed by its earnings-call notice in a shape none of the
+# conference-call tests match — "General Mills will issue pre-recorded
+# management remarks today, December 17, 2025, at approximately 6:30
+# a.m. Central time ... and will hold a live, webcasted question and
+# answer session beginning at 8:00 a.m. ..." — no "conference call"
+# phrase ("will hold" + "question and answer session", not "will host"
+# + "conference call"), so _is_lede_call_announcement, the "will host
+# ... webcast" test and _CONFERENCE_CALL_NOTICE_RE all miss it, and
+# the notice (11 GIS quarters) was collected as guidance. The two
+# phrases are distinctive enough to search for, with the same
+# 120-char start guard as _CONFERENCE_CALL_NOTICE_RE: a guidance
+# sentence may point at the call in its tail, and the guard keeps that
+# shape (Biogen's FX line) from breaking. "pre-recorded remarks"
+# without "management" covers the notice's continuation line ("The
+# pre-recorded remarks and the webcast will be made available at ...").
+_CALL_QA_SESSION_RE = re.compile(
+    r"pre-recorded (?:management )?remarks|webcasted question and answer session",
+    re.IGNORECASE,
+)
+
+# Batch 193: a next-section heading inside a guidance collection — a
+# short unterminated title-case line that is not itself a guidance
+# heading and heads a prose or bullet block. Air Products' "Guidance"
+# section is two bullets followed by "News and Highlights", "Fiscal
+# ... Consolidated Results", "Fiscal ... Results by Business Segment"
+# and "Earnings Teleconference" — without this break the collector
+# runs 30 lines through the whole results narrative and the 4000-char
+# cap truncates it mid-segment-table, so the served "guidance" is
+# mostly results prose. The follower test is the precision guard: a
+# table header ("U.S. & Canada Property International Property(2)",
+# AMT's outlook table) is followed by figure-dense rows, not prose or
+# bullets, so it never breaks; a guidance sub-heading that carries
+# "Outlook"/"Guidance" is exempt by the vocabulary test. The
+# exemptions below are the blast-193 failure modes, each attested:
+#   - guidance vocabulary ("Consolidated Fiscal 2024 Outlook",
+#     "Long-Term Outlook", "AbbVie Raises 2024 EPS Guidance Floor" —
+#     ADP/ABBV's outlook sub-sections end in, or carry, the words);
+#   - period labels ("Second Quarter Fiscal 2024" — ACN's outlook
+#     period sub-heading);
+#   - datelines ("GOODLETTSVILLE, Tenn.--(BUSINESS WIRE)--" — DG's
+#     guidance heading precedes the dateline);
+#   - a line after a lone bullet marker ("Full year comparable
+#     restaurant sales growth ..." — CMG's flattened bullet list puts
+#     the "·" on its own line, so the item text follows a marker);
+#   - non-title-case metric sub-headings ("Bookings and revenue",
+#     "Gross margin", "Share count" — DUOL's outlook metric labels
+#     are sentence-case, not headings).
+# The follower must be a bullet, a dateline (the next section opens
+# with one), or a long terminated prose sentence without $ or %
+# (guidance prose almost always carries $ or % in its first line, so
+# a $-less terminated sentence after a heading is next-section prose,
+# not a wrapped guidance line — DUOL's "Bookings and revenue" is
+# followed by an unterminated wrap, so it never breaks).
+_GUIDANCE_SMALL_WORDS = frozenset(
+    ["a", "an", "the", "and", "or", "of", "for", "by", "in", "on", "to", "with", "vs", "at", "from", "per", "&"]
+)
+_GUIDANCE_PERIOD_TOKENS = frozenset(
+    ["first", "second", "third", "fourth", "full", "q1", "q2", "q3", "q4", "fiscal", "quarter", "year", "fy"]
+)
+
+
+def _is_guidance_period_label(ln: str) -> bool:
+    """True for a pure period label ("Second Quarter Fiscal 2024",
+    "Q3 FY2025", "Full Year Fiscal 2026") — an outlook period
+    sub-heading, never a next-section heading."""
+    toks = re.split(r"[\s\-]+", ln.strip())
+    if not toks:
+        return False
+    for tok in toks:
+        t = tok.lower()
+        if t in _GUIDANCE_PERIOD_TOKENS:
+            continue
+        if re.fullmatch(r"\d{4}", t) or re.fullmatch(r"fy\d{2,4}", t):
+            continue
+        return False
+    return True
+
+
+def _is_guidance_title_case(ln: str) -> bool:
+    """True when every content word is capitalized (small words excepted)
+    — the shape of a section heading. Sentence-case metric labels
+    ("Bookings and revenue", "Gross margin") fail it."""
+    for w in ln.split():
+        w = w.strip("(),:;")
+        if not w:
+            continue
+        if w.lower() in _GUIDANCE_SMALL_WORDS:
+            continue
+        if w[0].isupper() or w[0].isdigit():
+            continue
+        return False
+    return True
+
+
+# A dateline with a parenthesized date ("LEHIGH VALLEY, Pa. (November 6,
+# 2025) - ..." — APD's results sections open with one): _DATELINE_LEAD_RE
+# never matches it (its character class has no parens), so without this
+# shape "Fiscal ... Consolidated Results" never breaks and the whole
+# results narrative is collected as guidance (APD 2025-09-30 ran to the
+# 4000-char cap through full-year and Q4 results plus the CEO quote).
+_GUIDANCE_PAREN_DATELINE_RE = re.compile(
+    r"^[A-Z][A-Z .'\-]*,\s*[A-Z][A-Za-z.]*\s*\([A-Za-z]+ \d{1,2}, \d{4}\)"
+)
+
+
+def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
+    """True when the line after a heading candidate opens a new section:
+    a bullet, a dateline, or a long terminated prose sentence with no $
+    or % (see _is_guidance_next_section_heading)."""
+    k = j + 1
+    while k < len(lines) and (_ADMIN_LINE_RE.match(lines[k]) or lines[k] == "-more-"):
+        k += 1
+    if k >= len(lines):
+        return False
+    nxt = lines[k]
+    if _BULLET_LEAD_RE.match(nxt) or nxt.startswith("·"):
+        # An em/en-dash or hyphen lead carrying figures is a table row,
+        # not a bullet item ("— $(0.57)" — BMY's EPS-bridge figure line
+        # after the "BioNTech Acquired IPRD Charge" row label, not the
+        # next section's first bullet).
+        if nxt[0] in ("—", "–", "-") and ("$" in nxt or "%" in nxt):
+            pass
+        else:
+            return True
+    if _DATELINE_LEAD_RE.match(nxt) or _GUIDANCE_PAREN_DATELINE_RE.match(nxt):
+        return True
+    return (
+        len(nxt) >= 60
+        and nxt[0].isupper()
+        and "$" not in nxt
+        and "%" not in nxt
+        and _is_sentence_terminated(nxt)
+    )
+
+
+def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
+    ln = lines[j]
+    if len(ln) > 90 or _GUIDANCE_HEADING_RE.match(ln):
+        return False
+    if re.search(r"\b(outlook|guidance)\b", ln, re.IGNORECASE):
+        return False
+    if _is_sentence_terminated(ln):
+        return False
+    if not ln or not ln[0].isupper() or ln.isupper():
+        return False
+    if "$" in ln or "%" in ln:
+        return False
+    if re.search(r"\.(com|net|org|io|co|biz|info)$", ln, re.IGNORECASE):
+        # A bare domain ("CrownCastle.com" — CCI's page footer between
+        # its outlook tagline and the outlook table's change notes) is
+        # page furniture, never a section heading.
+        return False
+    if _DATELINE_LEAD_RE.match(ln) or _is_guidance_period_label(ln):
+        return False
+    # A dateline wrapped across lines ("GOODLETTSVILLE, Tenn.--(BUSINESS"
+    # / "WIRE)-- ..." — DG's 2026-05-01 release): the candidate alone
+    # never matches the dateline regex, so test it joined with its next
+    # line, which is how the flattened dateline reads.
+    if j + 1 < len(lines) and _DATELINE_LEAD_RE.match(ln + " " + lines[j + 1]):
+        return False
+    if j > 0 and _is_lone_bullet_marker(lines[j - 1]):
+        return False
+    if not _is_guidance_title_case(ln):
+        return False
+    return _is_guidance_section_end_follower(lines, j)
+
+
+# Batch 193: whether the collected guidance lines (excluding the heading)
+# already carry guidance content — a bullet, a $ or % figure, or an
+# expectation verb. The safe-harbor intro that opens some outlook
+# sections ("This Outlook section contains forward-looking statements
+# ...") carries none of these, so a next-section heading before any
+# signal does not end the section: Crown Castle's OUTLOOK section
+# opens with the intro and a "Restructuring Plan Update" subsection
+# BEFORE its outlook table, and breaking there would keep the intro
+# and lose the table.
+_GUIDANCE_SIGNAL_RE = re.compile(r"expect\w*|anticipat\w*|forecast\w*", re.IGNORECASE)
+
+
+def _guidance_has_signal(collected: list[str]) -> bool:
+    for ln in collected[1:]:
+        if _BULLET_LEAD_RE.match(ln) or ln.startswith(("·", "●", "o ")):
+            return True
+        if "$" in ln or "%" in ln:
+            return True
+        if _GUIDANCE_SIGNAL_RE.search(ln):
+            return True
+    return False
+
+# Batch 193: the guidance-heading anchor test. Two attested gaps in
+# the bare _GUIDANCE_HEADING_RE match: (1) a quote fragment that
+# happens to start with "outlook" ("outlook at the start of the
+# year.”" — DAL's CEO-quote tail) is never a heading, so an anchor
+# line ending in sentence punctuation + a closing quote is rejected
+# — but a plain terminated line stays an anchor, because GEV's
+# wrapped "guidance of similar segment EBITDA losses to 2025." is the
+# (accidental but working) entry to its segment-outlook section;
+# (2) a footnote marker attached to the heading ("Financial
+# Guidance1" — DAL's real guidance heading) breaks the regex's \b,
+# so the match is also tried with trailing digits stripped — but only
+# when the stripped line is a compound heading: a bare word + digit
+# ("Guidance5" — CRM's guidance-table column header) is a table cell,
+# not a heading. A trailing ":" stays a heading (JNJ's "Full-year
+# 2026 guidance:").
+def _is_guidance_heading(ln: str) -> bool:
+    if len(ln) > 90:
+        return False
+    if re.search(r"[.!?…][”\"]\s*$", ln):
+        return False
+    if _GUIDANCE_HEADING_RE.match(ln):
+        return True
+    stripped = ln.rstrip("0123456789").rstrip()
+    return " " in stripped and bool(_GUIDANCE_HEADING_RE.match(stripped))
+
 
 # Executive quote extraction pattern. Two common earnings-release formats:
 #   1. "Quote text…" said Jane Doe, Chief Executive Officer.   (quote first)
@@ -6961,20 +7192,132 @@ def extract_management_guidance(
 
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for i, ln in enumerate(lines):
-        if _GUIDANCE_HEADING_RE.match(ln) and len(ln) <= 90:
+        if _is_guidance_heading(ln):
             collected = [ln]
-            for follow in lines[i + 1 :]:
-                if _ADMIN_LINE_RE.match(follow):
+            # Index loop (batch 193): footnote/note blocks are skipped
+            # whole, so the loop can jump past them instead of
+            # appending them one line at a time.
+            j = i + 1
+            while j < len(lines):
+                follow = lines[j]
+                if _ADMIN_LINE_RE.match(follow) or follow == "-more-":
+                    # Batch 193: "-more-" is a page-continuation
+                    # marker, never content — skip it like the admin
+                    # lines (8 collected guidance texts carry one).
+                    j += 1
                     continue
-                if _BOILERPLATE_RE.match(follow) or _FINANCIAL_TABLE_START_RE.match(follow):
-                    break
-                if follow.isupper() and len(follow) <= 80 and not any(
-                    w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
+                if (
+                    len(follow) <= 90
+                    and not _is_sentence_terminated(follow)
+                    and re.search(r"\breports\b", follow, re.IGNORECASE)
+                    and re.search(r"\b(results|earnings)\b$", follow, re.IGNORECASE)
                 ):
+                    # Batch 193: a repeated release-title line inside
+                    # the guidance section ("American Airlines Reports
+                    # Second-Quarter 2026 Financial Results" — AAL's
+                    # page-header repeat) is page furniture, never
+                    # guidance content — skip it like an admin line.
+                    j += 1
+                    continue
+                if (
+                    _BOILERPLATE_RE.match(follow)
+                    or _FINANCIAL_TABLE_START_RE.match(follow)
+                    or _is_lede_call_announcement(follow)
+                    or (
+                        (m := _CONFERENCE_CALL_NOTICE_RE.search(follow)) is not None
+                        and m.start() <= 120
+                    )
+                    or (
+                        (m := _CALL_QA_SESSION_RE.search(follow)) is not None
+                        and m.start() <= 120
+                    )
+                    or re.search(r"\bwill host\b[^.]*\bwebcast\b", follow, re.IGNORECASE)
+                ):
+                    # Batch 193: a conference-call / webcast notice ends
+                    # the guidance section — the notice line itself
+                    # ("Church & Dwight ... will host a webcast to
+                    # discuss second quarter 2025 results ...") was
+                    # collected as guidance once the footnote skip
+                    # freed the line budget, and the dial-in / URL
+                    # lines after it are event logistics, never
+                    # guidance. The _is_lede_call_announcement shape
+                    # (CSX's split notice) and the bare "will host a
+                    # webcast" shape are the two the ^-anchored
+                    # table-start regex never matches. The
+                    # _CONFERENCE_CALL_NOTICE_RE match must start in
+                    # the line's first 120 chars: Biogen's FX-assumption
+                    # line ends "... will be provided on the conference
+                    # call and webcast." — a guidance sentence with a
+                    # call pointer in its tail, not a notice — and an
+                    # unguarded .search breaks on it, dropping the FX
+                    # line and the two disclaimer lines after it. The
+                    # _CALL_QA_SESSION_RE test carries the same guard
+                    # for the same reason (GIS's notice shape).
+                    break
+                if (
+                    follow.isupper()
+                    and len(follow) <= 80
+                    and not _is_guidance_period_label(follow)
+                    and not any(
+                        w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
+                    )
+                ):
+                    # Batch 193: an all-caps period label ("Q4 FY25",
+                    # "FY25" — CRM's guidance-table period headers) is
+                    # a table header, not a section heading, so it
+                    # never breaks collection.
+                    break
+                # Batch 193: footnote-definition, rounding-note and
+                # asterisk-note blocks are never guidance — skip the
+                # whole block in-loop, with the same block machinery
+                # the Highlights section collector uses post-collection
+                # (batch 162/166). In-loop (not post-collection: batch
+                # 192 showed a post-collection filter frees char
+                # budget that the cap then refills with next-section
+                # content) so the 30-line budget is spent only on kept
+                # lines. APD's "#" per-share definition and "* Certain
+                # results" legend, AFL's "*See Non-U.S. GAAP ..."
+                # pointer, AKAM's "** Cloud Infrastructure ..." note,
+                # AMT's "(1)For additional discussion ..." table
+                # footnote and the "*Management is unable to
+                # reconcile" disclaimer all drop here. Two guards:
+                # (a) a parenthesized WORD is a table column header,
+                # not a footnote key — "(Prior) July" / "(Updated)"
+                # (BMY's guidance-table headers) match
+                # _LEDE_FOOTNOTE_RE's paren shape, so the block
+                # machinery would drop them (and chain onto the next
+                # table row, "2026 WW Revenue Growth* ..."). A real
+                # paren footnote carries a digit key or a sentence
+                # after the marker; a bare label word (or nothing) is
+                # a header, so those lines collect normally.
+                # (b) a block never swallows a guidance (sub-)heading
+                # — CARR's "1 Excludes NORESCO" block chains through
+                # "2 The closure ..." and the bare "5" onto the "2026
+                # Guidance" table header. Truncate the block at the
+                # first guidance-vocabulary line after the opener.
+                block = 0
+                if not re.match(r"^\([A-Za-z]+\)\d?(?:\s+[A-Z][a-z]*)?$", follow):
+                    block = (
+                        _footnote_def_block_len(lines, j)
+                        or _rounding_note_block_len(lines, j)
+                        or _asterisk_note_block_len(lines, j)
+                    )
+                if block:
+                    for k in range(j + 1, j + block):
+                        if re.search(r"\b(outlook|guidance)\b", lines[k], re.IGNORECASE):
+                            block = k - j
+                            break
+                    j += block
+                    continue
+                # Batch 193: a next-section heading ends the guidance
+                # section — but only once the section has delivered
+                # guidance (see _guidance_has_signal).
+                if _is_guidance_next_section_heading(lines, j) and _guidance_has_signal(collected):
                     break
                 collected.append(follow)
                 if len(collected) >= 30:
                     break
+                j += 1
 
             res = "\n\n".join(collected)
             if len(res) >= 100:
