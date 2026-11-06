@@ -5167,6 +5167,84 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
         first_q = nxt.lstrip("“\"'‘’()[]")
         if len(nxt) >= 60 and first_q[:1].isupper():
             return True
+    # Batch 203: a section-tagline follower — a heading followed by a
+    # short sentence-case fragment ("Building the future of finance,
+    # step by step" — COIN's "Product Update" tagline) and then wrapped
+    # prose that terminates within a few lines. The immediate follower
+    # is too short and unterminated for the prose test below, and the
+    # prose's first flattened line is a wrapped fragment, so neither
+    # test fires today and the heading is collected as guidance (COIN
+    # 2025-12-31 ends on the bare "Product Update" line — the 30-line
+    # budget's last slot). A tagline is short (< 60), unterminated,
+    # carries no $/% (a figure line is a table row, not a tagline), is
+    # not a bullet/dateline/period header/quote (those are handled
+    # above), and is sentence-case, not title-case — a second
+    # heading/label is title-case ("Investor Relations", "CEO
+    # Comment", "BB+", "Diluted 360.5 361.4"), and a bare page number
+    # is title-case by the digit rule. The prose run joins up to 6
+    # following lines (admin lines skipped) until sentence
+    # termination; it must terminate and total >= 100 chars with an
+    # uppercase first cased char. The run may carry $ ("... over $100
+    # million in annualized revenue.") — a 100+ char terminated
+    # sentence is prose, not a table row. The 100-char floor keeps
+    # short colon-terminated pointers ("The following reconciles the
+    # drivers of projected MCO Operating Expense growth:", 82 chars)
+    # from firing. Two run guards keep the join from crossing a
+    # guidance table to a distant disclaimer paragraph: every
+    # NON-terminating run line must be >= 50 chars (a wrapped prose
+    # line is near column width; a table row is short — BMY's
+    # "Other income/(expense) ~($250M) ~($50M)" is 38) and figure-
+    # sparse — at most one $/% character per 25 chars (ordinary prose
+    # runs about one figure per 50+ chars — GPC's "Global Automotive
+    # sales were $3.5 billion, up 0.8% ... with a 2.9% benefit ..." is
+    # 3 tokens in 110 chars; a table row is figure-dense — EL's
+    # "Forecasted/Adjusted EPS - Non-GAAP $3.10 - $3.35 $ 2.51 24% -
+    # 34%" is 4 tokens in 68 chars). A line failing either guard kills
+    # the run: the join is not prose, it is a table. The terminating
+    # line is exempt from both guards — it is the sentence tail
+    # ("revenue.") and may be short or carry the sentence's figures.
+    if (
+        len(nxt) < 60
+        and not _is_sentence_terminated(nxt)
+        and "$" not in nxt
+        and "%" not in nxt
+        and not _BULLET_LEAD_RE.match(nxt)
+        and not nxt.startswith("·")
+        and not nxt.lstrip().startswith(("“", '"', "‘", "'"))
+        and not _DATELINE_LEAD_RE.match(nxt)
+        and not _GUIDANCE_PAREN_DATELINE_RE.match(nxt)
+        and not _GUIDANCE_RESULTS_PERIOD_RE.match(nxt)
+        and not _is_guidance_title_case(nxt)
+    ):
+        run: list[str] = []
+        m = k + 1
+        terminated = False
+        while m < len(lines) and len(run) < 6:
+            if (
+                _ADMIN_LINE_RE.match(lines[m])
+                or lines[m] == "-more-"
+                or _GUIDANCE_RULE_LINE_RE.match(lines[m])
+            ):
+                m += 1
+                continue
+            run.append(lines[m])
+            if _is_sentence_terminated(lines[m]):
+                terminated = True
+                break
+            if len(lines[m]) < 50 or (
+                lines[m].count("$") + lines[m].count("%")
+            ) * 25 > len(lines[m]):
+                # Not wrapped prose: a short or figure-dense line is a
+                # table row, and the run has crossed into a table.
+                terminated = False
+                run = []
+                break
+            m += 1
+        if terminated:
+            joined = " ".join(run)
+            first_run = joined.lstrip("“\"'‘’()[]")
+            if len(joined) >= 100 and first_run[:1].isupper():
+                return True
     # Batch 200: a quote-led paragraph ("“This was another year ..." —
     # Disney's CEO quote after "Message From Our CEO:") opens with a
     # curly quote, so the uppercase test reads the first cased char.
