@@ -5079,6 +5079,18 @@ _GUIDANCE_PAREN_DATELINE_RE = re.compile(
 _GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
 
 
+# Batch 200: a results-table period header ("Three months ended
+# September 30", doubled "Three months ended ... Nine months ended
+# ...") after a heading opens the condensed results table, never
+# guidance — GE Vernova's outlook section runs past "Total Company
+# Results" into its results table because the follower is a period
+# header, not a bullet, dateline or long prose line.
+_GUIDANCE_RESULTS_PERIOD_RE = re.compile(
+    r"^(Three|Six|Nine|Twelve) months ended "
+    r"(January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}"
+)
+
+
 def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     """True when the line after a heading candidate opens a new section:
     a bullet, a dateline, or a long terminated prose sentence with no $
@@ -5104,9 +5116,26 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
             return True
     if _DATELINE_LEAD_RE.match(nxt) or _GUIDANCE_PAREN_DATELINE_RE.match(nxt):
         return True
+    if _GUIDANCE_RESULTS_PERIOD_RE.match(nxt):
+        return True
+    # Batch 200: a colon-ended label followed by a quotation is a
+    # speaker/section label ("Message From Our CEO:" + the CEO quote)
+    # — the quote's first flattened line is a wrapped fragment, so
+    # the terminated-prose test below never fires on it. The heading
+    # still has to be title-case and colon-ended, so a prose clause
+    # that happens to precede a quote never qualifies.
+    if (
+        lines[j].rstrip().rstrip("”\"'’)]}").endswith(":")
+        and nxt.lstrip().startswith(("“", '"', "‘", "'"))
+    ):
+        return True
+    # Batch 200: a quote-led paragraph ("“This was another year ..." —
+    # Disney's CEO quote after "Message From Our CEO:") opens with a
+    # curly quote, so the uppercase test reads the first cased char.
+    first = nxt.lstrip("“\"'‘’()[]")
     return (
         len(nxt) >= 60
-        and nxt[0].isupper()
+        and first[:1].isupper()
         and "$" not in nxt
         and "%" not in nxt
         and _is_sentence_terminated(nxt)
@@ -5119,7 +5148,15 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
         return False
     if re.search(r"\b(outlook|guidance)\b", ln, re.IGNORECASE):
         return False
-    if _is_sentence_terminated(ln):
+    # Batch 200: a trailing colon is a heading label, not sentence
+    # termination — "Editor's Notes:", "Message From Our CEO:",
+    # "Caution Concerning Forward Looking Statements:" all introduce
+    # the content that follows them, and the colon is what kept the
+    # section-end test from firing on them. A colon-ended line still
+    # has to pass the title-case + follower tests below, so a
+    # sentence fragment ("We expect the following:") never qualifies.
+    _stripped = ln.rstrip().rstrip("”\"'’)]}")
+    if _is_sentence_terminated(ln) and not _stripped.endswith(":"):
         return False
     if not ln or not ln[0].isupper() or ln.isupper():
         return False
