@@ -3011,16 +3011,18 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
         batch 164's mirror negative), and a bullet with a footnote key
         ("2 • Strategic acquisition ...") starts with a marker, not a
         capital — both stay continuations, not footnotes.
-      - Batch 178: the number may be GLUED to its word ("1See pages 17
-        and 18 for reconciliation ...", "2Adjusted Non-GAAP measures
-        are calculated ..." — Estée Lauder's summary-table footnotes,
-        flattened without the space). The glued form requires a capital
-        followed by a lowercase letter — "3M reports ..." is digit +
-        single capital + space, so a company name never opens a block.
+      - Batch 199: the number may carry a period ("1. Adjustment item
+        resides in the Corporate & Other reportable segment." — the
+        batch-198 carry-forward shape; "1.Assumes $2.10 billion ..." —
+        First Solar's 2026 footnote defs, flattened without the space).
+        The period is optional and the capital-after-number guard is
+        unchanged, so a decimal-led figure ("1.5 million shares ...",
+        "1.25 billion ...") still never opens — the char after the
+        period is a digit, not a capital.
     """
     if len(ln) > 1000 or not _is_sentence_terminated(ln):
         return False
-    return bool(re.match(r"^\d{1,3}(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
+    return bool(re.match(r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
 
 
 def _is_bare_term_def_opener(ln: str) -> bool:
@@ -5067,12 +5069,26 @@ _GUIDANCE_PAREN_DATELINE_RE = re.compile(
 )
 
 
+# Batch 199: a horizontal rule never opens a section. First Solar's
+# guidance table ends with a rule line ("——————————") directly after
+# its last row ("Volume Sold 15.6GW to 16.3GW"); the follower test
+# treated the rule as a dash-led bullet, so the last table row read as
+# a next-section heading and the break dropped it (and the safe-harbor
+# paragraph after the footnote block). Rule lines are skipped when
+# advancing to the real follower, like admin lines.
+_GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
+
+
 def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     """True when the line after a heading candidate opens a new section:
     a bullet, a dateline, or a long terminated prose sentence with no $
     or % (see _is_guidance_next_section_heading)."""
     k = j + 1
-    while k < len(lines) and (_ADMIN_LINE_RE.match(lines[k]) or lines[k] == "-more-"):
+    while k < len(lines) and (
+        _ADMIN_LINE_RE.match(lines[k])
+        or lines[k] == "-more-"
+        or _GUIDANCE_RULE_LINE_RE.match(lines[k])
+    ):
         k += 1
     if k >= len(lines):
         return False
@@ -5126,6 +5142,17 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
         return False
     if not _is_guidance_title_case(ln):
         return False
+    if re.search(
+        r"dividend\s+(declaration|payment)|^quarterly\s+dividend$",
+        ln,
+        re.IGNORECASE,
+    ):
+        # Batch 199: a dividend declaration ("Quarterly Dividend",
+        # "Dividend Declaration" — COR, EXPE) is always the next
+        # section, never guidance; its follower paragraph carries
+        # "$0.48 per share", so the $-less follower test never fires
+        # on it. A "Dividend Policy" sub-heading is not matched.
+        return True
     return _is_guidance_section_end_follower(lines, j)
 
 
@@ -5182,6 +5209,25 @@ def _guidance_has_signal(collected: list[str]) -> bool:
 # earlier guidance heading exists — i.e. when it IS the section
 # heading, as in CI — so accepting the stripped match is safe; the
 # full blast (batch 196) verifies only CI's three quarters change.
+# Batch 199: a guidance-intro sentence anchors the section when there
+# is no heading. First Solar's interim releases introduce the table
+# with prose — "Our 2024 guidance has been updated as follows:",
+# "Our 2024 guidance remains unchanged. The complete 2024 guidance is
+# as follows:", "Our 2026 guidance remains unchanged and is summarized
+# below:", "Our updated 2026 guidance is summarized below:" — and no
+# bare "2024 Guidance" heading, so 9 of 11 cached FSLR quarters
+# extracted None despite carrying a full guidance table. A census of
+# the 1,699-exhibit cache finds this shape only in FSLR, and no
+# serving exhibit has one before its real anchor, so accepting it is
+# safe. The year must follow "Our" (optionally "updated"/"revised")
+# and the sentence must close with "as follows" / "summarized below"
+# — a bare "Our 2024 guidance was strong." never anchors.
+_GUIDANCE_INTRO_RE = re.compile(
+    r"^our (?:updated |revised )?\d{4} guidance\b.*\b(as follows|summarized below)\s*:?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _is_guidance_heading(ln: str) -> bool:
     if len(ln) > 90:
         return False
@@ -5190,7 +5236,9 @@ def _is_guidance_heading(ln: str) -> bool:
     if _GUIDANCE_HEADING_RE.match(ln):
         return True
     stripped = ln.rstrip("0123456789").rstrip()
-    return bool(_GUIDANCE_HEADING_RE.match(stripped))
+    if _GUIDANCE_HEADING_RE.match(stripped):
+        return True
+    return bool(_GUIDANCE_INTRO_RE.match(ln))
 
 
 # Executive quote extraction pattern. Two common earnings-release formats:
@@ -7494,6 +7542,7 @@ def extract_management_guidance(
                 if (
                     follow.isupper()
                     and len(follow) <= 80
+                    and re.search(r"[A-Za-z]{2,}", follow)
                     and not _is_guidance_period_label(follow)
                     and not any(
                         w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
@@ -7503,6 +7552,13 @@ def extract_management_guidance(
                     # "FY25" — CRM's guidance-table period headers) is
                     # a table header, not a section heading, so it
                     # never breaks collection.
+                    # Batch 199: a wrapped table value on its own line
+                    # ("$520M" — FSLR's split "Operating Expenses"
+                    # row) is all-caps by construction ($/digits carry
+                    # no case, "M" is the only cased char) but never a
+                    # heading, so a line with no two-letter word never
+                    # breaks. A real heading ("CONFERENCE CALL
+                    # DETAILS") always carries one.
                     break
                 # Batch 193: footnote-definition, rounding-note and
                 # asterisk-note blocks are never guidance — skip the
