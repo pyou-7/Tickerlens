@@ -89,14 +89,17 @@ def test_ceo_message_wrapped_quote_is_a_section_heading():
     assert _is_guidance_next_section_heading(lines, 0)
 
 
-def test_non_colon_heading_wrapped_quote_is_not_a_section_heading():
-    # Without the colon the label shape is absent: a wrapped quote
-    # follower alone never ends the section.
+def test_non_colon_heading_wrapped_quote_is_now_a_section_heading():
+    # Batch 201 SUPERSEDES this pin: a wrapped quote follower after a
+    # non-colon heading now ends the section (Carnival's "Financing
+    # and Capital Activity" + CFO quote). The old expectation —
+    # "a wrapped quote follower alone never ends the section" — held
+    # only while the quote rule required a colon-ended heading.
     lines = [
         "Message From Our CEO",
         "“Our performance in Q3 demonstrates the progress we’ve made against our four strategic priorities across our creative studios, streaming, sports, and",
     ]
-    assert not _is_guidance_next_section_heading(lines, 0)
+    assert _is_guidance_next_section_heading(lines, 0)
 
 
 def test_caution_forward_looking_is_a_section_heading():

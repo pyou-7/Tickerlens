@@ -5129,6 +5129,21 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
         and nxt.lstrip().startswith(("“", '"', "‘", "'"))
     ):
         return True
+    # Batch 201: a quote-led follower ends the section even without a
+    # colon-ended heading — Carnival's "Financing and Capital Activity"
+    # is followed by the CFO quote, a complete 442-char paragraph
+    # carrying $ figures, so neither the terminated-prose test (needs
+    # $-less) nor the colon+quote rule fires. A quotation after a
+    # heading is a speaker statement, not guidance prose: the opening
+    # quote + uppercase first cased char + length >= 60 is the shape.
+    # The heading gate (title-case, no guidance vocabulary, no period
+    # label) still applies, so a guidance sub-heading followed by a
+    # quote never qualifies. Supersedes the batch-200 pinned negative
+    # (non-colon heading + wrapped quote).
+    if nxt.lstrip().startswith(("“", '"', "‘", "'")):
+        first_q = nxt.lstrip("“\"'‘’()[]")
+        if len(nxt) >= 60 and first_q[:1].isupper():
+            return True
     # Batch 200: a quote-led paragraph ("“This was another year ..." —
     # Disney's CEO quote after "Message From Our CEO:") opens with a
     # curly quote, so the uppercase test reads the first cased char.
