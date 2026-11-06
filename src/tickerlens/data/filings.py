@@ -5239,6 +5239,20 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
                 terminated = False
                 run = []
                 break
+            # Batch 204: a wrapped prose sentence can end mid-line
+            # ("... rich app ecosystem. Coinbase is building ..." —
+            # COIN 2025-09-30's Product Update prose wraps so the
+            # sentence boundary lands mid-line and the line-end test
+            # never fires; the 6-line run then expires unterminated
+            # and the heading is collected as guidance). A mid-line
+            # boundary is a lowercase letter + terminal punctuation +
+            # space + uppercase — abbreviations ("U.S. GAAP", "No. 1")
+            # never match, so a table label cannot false-terminate.
+            # It runs after the guards, so a figure-dense line is
+            # still killed as a table row instead of terminating.
+            if re.search(r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", lines[m]):
+                terminated = True
+                break
             m += 1
         if terminated:
             joined = " ".join(run)
@@ -7620,6 +7634,24 @@ def _extract_flat_summary_table_highlights(
     return result
 
 
+# Batch 204: the guidance line budget is a backstop against runaway
+# collection, not a guillotine — prose-heavy sections (COIN's outlook
+# prose, ADP's outlook table) run 35–50 lines to their natural end, so
+# a flat 30-line cut truncates them mid-sentence or mid-table while the
+# section end sits a few lines past the cut. When the budget is hit,
+# the collector keeps going for up to _GUIDANCE_BUDGET_LOOKAHEAD_LINES
+# more kept lines, but only keeps them if a section-end break fires
+# inside the window; if no break fires — or the document runs out —
+# the extra lines are discarded and the 30-line cut stands. A runaway
+# section (no end in sight — CSCO, ELV) therefore still stops at 30
+# lines, while a section that ends just past the cut (COIN's "Webcast
+# Information" 6–8 lines out, ADP's "Investor Webcast Today" ~20
+# lines out) completes. The 4000-char cap still bounds table-heavy
+# sections.
+_MAX_GUIDANCE_LINES = 30
+_GUIDANCE_BUDGET_LOOKAHEAD_LINES = 20
+
+
 def extract_management_guidance(
     document_html: str, max_chars: int = 4000
 ) -> str | None:
@@ -7641,6 +7673,8 @@ def extract_management_guidance(
             # whole, so the loop can jump past them instead of
             # appending them one line at a time.
             j = i + 1
+            over_budget = False
+            budget_cut = 0
             while j < len(lines):
                 follow = lines[j]
                 if _ADMIN_LINE_RE.match(follow) or follow == "-more-":
@@ -7766,9 +7800,27 @@ def extract_management_guidance(
                 if _is_guidance_next_section_heading(lines, j) and _guidance_has_signal(collected):
                     break
                 collected.append(follow)
-                if len(collected) >= 30:
+                if len(collected) >= _MAX_GUIDANCE_LINES and not over_budget:
+                    # Batch 204: budget hit — enter the lookahead
+                    # window (see constants above): keep collecting,
+                    # but the extra lines survive only if a
+                    # section-end break fires before the window closes.
+                    over_budget = True
+                    budget_cut = len(collected)
+                elif over_budget and len(collected) > (
+                    budget_cut + _GUIDANCE_BUDGET_LOOKAHEAD_LINES
+                ):
+                    # No section-end fired inside the lookahead
+                    # window: drop the unverified extra lines and keep
+                    # the budget cut.
+                    del collected[budget_cut:]
                     break
                 j += 1
+            else:
+                # Ran out of lines without a section-end break: the
+                # lookahead extras never verified — drop them.
+                if over_budget:
+                    del collected[budget_cut:]
 
             res = "\n\n".join(collected)
             if len(res) >= 100:
