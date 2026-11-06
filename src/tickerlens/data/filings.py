@@ -5091,6 +5091,29 @@ _GUIDANCE_RESULTS_PERIOD_RE = re.compile(
 )
 
 
+# Batch 202: a results-narrative heading ("Revenue Environment and
+# Outlook", "Cost Performance and Outlook" — DAL; "Revenue Results
+# and Outlook:" — LUV) names a results topic and appends "Outlook",
+# but it opens the results commentary that FOLLOWS the guidance
+# table, not the guidance section itself. The vocabulary exemption in
+# _is_guidance_next_section_heading ("outlook"/"guidance" anywhere in
+# the line) kept these from ever qualifying as section-end headings,
+# so the stored guidance ran through the narrative to the 4000-char
+# cap. A heading whose final conjunct is "and Outlook" and whose
+# topic word is a results noun (Environment/Performance/Results) is
+# a narrative heading: it may end the section, subject to the usual
+# title-case + follower + has-signal gates. Pure outlook headings
+# never match — "Guidance and Outlook" (no results noun), "2025
+# Outlook" / "Financial Outlook" (no "and Outlook" tail), "DICK'S
+# Business: Full Year 2025 Outlook" (colon prefix, period label) —
+# and neither does DKS's "Foot Locker Business: Q4 2025 Commentary
+# & Outlook" (colon prefix, "Commentary", "&"), whose section is
+# genuine outlook content.
+_GUIDANCE_NARRATIVE_OUTLOOK_RE = re.compile(
+    r"^(?:[A-Z][A-Za-z]* )+(Environment|Performance|Results) and Outlook:?$"
+)
+
+
 def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     """True when the line after a heading candidate opens a new section:
     a bullet, a dateline, or a long terminated prose sentence with no $
@@ -5162,7 +5185,12 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
     if len(ln) > 90 or _GUIDANCE_HEADING_RE.match(ln):
         return False
     if re.search(r"\b(outlook|guidance)\b", ln, re.IGNORECASE):
-        return False
+        # Batch 202: a results-narrative heading ("Revenue Environment
+        # and Outlook" — DAL) is exempted from the exemption: the
+        # "Outlook" tail names the commentary section after the
+        # guidance table, not the guidance section itself.
+        if not _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(ln):
+            return False
     # Batch 200: a trailing colon is a heading label, not sentence
     # termination — "Editor's Notes:", "Message From Our CEO:",
     # "Caution Concerning Forward Looking Statements:" all introduce
