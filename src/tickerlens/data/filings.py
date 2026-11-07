@@ -5643,6 +5643,27 @@ def _is_guidance_heading(ln: str) -> bool:
     return bool(_GUIDANCE_INTRO_RE.match(ln))
 
 
+def _is_toc_entry(lines: list[str], i: int) -> bool:
+    """True when the heading at lines[i] heads a table-of-contents run.
+
+    A TOC entry is a title line followed by a bare page-number line, and
+    the next entry follows the same shape (title, page number) right
+    after it. Two consecutive pairs are required: a single bare number
+    after a heading is often just a page footer — ELV's "Financial
+    Guidance Summary" is followed by "6" and then "Elevance Health"
+    (the next page's content), and SPG's "Guidance Reconciliation" by
+    "43" and then "(1)" — neither is a contents page, and neither may
+    be skipped.
+    """
+    if i + 3 >= len(lines):
+        return False
+    if not re.fullmatch(r"\d{1,3}", lines[i + 1]):
+        return False
+    if re.fullmatch(r"\d{1,3}", lines[i + 2]):
+        return False
+    return bool(re.fullmatch(r"\d{1,3}", lines[i + 3]))
+
+
 # Executive quote extraction pattern. Two common earnings-release formats:
 #   1. "Quote text…" said Jane Doe, Chief Executive Officer.   (quote first)
 #   2. Jane Doe, Chairman and CEO, commented: "Quote text…"   (speaker first)
@@ -7920,6 +7941,16 @@ def extract_management_guidance(
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for i, ln in enumerate(lines):
         if _is_guidance_heading(ln):
+            if _is_toc_entry(lines, i):
+                # Batch 210: a heading that heads a table-of-contents
+                # run is a TOC entry, not the section heading — DLR's
+                # financial supplement lists "2025 Outlook" on its
+                # contents page (title + page number, then the next
+                # entry the same way), and anchoring there stored the
+                # whole contents page as guidance. Skip the TOC anchor
+                # and keep scanning for the real heading (the outlook
+                # page itself, ~750 lines on in DLR's supplement).
+                continue
             collected = [ln]
             # Index loop (batch 193): footnote/note blocks are skipped
             # whole, so the loop can jump past them instead of
