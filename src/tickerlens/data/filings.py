@@ -1470,6 +1470,35 @@ def _is_lede_data_row(ln: str) -> bool:
             )
         ):
             return True
+    # Batch 207: a flattened range row — a label plus a bare-number range
+    # ("Straight-lined revenues (75) to (45) —", "Site rental revenues
+    # 3,828 to 3,873 —") with the change column flattened to a trailing
+    # dash. The density rule misses it (the label dilutes the figures
+    # below 40%, and the 25% branch needs a figure ending), and the
+    # trailing dash is the table's empty-change cell, not prose: a
+    # guidance range statement ends in a figure, never a dash, and the
+    # $-to-$ exemption above already keeps $ ranges out. No $ and no %
+    # (a % range is a margin row the density rule catches), at least one
+    # alphabetic word (a bare range fragment is a values line the
+    # density rule catches), exactly one standalone dash token (the
+    # trailing empty-change cell), and the range itself is bare numbers
+    # (optional parens/commas) joined by "to" or an unspaced dash — a
+    # spaced dash is a column separator, not a range connector (SRE's
+    # recon rows read "25 — 25 —", two dash cells, and stay recon rows
+    # under batch 161).
+    if (
+        "$" not in ln
+        and "%" not in ln
+        and len(ln) <= 120
+        and ln.rstrip().endswith(("—", "–", "-"))
+        and len([t for t in ln.split() if t in ("—", "–", "-")]) == 1
+        and re.search(r"[A-Za-z]", ln)
+        and re.search(
+            r"\(?\d[\d,]*\)?(?:\s+to\s+|[–—-])\(?\d[\d,]*\)?",
+            ln,
+        )
+    ):
+        return True
     return False
 
 
@@ -1805,7 +1834,13 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
         return False
     if re.search(r"[.!?]\s", ln):
         return False
-    if _LEDE_FIGURE_RE.search(ln):
+    # Batch 207: a trailing footnote marker ("net(f)", "tax(g)") is not
+    # a figure — _LEDE_FIGURE_RE matches a parenthesized single char,
+    # so the marker alone blocked label recognition (CCI's outlook
+    # table: "Interest expense ... net(f)" above its values row). Strip
+    # single-char parenthesized markers before the figure test; real
+    # figures ($, %, bare numbers, multi-char parens) still refuse.
+    if _LEDE_FIGURE_RE.search(re.sub(r"\(\w\)", " ", ln)):
         return False
     words = ln.split()
     if not words or len(words) > 12 or len(ln) > 120:
@@ -1835,7 +1870,10 @@ def _is_lede_flat_table_label_shape(ln: str) -> bool:
         return False
     if re.search(r"[.!?]\s", s):
         return False
-    if _LEDE_FIGURE_RE.search(s):
+    # Batch 207: a footnote marker ("net(f)") is not a figure — same
+    # strip as _is_lede_table_label, so a marker-carrying label below a
+    # header block still reads as a label.
+    if _LEDE_FIGURE_RE.search(re.sub(r"\(\w\)", " ", s)):
         return False
     words = s.split()
     if not 2 <= len(words) <= 12 or len(s) > 120:
@@ -5096,6 +5134,39 @@ _BARE_DOMAIN_RE = re.compile(
 )
 
 
+def _is_page_footer_furniture(lines: list[str], j: int) -> bool:
+    """True when lines[j] is page-footer furniture (batch 207).
+
+    The same two shapes batch 206 skips in the guidance collector, now
+    for the highlights collectors: a bare-domain line (\"CrownCastle.com\"
+    — the domain itself is dropped in the lede loop only because
+    _is_lede_table_line reads a no-space line as table residue, so the
+    section path and the leading-bullet block serve it), and the short
+    terminated sentence-case tagline immediately before one (\"The
+    pathway to possible.\" before \"CrownCastle.com\" — CCI's page
+    footer). The lookahead keeps the tagline skip narrow: a genuine
+    short sentence is skipped only when the very next line is a bare
+    domain — the footer signature. Figure lines ($/%/digits) and
+    title-case lines never match, so a table row or a heading before a
+    domain pointer survives. The conditions are byte-identical to the
+    batch-206 guidance rule so the two collectors agree on what
+    furniture is.
+    """
+    ln = lines[j]
+    if _BARE_DOMAIN_RE.match(ln):
+        return True
+    return (
+        j + 1 < len(lines)
+        and _BARE_DOMAIN_RE.match(lines[j + 1])
+        and len(ln) <= 60
+        and ln.rstrip().endswith((".", "!", "?"))
+        and not re.search(r"[$%\d]", ln)
+        and not ln.startswith("•")
+        and ln[0].isupper()
+        and not _is_guidance_title_case(ln)
+    )
+
+
 # Batch 200: a results-table period header ("Three months ended
 # September 30", doubled "Three months ended ... Nine months ended
 # ...") after a heading opens the condensed results table, never
@@ -6333,6 +6404,15 @@ def extract_press_release_highlights(
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
                 continue  # contact blocks some filers put before the headline
+            if _is_page_footer_furniture(lede_lines, i):
+                # Batch 207: page-footer furniture mid-lede (CCI: \"The
+                # pathway to possible.\" / \"CrownCastle.com\" — the domain
+                # already drops via _is_lede_table_line, but the tagline
+                # is a terminated sentence, so it was collected as a
+                # lede paragraph in 2 stored rows). Skipped in-loop, so
+                # it never consumes a lede budget line.
+                i += 1
+                continue
             if _is_bare_role_line(ln):
                 i += 1
                 continue  # bare quote-attribution role line ("Chief
@@ -6794,6 +6874,11 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             continue  # inside a skipped footnote-definition block
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             continue
+        if _is_page_footer_furniture(lines, idx):
+            # Batch 207: page-footer furniture mid-item (same CCI
+            # footer pair as the lede/section paths) — the item stays
+            # open across the skip.
+            continue
         if _BOILERPLATE_RE.match(ln):
             break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
@@ -7004,6 +7089,14 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         for j, follow in enumerate(lines[i + 1 :], start=i + 1):
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
+            if _is_page_footer_furniture(lines, j):
+                # Batch 207: page-footer furniture inside a Highlights
+                # section (CCI Q3 2024: the footer pair falls mid-bullet
+                # where the bullet wraps across a page break, so both
+                # lines were collected inside the bullet paragraph).
+                # Skipped in-loop, so the pair never consumes one of
+                # the section's 12 follow slots.
+                continue
             if follow == "-more-":
                 # Batch 194: page-continuation marker, never content.
                 after_more = True
