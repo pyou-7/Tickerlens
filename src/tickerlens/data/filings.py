@@ -2783,6 +2783,43 @@ _CONFERENCE_CALL_NOTICE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Batch 211: a call pointer — content "will be provided / discussed on
+# the conference call" — is not a notice (Biogen's FX-assumption line,
+# 12 quarters in-cache: "Other modeling considerations will be
+# provided on the conference call and webcast."; DHI's guidance pointer
+# "The Company plans to also provide guidance ... on its conference
+# call today", batch 209). The bare regex is a tail-match hazard: it
+# fires on any line that mentions "conference call" before "webcast" /
+# "replay", so a genuine content sentence whose tail only points AT
+# the call is treated as a notice and dropped (lede) or ends the
+# section (Highlights collector). The pointer preposition is the
+# discriminator: a notice ANNOUNCES the call ("will host / hold /
+# discuss ... during ... a conference call", "a webcast of the ...
+# conference call to be held", "Text of the conference call's
+# prepared remarks ...") — it never says content will be provided ON
+# it. The sentence-start guard cannot separate them (Biogen's pointer
+# sentence is short, so the match sits 63 chars into it; CSCO's
+# notice sentence sits 18 chars in) and neither can a scheduling-verb
+# test (CSCO/FDX notices carry no host verb). The pointer shape occurs
+# in exactly the 12 Biogen lines across all 1,699 cached exhibits and
+# nowhere else, so the exemption is precise. Only the Highlights
+# collector uses this helper; the guidance collector keeps its own
+# batch-193 120-char line guard (which already keeps Biogen's line).
+_CALL_NOTICE_POINTER_RE = re.compile(
+    r"\bon (?:the|its|our) conference call\b",
+    re.IGNORECASE,
+)
+
+
+def _is_call_notice(line: str) -> bool:
+    """True when a line is a conference-call / webcast notice: the
+    batch-166 regex matches and the match is not a content pointer at
+    the call. Batch 211."""
+    m = _CONFERENCE_CALL_NOTICE_RE.search(line)
+    if m is None:
+        return False
+    return _CALL_NOTICE_POINTER_RE.search(line[: m.end()]) is None
+
 # An investor-conference notice (Emerson: "Emerson will hold an
 # in-person and virtual investor conference on Thursday, Nov. 20 in
 # New York City. A live webcast of the investor conference will begin
@@ -6468,7 +6505,7 @@ def extract_press_release_highlights(
                 # shareholders,", "Dear Shareholders," — or the split
                 # "Fellow" / "Shareholders," form) is a greeting, never
                 # lede content. Batch 169.
-            if _CONFERENCE_CALL_NOTICE_RE.search(ln) or _is_lede_call_announcement(ln):
+            if _is_call_notice(ln) or _is_lede_call_announcement(ln):
                 i += 1
                 # Batch 182: a split notice's webcast second half
                 # ("In conjunction with the call, a live webcast ...")
@@ -6483,7 +6520,10 @@ def extract_press_release_highlights(
                 # results during an investor conference call ... live
                 # webcast ... replay ..." line) is never highlights; it
                 # backfills the lede once the footnotes are dropped.
-                # Batch 166.
+                # Batch 166. Batch 211: the test is _is_call_notice,
+                # not the bare regex — a content sentence that only
+                # points at the call ("... will be provided on the
+                # conference call and webcast", Biogen) is kept.
             if _INVESTOR_CONFERENCE_NOTICE_RE.search(ln):
                 i += 1
                 continue  # investor-conference notice (Emerson: "will
@@ -7232,7 +7272,7 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 or _TABLE_WORD_UNITS_RE.match(follow)
                 or _LEDE_BARE_UNITS_DOLLARS_RE.match(follow)
                 or _is_lede_recon_heading(follow)
-                or _CONFERENCE_CALL_NOTICE_RE.search(follow)
+                or _is_call_notice(follow)
                 or _is_lede_call_announcement(follow)
                 or (
                     _is_lede_table_heading(follow)
@@ -7259,7 +7299,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # lines were collected as section content in 3 quarters
                 # because the collector has no notice handling — the
                 # lede loop's notice skip never runs on the section
-                # path).
+                # path). Batch 211: the test is _is_call_notice, not
+                # the bare regex — a content sentence that only points
+                # at the call ("... will be provided on the conference
+                # call and webcast", Biogen) does not end the section.
                 # Batch 154: a date header ("Three Months Ended June 30,")
                 # breaks too — it is the table's period header, and without
                 # it Instacart's financial section ends on the orphan line.
