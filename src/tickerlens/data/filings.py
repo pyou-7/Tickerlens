@@ -5079,6 +5079,23 @@ _GUIDANCE_PAREN_DATELINE_RE = re.compile(
 _GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
 
 
+# Batch 206: a bare-domain line ("CrownCastle.com") — CCI prints a page
+# footer on every page of its releases: "The pathway to possible." /
+# "CrownCastle.com" / "News Release continued: Page N". The "News
+# Release continued" line is already skipped by _ADMIN_LINE_RE (its
+# "news release" prefix), but the tagline and the domain land inside the
+# guidance section — the OUTLOOK section spans pages, so footers fall
+# mid-table (8 stored CCI rows carry 11 such pairs). A line that IS a
+# domain, nothing else, is never guidance content: it is a URL pointer,
+# page furniture. The no-spaces shape keeps prose that merely mentions
+# a domain ("available at www.crowncastle.com") out of the match.
+_BARE_DOMAIN_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)*\."
+    r"(com|net|org|io|co|ai|gov|edu|us|uk|ca|au|de|fr|jp|in|br|mx|nl|se|ch|es|it)\.?$",
+    re.IGNORECASE,
+)
+
+
 # Batch 200: a results-table period header ("Three months ended
 # September 30", doubled "Three months ended ... Nine months ended
 # ...") after a heading opens the condensed results table, never
@@ -7738,6 +7755,35 @@ def extract_management_guidance(
                     # Batch 193: "-more-" is a page-continuation
                     # marker, never content — skip it like the admin
                     # lines (8 collected guidance texts carry one).
+                    j += 1
+                    continue
+                if _BARE_DOMAIN_RE.match(follow):
+                    # Batch 206: a bare-domain line is page furniture
+                    # (see _BARE_DOMAIN_RE) — skip it like an admin
+                    # line, so the 30-line budget is spent only on
+                    # kept lines.
+                    j += 1
+                    continue
+                if (
+                    j + 1 < len(lines)
+                    and _BARE_DOMAIN_RE.match(lines[j + 1])
+                    and len(follow) <= 60
+                    and follow.rstrip().endswith((".", "!", "?"))
+                    and not re.search(r"[$%\d]", follow)
+                    and not follow.startswith("•")
+                    and follow[0].isupper()
+                    and not _is_guidance_title_case(follow)
+                ):
+                    # Batch 206: the footer tagline — a short terminated
+                    # sentence-case line immediately before a bare domain
+                    # is the page-footer tagline ("The pathway to
+                    # possible." before "CrownCastle.com"), not guidance.
+                    # The lookahead keeps the skip narrow: a genuine
+                    # short guidance sentence is skipped only when the
+                    # very next line is a bare domain — the footer
+                    # signature. Figure lines ($/%/digits) and
+                    # title-case lines never match, so a table row or a
+                    # heading before a domain pointer survives.
                     j += 1
                     continue
                 if (
