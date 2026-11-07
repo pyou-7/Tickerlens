@@ -5085,10 +5085,67 @@ _GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
 # guidance — GE Vernova's outlook section runs past "Total Company
 # Results" into its results table because the follower is a period
 # header, not a bullet, dateline or long prose line.
+# Batch 205: a results-table period header — the header row of the reported
+# results table that follows a guidance section. The old shape only matched
+# the dated lowercase form ("Three months ended January 31"), so it missed
+# the three shapes the bleed cohort actually carries: the dateless/combined
+# form ("Three Months Ended Fiscal Year Ended" — DELL; "Three Months Ended
+# Y/Y % Change Q/Q % Change" — DASH), the quarter form ("First Quarter Ended
+# March 31" — ECL, whose bullets run straight into the results table with no
+# heading line before it), and the standalone fiscal-year form. A forward
+# guidance period says "Ending", never "Ended", so the past tense is the
+# discriminator. The one false-positive shape is a guidance table's own
+# header (AKAM's "Three Months Ended / June 30, 2024 / Low End High End"):
+# the direct break guards it twice (signal must already be delivered, and
+# _is_results_table_ahead refuses when a range label follows), and as a
+# follower it only fires after a heading candidate, which AKAM's intro
+# sentence is not.
 _GUIDANCE_RESULTS_PERIOD_RE = re.compile(
-    r"^(Three|Six|Nine|Twelve) months ended "
-    r"(January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}"
+    r"^((Three|Six|Nine|Twelve) months ended|"
+    r"(First|Second|Third|Fourth) quarter ended|"
+    r"Fiscal year ended)\b",
+    re.IGNORECASE,
 )
+
+
+_RESULTS_TABLE_UNIT_RE = re.compile(
+    r"^\(.*(million|billion|thousand|unaudited)", re.IGNORECASE
+)
+_RESULTS_RANGE_LABEL_RE = re.compile(r"\b(low|high)\s+end\b", re.IGNORECASE)
+
+
+def _is_results_table_ahead(lines: list[str], j: int) -> bool:
+    """True when the lines after a results-period header (line j) confirm a
+    reported-results table follows, rather than a guidance-range table.
+
+    A results table's header block carries a unit line ("(in millions,
+    except per share amounts and percentages; unaudited)"), standalone
+    column labels ("Change", "Reported", "Adjusted"), or change columns
+    inline in the header itself (DASH's "Y/Y % Change Q/Q % Change"). A
+    guidance-range table carries "Low End High End" instead (AKAM). Two
+    passes over the next 8 lines: any range label anywhere in the window
+    refuses first (a guidance table that also prints a unit line must not
+    be cut), then any positive confirms. No positive in the window means
+    no break — a miss keeps the old behavior, never a false cut.
+    """
+    if re.search(r"Y/Y|Q/Q", lines[j]):
+        return True
+    window = lines[j + 1 : j + 9]
+    for ln in window:
+        if _ADMIN_LINE_RE.match(ln) or ln == "-more-" or _GUIDANCE_RULE_LINE_RE.match(ln):
+            continue
+        if _RESULTS_RANGE_LABEL_RE.search(ln):
+            return False
+    for ln in window:
+        if _ADMIN_LINE_RE.match(ln) or ln == "-more-" or _GUIDANCE_RULE_LINE_RE.match(ln):
+            continue
+        if ln.strip() in ("Change", "Reported", "Adjusted"):
+            return True
+        if _RESULTS_TABLE_UNIT_RE.match(ln):
+            return True
+        if re.search(r"Y/Y|Q/Q", ln):
+            return True
+    return False
 
 
 # Batch 202: a results-narrative heading ("Revenue Environment and
@@ -7798,6 +7855,29 @@ def extract_management_guidance(
                 # section — but only once the section has delivered
                 # guidance (see _guidance_has_signal).
                 if _is_guidance_next_section_heading(lines, j) and _guidance_has_signal(collected):
+                    break
+                # Batch 205: a results-table period header ends the
+                # guidance section. DELL's guidance bullets are followed
+                # by a results heading ("Fourth Quarter ... Financial
+                # Results") whose follower is the period header — that
+                # path breaks at the heading once the period regex matches
+                # the dateless shape. But ECL's two outlook bullets run
+                # straight into its results table ("First Quarter Ended
+                # March 31") with no heading line at all, so the header
+                # itself must break collection. Two guards: guidance signal
+                # must already be delivered (a guidance table's own period
+                # header sits before any signal — AKAM's "Three Months
+                # Ended" intro), and the lines ahead must confirm a
+                # results table (a guidance-range table's "Low End High
+                # End" refuses it); without the confirmation a guidance
+                # table that happens to head its columns with "Ended"
+                # would be cut.
+                if (
+                    len(follow) <= 90
+                    and _GUIDANCE_RESULTS_PERIOD_RE.match(follow)
+                    and _guidance_has_signal(collected)
+                    and _is_results_table_ahead(lines, j)
+                ):
                     break
                 collected.append(follow)
                 if len(collected) >= _MAX_GUIDANCE_LINES and not over_budget:
