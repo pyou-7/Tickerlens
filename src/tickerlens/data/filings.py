@@ -5022,6 +5022,69 @@ _CALL_QA_SESSION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Batch 209: a conference-call host notice ends the guidance section.
+# Cigna's outlook section is followed by its call notice in a shape
+# none of the batch-193 tests match — "Management will be hosting a
+# conference call to review ... results and discuss full year ...
+# outlook beginning today at 8:30 a.m. ET." (CI x6 quarters) — and
+# ConocoPhillips' is the same shape with the other verb form,
+# "ConocoPhillips will host a conference call today at noon Eastern
+# time to discuss this announcement." (COP x2). Neither line carries
+# "webcast"/"replay", so _CONFERENCE_CALL_NOTICE_RE never fires, and
+# the dial-in block after it (call-in numbers, Live Call, Passcode,
+# Replay, "dial in") is collected as guidance. "will host(ing) a
+# conference call" is the discriminator: a guidance sentence points
+# AT the call ("The Company plans to also provide guidance ... on its
+# conference call today" — DHI x11, kept; "... will be provided on
+# the conference call and webcast" — Biogen's FX line, kept) — it
+# never says the company will host one. The sentence-start guard
+# (_notice_starts_sentence, 120 chars from the sentence start) is
+# the batch-193 precedent, applied to the sentence instead of the
+# line: CI 2024-09-30's notice shares its line with the preceding
+# availability sentence, so the match starts ~180 chars into the
+# line but 11 chars into its own sentence. "will host its calls"
+# (GE 2023-12-31's earnings-call schedule line) never matches: no
+# "a conference call".
+_CALL_HOST_NOTICE_RE = re.compile(
+    r"will (?:be )?(?:host|hosting) a conference call\b",
+    re.IGNORECASE,
+)
+
+# Batch 209: the call-in-numbers line is the backstop for a dial-in
+# notice whose hosting paragraph is phrased differently or already
+# consumed — "The call-in numbers for the conference call are as
+# follows:" (CI x6) is never guidance: no guidance line announces
+# dial-in numbers. It fires only if the host-notice break above is
+# missed, so the dial-in block can never leak past it.
+_CALL_IN_NUMBERS_RE = re.compile(
+    r"call-in numbers for the conference call\b",
+    re.IGNORECASE,
+)
+
+
+def _notice_sentence_start(line: str, m: re.Match) -> int:
+    """Offset of the sentence containing a notice-regex match: the
+    char after the last ". "/"! "/"? " before the match (or the line
+    start). An abbreviation period before the match can only move the
+    computed start later, so it can only make the guard more
+    permissive, never less."""
+    before = line[: m.start()]
+    idx = max(before.rfind(". "), before.rfind("! "), before.rfind("? "))
+    return idx + 2 if idx >= 0 else 0
+
+
+def _notice_starts_sentence(line: str, m: re.Match) -> bool:
+    """True when a notice-regex match starts within 120 chars of its
+    own sentence start. Batch 209: CI 2024-09-30's call notice shares
+    its line with the preceding availability sentence ("... available
+    on The Cigna Group's website ... (URL). Management will be
+    hosting a conference call ..."), so the match starts ~180 chars
+    into the line and the batch-193 120-char LINE guard blocks it —
+    but only 11 chars into its own sentence. The 120-char number is
+    the batch-193 precedent, applied to the sentence instead of the
+    line."""
+    return m.start() - _notice_sentence_start(line, m) <= 120
+
 # Batch 193: a next-section heading inside a guidance collection — a
 # short unterminated title-case line that is not itself a guidance
 # heading and heads a prose or bullet block. Air Products' "Guidance"
@@ -7926,6 +7989,14 @@ def extract_management_guidance(
                         (m := _CALL_QA_SESSION_RE.search(follow)) is not None
                         and m.start() <= 120
                     )
+                    or (
+                        (m := _CALL_HOST_NOTICE_RE.search(follow)) is not None
+                        and _notice_starts_sentence(follow, m)
+                    )
+                    or (
+                        (m := _CALL_IN_NUMBERS_RE.search(follow)) is not None
+                        and _notice_starts_sentence(follow, m)
+                    )
                     or re.search(r"\bwill host\b[^.]*\bwebcast\b", follow, re.IGNORECASE)
                 ):
                     # Batch 193: a conference-call / webcast notice ends
@@ -7947,7 +8018,50 @@ def extract_management_guidance(
                     # unguarded .search breaks on it, dropping the FX
                     # line and the two disclaimer lines after it. The
                     # _CALL_QA_SESSION_RE test carries the same guard
-                    # for the same reason (GIS's notice shape).
+                    # for the same reason (GIS's notice shape). The
+                    # batch-209 host-notice and call-in-numbers tests
+                    # carry a sentence-start version of it
+                    # (_notice_starts_sentence): DHI's guidance
+                    # pointer ("The Company plans to also provide
+                    # guidance ... on its conference call today") has
+                    # no host verb, and GE's call-schedule line
+                    # ("will host its calls on April 23 ...") has no
+                    # "a conference call", so neither breaks — but
+                    # the guard keeps any future long guidance
+                    # sentence that mentions hosting a call in its
+                    # tail from breaking.
+                    # Batch 209 walk-back: the notice sentence may
+                    # share its line with the tail of the preceding
+                    # sentence — CI's availability sentence ("This
+                    # quarterly earnings release ... [is] available
+                    # on ... website ... (URL).") wraps onto the same
+                    # line as "Management will be hosting ...", so
+                    # breaking at the line leaves the kept text ending
+                    # mid-sentence ("This quarterly earnings",
+                    # "... Investor Relations section"). When the
+                    # notice sentence does not start the break line
+                    # and the text before it ends with sentence
+                    # punctuation, that text is the end of the last
+                    # kept sentence — pop unterminated kept lines
+                    # (the sentence's wrapped fragments) so the text
+                    # ends at the last complete sentence. The heading
+                    # (collected[0]) is never popped, and the walk-back
+                    # only runs when this break fired on a batch-209
+                    # notice match (re-checked here: the compound
+                    # condition above covers other break causes too).
+                    for _re in (_CALL_HOST_NOTICE_RE, _CALL_IN_NUMBERS_RE):
+                        _nm = _re.search(follow)
+                        if _nm is None or not _notice_starts_sentence(follow, _nm):
+                            continue
+                        _sent = _notice_sentence_start(follow, _nm)
+                        if _sent > 0 and _is_sentence_terminated(
+                            follow[:_sent].rstrip()
+                        ):
+                            while len(collected) > 1 and not _is_sentence_terminated(
+                                collected[-1]
+                            ):
+                                collected.pop()
+                        break
                     break
                 if (
                     follow.isupper()
