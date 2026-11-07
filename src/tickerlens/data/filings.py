@@ -5258,6 +5258,26 @@ _GUIDANCE_NARRATIVE_OUTLOOK_RE = re.compile(
     r"^(?:[A-Z][A-Za-z]* )+(Environment|Performance|Results) and Outlook:?$"
 )
 
+# Batch 208: the results-led sibling of the narrative-outlook shape —
+# a heading that LEADS with a results noun and mentions Guidance/Outlook
+# after "&"/"and" ("Results & Guidance by Reporting Segment", "Results
+# and Guidance by Reporting Segment", "Results and Outlook by Reporting
+# Segment" — GE, 5 occurrences in the full-cache survey) is the
+# segment-results section, not a guidance section: the guidance table
+# ends at it ("Segment guidance included below." points forward to it).
+# The connector is what distinguishes it from a headline: "Results,
+# Reaffirms 2025 Adjusted EPS Outlook" (comma, verb) and "Results and
+# Provides Fiscal 2026 Outlook" (verb after "and") never match, and
+# prose ("Revenue of $43.1 billion ... prior guidance ...", "Revenue
+# growth in upper half of guidance range ...") fails on the lead word
+# or the connector. A bare "Results and Outlook" (no trailing phrase)
+# also matches — it is still a results commentary section, never the
+# guidance section itself (a genuine guidance heading leads with
+# Outlook/Guidance/Business, per _GUIDANCE_HEADING_RE).
+_GUIDANCE_RESULTS_LED_RE = re.compile(
+    r"^(?:Results|Revenue) (?:&|and) (?:Guidance|Outlook)\b"
+)
+
 
 def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     """True when the line after a heading candidate opens a new section:
@@ -5426,7 +5446,9 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
         # and Outlook" — DAL) is exempted from the exemption: the
         # "Outlook" tail names the commentary section after the
         # guidance table, not the guidance section itself.
-        if not _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(ln):
+        # Batch 208: the results-led sibling ("Results & Guidance by
+        # Reporting Segment" — GE) is exempted the same way.
+        if not _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(ln) and not _GUIDANCE_RESULTS_LED_RE.match(ln):
             return False
     # Batch 200: a trailing colon is a heading label, not sentence
     # termination — "Editor's Notes:", "Message From Our CEO:",
