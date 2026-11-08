@@ -3213,3 +3213,19 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the batch-193 carry-forward Highlights tail-match hazard in full. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, GPC teaser-anchor, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips, DASH truncated para.
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 59 pre-batch + batch-211 commits.
+
+## 2026-11-07 — Batch 212: guidance-extraction correctness — teaser-anchor rejection, post-table bleed cut, anchor recognition; 55 rescues, 45 stored rows repaired
+
+**Fix (`src/tickerlens/data/filings.py`):** closes the batch-200 carry-forward GPC teaser-anchor item. (1) Teaser-anchor rejection: a heading candidate is a teaser when the release dateline follows within 50 lines (farthest attested teaser CSCO at 40, nearest true anchor with a false dateline FIS at 72). (2) Post-table follower generalization: the batch-203 tagline branch fires for wrapped-prose followers < 60 or >= 150 chars (the 60-149 middle is a guidance section's own sub-headings — COIN at 97-126); a terminated follower may carry sparse figures with a late first figure and an internal sentence boundary; `- more -` variants skipped. (3) Anchor recognition: AKAM intro lines via `_GUIDANCE_INTRO_RE` before the 90-char cap, "financial" as a heading-regex intervening word (DG), wrapped-heading join (DLR page-header guard). Blast-arbitrated guards: DAL ratio-value guard on the heading candidate, DUOL first-sentence guidance/call-notice guard on the follower, BIIB colon+figure/signal guard on the heading (GE colon-label heading kept). Two stale pins updated with justification (batch-203 GPC 2023-12-31 table row, batch-204 CSCO 22-block extraction).
+
+**Tests:** 30 in `tests/data/test_filings_batch212.py`. Full suite: **1713 passed**. `git diff --check` clean.
+
+**Blast-radius method:** Cache-only old-vs-new over 1,699 exhibits (`scripts/batch212_cache_blast.py`, `hidden_files/blast212/g_new3` vs `g_old`): **119 diffs, 0 lost anchors, 55 rescues, 55 shorter, 64 longer.** 1,580 byte-identical.
+
+**Repair (same batch):** `scripts/batch212_repair.py` (blast-pinned gates): **45 repaired, 0 skipped** — ABBV x2, ACN x7, AVGO x8, BIIB x2, CI x2, CSCO x3, DG x2, ETN x7, FDX x7, FIS x1, GPC x4. DB-verified 45/45.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, GPC, GPC/detail, CSCO, FDX, AKAM, DG, BIIB) after a server restart. Cold-cache first hits were slow (Wikipedia 403 bot-block, pre-existing); all returned 200 on retry.
+
+**Related:** Closes the batch-200 carry-forward GPC teaser-anchor item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips, DASH truncated para. New: AMT/CHD/CLX 4000-char extractions are genuine long sections (cap truncation, needs a budget rethink).
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 61 pre-batch + batch-212 commits.
