@@ -3084,10 +3084,32 @@ _FOOTNOTE_POINTER_RE = re.compile(
 # narrative sentence can match. The full-year note ("For the year
 # ended ...") is a different sentence and is deliberately NOT matched
 # — it sits past the lede zone.
+# Batch 216: AJG changed the note's shape in 2026 — one combined
+# sentence for all three segments ("For first quarter 2026, the
+# pretax impact of adjustments for the Brokerage, Risk Management,
+# and Corporate Segments totals $431 million, $15 million and $30
+# million, respectively, ..."), and the same combined wording for the
+# six/nine-month period note ("For the six-month period ended June
+# 30, 2026, the pretax impact of adjustments for the Brokerage, Risk
+# Management, and Corporate Segments totals $936 million, ..."). The
+# combined quarterly note is served as a lede paragraph in both
+# cached 2026 exhibits (2026-03-31, 2026-06-30) and the combined
+# six-month note is served as the trailing paragraph of 2026-06-30,
+# so both shapes are matched now. The OLD per-segment period note
+# ("For the nine-month period ended ..., the pretax impact of the
+# Brokerage segment adjustments ...") stays deliberately UNMATCHED —
+# no stored row serves it (the lede loop stops in the quote before
+# reaching it), and the batch-215 test pins the exclusion.
 _PRETAX_ADJUSTMENT_NOTE_RE = re.compile(
-    r"^For (first|second|third|fourth) quarter \d{4}, "
-    r"the pretax impact of the (Brokerage|Risk Management|Corporate) "
-    r"segment adjustments totals \$"
+    r"^For (?:"
+    r"(first|second|third|fourth) quarter \d{4}, "
+    r"the pretax impact of (?:the (?:Brokerage|Risk Management|Corporate) "
+    r"segment adjustments|adjustments for the Brokerage, Risk Management, "
+    r"and Corporate Segments)"
+    r"|the (six|nine)-month period ended [A-Z][a-z]+ \d{1,2}, \d{4}, "
+    r"the pretax impact of adjustments for the Brokerage, Risk Management, "
+    r"and Corporate Segments"
+    r") totals \$"
 )
 
 

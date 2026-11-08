@@ -285,9 +285,11 @@ def test_open_quote_is_unfinished_at_budget() -> None:
 
 def test_ajg_2026_lede_serves_quote_not_headers() -> None:
     # Verbatim AJG Q1 2026 shape (batch 187's fixture): the lede must
-    # now serve the pretax prose and the quote with neither table
-    # header line — the title is skipped before any content exists
-    # and the column header is skipped as a table header. The
+    # now serve the quote with neither table header line — the title
+    # is skipped before any content exists and the column header is
+    # skipped as a table header — and without the pretax footnote
+    # note, which batch 216 drops as footnote prose (the batch-188
+    # pin "serve the pretax prose" is superseded). The
     # dateline carries the webcast conference-call sentence, as the
     # real release does, so the loop skips it and `lede` is still
     # empty at the title line (a bare dateline would be collected
@@ -361,7 +363,7 @@ def test_ajg_2026_lede_serves_quote_not_headers() -> None:
     assert hl.split("\n\n")[0].startswith(
         "ARTHUR J. GALLAGHER & CO. ANNOUNCES FIRST QUARTER 2026"
     )
-    assert "pretax impact of adjustments" in hl
+    assert "pretax impact of adjustments" not in hl
     assert "We had a terrific first quarter" in hl
     assert "revenue growth of 28%" in hl
     assert "Summary of Financial Results" not in hl

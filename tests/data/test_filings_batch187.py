@@ -86,8 +86,12 @@ def test_dash_value_row_not_a_bullet_anymore() -> None:
 def test_ajg_2026_lede_serves_quote_not_table() -> None:
     # Verbatim AJG Q1 2026 shape (headline, dateline, summary-table
     # heading + column-header fragments + label/value rows, pretax
-    # paragraph, CEO quote): the lede must serve the pretax prose
-    # and the quote, not the table's labels and dash value rows.
+    # paragraph, CEO quote): the lede must serve the quote, not the
+    # table's labels and dash value rows — and not the pretax note
+    # either: batch 216 drops the combined 2026 note as footnote
+    # prose (the batch-187 pin "serve the pretax prose" is superseded
+    # by the batch-215/216 footnote treatment; the quote is what the
+    # lede serves).
     # The two table header lines ("Summary of Financial Results -
     # First Quarter", "Net Earnings (Loss) EBITDAC Diluted Net
     # Earnings") are dropped by batch 188, not this one — the
@@ -153,7 +157,7 @@ def test_ajg_2026_lede_serves_quote_not_table() -> None:
     assert hl.split("\n\n")[0].startswith(
         "ARTHUR J. GALLAGHER & CO. ANNOUNCES FIRST QUARTER 2026"
     )
-    assert "pretax impact of adjustments" in hl
+    assert "pretax impact of adjustments" not in hl
     assert "We had a terrific first quarter" in hl
     assert "revenue growth of 28%" in hl
     assert "Acquisition integration" not in hl
