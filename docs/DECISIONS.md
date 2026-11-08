@@ -3229,3 +3229,21 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the batch-200 carry-forward GPC teaser-anchor item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips, DASH truncated para. New: AMT/CHD/CLX 4000-char extractions are genuine long sections (cap truncation, needs a budget rethink).
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 61 pre-batch + batch-212 commits.
+
+## 2026-11-07 — Batch 213: guidance 4000-char cap raised to 8000; genuine long sections now complete
+
+**Fix (`src/tickerlens/data/filings.py`, `extract_management_guidance` default `max_chars` 4000 → 8000):** the cap was truncating genuine long guidance sections mid-table/mid-sentence — 134 of 1307 stored rows ended with "…". Survey over all 1,699 cached exhibits: 26 sections exceed 4000 chars uncapped, max 7614 (CCI 2023-09-30, ends at its natural close), p99 5741, none over 8000 — so 8000 covers every genuine section in-cache with margin. The 30-line budget + 20-line lookahead (batch 204) remains the runaway bound. The single production caller uses the default; the detail page renders guidance in a collapsible full-text disclosure.
+
+**Tests:** 8 in `tests/data/test_filings_batch213.py`. Full suite: **1721 passed**. `git diff --check` clean.
+
+**Blast-radius method:** Cache-only new-vs-old over 1,699 exhibits (`scripts/batch213_cache_blast.py`, `hidden_files/blast213/g_new` vs `g_old`): **26 diffs, all pure extensions** (asserted: old ends with "…", new starts with old-minus-ellipsis, new never truncated). 1,673 byte-identical.
+
+**Repair (same batch):** `scripts/batch213_repair.py` (blast-pinned gates): **15 repaired, 0 skipped-on-gate-failure beyond the 119 honestly skipped** — AMT x3, ABNB x3, EL x3, CLX x2, DASH, CPB, CHD, BIIB. DB-verified 15/15. The 119 skipped rows have no cached exhibit or stored drift vs current g_old; they serve complete guidance on refresh.
+
+**Residual, by design:** ABNB's sections still end mid-sentence at ~6135 chars — the 30-line budget, not the char cap.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, AMT, CHD, CLX, CCI, ABNB, EL, DASH) after a server restart. No template change; screenshot gate N/A.
+
+**Related:** Closes the batch-212 carry-forward AMT/CHD/CLX budget-rethink item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips, DASH truncated para; plus the 119 still-truncated stored rows (serve complete on refresh).
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 63 pre-batch + batch-213 commits.
