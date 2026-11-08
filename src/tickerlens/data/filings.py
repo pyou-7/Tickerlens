@@ -5464,6 +5464,63 @@ _GUIDANCE_RESULTS_LED_RE = re.compile(
 )
 
 
+def _wrapped_guidance_narrative_end(lines: list[str], j: int) -> int | None:
+    """Index of the second fragment when lines[j] is the first half of a
+    narrative heading wrapped across two flattened lines, else None.
+
+    Batch 217: DAL 2024-12-31 serves its results-narrative heading as
+    two lines — "Revenue Environment" / "and Outlook" (DAL 2025-06-30
+    wraps the other way, "Revenue Environment and" / "Outlook") — so
+    the single-line shapes above never match and the heading is
+    collected as guidance. A wrap is recognized only when the joined
+    line matches one of the two narrative patterns AND the second
+    fragment looks like a continuation, not a new sentence: short, not
+    sentence-terminated (a trailing colon is a heading label, not
+    termination), and starting with a lowercase word, "&", or the tail
+    word itself ("Outlook"/"Guidance"). A prose line that merely
+    mentions the outlook ("and Outlook for 2026 is strong") fails the
+    joined regex's end anchor; a table label ("Revenue") followed by a
+    prose line fails the continuation start. Returns the second
+    fragment's index so the caller can test the follower after it.
+    """
+    k = j + 1
+    while k < len(lines) and (
+        _ADMIN_LINE_RE.match(lines[k])
+        or _MORE_MARKER_RE.match(lines[k])
+        or _GUIDANCE_RULE_LINE_RE.match(lines[k])
+    ):
+        k += 1
+    if k >= len(lines):
+        return None
+    nxt = lines[k]
+    if len(nxt) > 40 or _is_sentence_terminated(nxt.rstrip(":")):
+        return None
+    if not (
+        nxt[0].islower()
+        or nxt[0] == "&"
+        or nxt.startswith(("Outlook", "Guidance"))
+    ):
+        return None
+    joined = lines[j] + " " + nxt
+    if _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(joined):
+        return k
+    _led = _GUIDANCE_RESULTS_LED_RE.match(joined)
+    if _led:
+        # The results-led regex is end-open (it allows "by Reporting
+        # Segment" tails), so a bare table label + prose ("Revenue" /
+        # "and Outlook for the quarter") would join-match it. For a
+        # wrapped heading the tail after Guidance/Outlook must be a
+        # heading tail — empty, a colon, or "by <Title Words>".
+        _tail = joined[_led.end() :]
+        if (
+            _tail == ""
+            or _tail == ":"
+            or re.fullmatch(r" by (?:[A-Z][A-Za-z]*)(?: [A-Z][A-Za-z]*)*", _tail)
+        ):
+            return k
+    return None
+
+
 def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     """True when the line after a heading candidate opens a new section:
     a bullet, a dateline, or a long terminated prose sentence with no $
@@ -5788,6 +5845,17 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
         # "$0.48 per share", so the $-less follower test never fires
         # on it. A "Dividend Policy" sub-heading is not matched.
         return True
+    # Batch 217: a narrative heading wrapped across two flattened
+    # lines ("Revenue Environment" / "and Outlook" — DAL 2024-12-31):
+    # the single-line shape never matches, so test the joined form
+    # and, when it matches, test the follower after the second
+    # fragment. The collector breaks at j without appending either
+    # fragment. The wrapped test runs after all the single-line
+    # gates above, so it inherits them (title-case, no figures,
+    # no period label, no lone-bullet predecessor).
+    _wrap = _wrapped_guidance_narrative_end(lines, j)
+    if _wrap is not None:
+        return _is_guidance_section_end_follower(lines, _wrap)
     return _is_guidance_section_end_follower(lines, j)
 
 
