@@ -163,11 +163,23 @@ def test_adp_2024_09_30_lookahead_completes_outlook_table():
 
 
 def test_csco_runaway_section_still_stops_at_budget():
-    # CSCO's guidance section has no section end in sight (natural run
-    # is 80 lines of dividend/repurchase prose) — the lookahead must
-    # discard its extras and keep the 30-line cut.
+    # Batch 212: the old premise (no section end in sight, 80 lines of
+    # dividend/repurchase prose, 30-line budget cut) was an artifact of
+    # the teaser anchor — the collector anchored on the "guidance range"
+    # teaser in the highlights area and ran away through the results.
+    # The teaser-anchor fix anchors on the real "Guidance" section,
+    # which ends legitimately at the "Reconciliations of GAAP to
+    # Non-GAAP Measures" heading: 22 blocks, complete Q2 FY 2025
+    # table, no dividend/repurchase/news-summary prose. The budget
+    # backstop is still pinned by the SKYD runaway test below and the
+    # synthetic lookahead tests.
     g = _guidance("CSCO_2024-10-26.html")
-    assert len(g.split("\n\n")) == 30
+    assert len(g.split("\n\n")) == 22
+    assert "Q2 FY 2025" in g
+    assert "GAAP to non-GAAP Guidance" in g
+    assert "Dividend" not in g
+    assert "Repurchase" not in g
+    assert "News Summary" not in g
 
 
 def test_skyd_runaway_section_still_stops_at_budget():

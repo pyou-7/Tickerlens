@@ -5007,8 +5007,15 @@ _GUIDANCE_HEADING_RE = re.compile(
     # 2027 Guidance" (INTU), "Full-year 2026 guidance:" (JNJ). Up to five
     # intervening words (quarter/fiscal/year/digits, hyphen- or space-separated)
     # are allowed between the prefix and the guidance/outlook tail.
+    # Batch 212: "financial" joins the intervening words — Dollar General
+    # heads its outlook section "Fiscal Year 2024 Financial Guidance (and
+    # Store Growth Outlook)", which the old set could not see ("Financial"
+    # is neither quarter/fiscal/year nor a digit). A prose line can only
+    # match when it starts with a quarter/fiscal/year prefix AND ends on
+    # the guidance/outlook tail, so the extra word adds headings, not
+    # sentences.
     r"(?:first|second|third|fourth|full|q[1-4]|fiscal|\d{4})"
-    r"(?:[\s\-]+(?:quarter|fiscal|year|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
+    r"(?:[\s\-]+(?:quarter|fiscal|year|financial|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
     # "Forward-Looking Guidance" section intros (INTU).
     r"forward[- ]looking\s+(?:business\s+)?(?:guidance|outlook)|"
     r"cfo\s+outlook(?: commentary)?|outlook\s+summary|guidance\s+summary|outlook|guidance)\b",
@@ -5217,6 +5224,17 @@ _GUIDANCE_PAREN_DATELINE_RE = re.compile(
 _GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
 
 
+# Batch 212: page-continuation marker in its spaced / upper-case
+# variants ("- more -", "-MORE-") — the guidance paths only ever
+# matched the exact "-more-" spelling, so the variants were collected
+# as content (FDX's guidance carries four "- more -" blocks) and one
+# killed the section-end follower run (it is a short non-admin line
+# inside the run). Full-cache survey: "-MORE-" 106 lines, "- more -"
+# 66 lines, all page markers. The Highlights collector keeps its own
+# exact-match handling (separate blast, separate batch).
+_MORE_MARKER_RE = re.compile(r"^-\s*more\s*-$", re.IGNORECASE)
+
+
 # Batch 206: a bare-domain line ("CrownCastle.com") — CCI prints a page
 # footer on every page of its releases: "The pathway to possible." /
 # "CrownCastle.com" / "News Release continued: Page N". The "News
@@ -5320,12 +5338,12 @@ def _is_results_table_ahead(lines: list[str], j: int) -> bool:
         return True
     window = lines[j + 1 : j + 9]
     for ln in window:
-        if _ADMIN_LINE_RE.match(ln) or ln == "-more-" or _GUIDANCE_RULE_LINE_RE.match(ln):
+        if _ADMIN_LINE_RE.match(ln) or _MORE_MARKER_RE.match(ln) or _GUIDANCE_RULE_LINE_RE.match(ln):
             continue
         if _RESULTS_RANGE_LABEL_RE.search(ln):
             return False
     for ln in window:
-        if _ADMIN_LINE_RE.match(ln) or ln == "-more-" or _GUIDANCE_RULE_LINE_RE.match(ln):
+        if _ADMIN_LINE_RE.match(ln) or _MORE_MARKER_RE.match(ln) or _GUIDANCE_RULE_LINE_RE.match(ln):
             continue
         if ln.strip() in ("Change", "Reported", "Adjusted"):
             return True
@@ -5386,7 +5404,7 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     k = j + 1
     while k < len(lines) and (
         _ADMIN_LINE_RE.match(lines[k])
-        or lines[k] == "-more-"
+        or _MORE_MARKER_RE.match(lines[k])
         or _GUIDANCE_RULE_LINE_RE.match(lines[k])
     ):
         k += 1
@@ -5432,6 +5450,40 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
         first_q = nxt.lstrip("“\"'‘’()[]")
         if len(nxt) >= 60 and first_q[:1].isupper():
             return True
+    # Batch 212: a follower that talks about guidance ("... raising our
+    # full-year Adjusted EBITDA margin guidance to 28.75% ..." — DUOL's
+    # "Adjusted EBITDA" sub-heading) is guidance commentary, not a new
+    # section's prose — a metric sub-heading inside the outlook section
+    # must not end it. The guard covers both prose tests below (the
+    # wrapped-prose branch and the terminated follower). It does not
+    # cover the bullet/dateline/quote tests above: those are structural,
+    # and a quote that mentions guidance is still a speaker statement
+    # ending the section. SKYD's post-table followers carry no "guid*"
+    # ("We ended the quarter with $3.3 billion ..." / "On February 24,
+    # WBD's Board ... could reasonably be expected to lead to ..."), so
+    # the "expected" in the WBD follower does not trip it — only the
+    # word guidance/guiding does. It reads only the first
+    # sentence: a long mega-line paragraph can mention guidance deep
+    # inside a later disclaimer sentence ("We do not provide
+    # forward-looking guidance for certain financial measures ..." —
+    # GPC's Non-GAAP mega-line, "guidance" at char 1511) while still
+    # being a new section's prose. And it exempts call notices:
+    # Micron's "Investor Webcast" follower ("... will host a
+    # conference call ... to ... provide forward-looking guidance for
+    # its third quarter") mentions guidance, but the sentence is a call
+    # notice, not guidance — the "conference call"/"webcast" in the
+    # first sentence lifts the guard. "guided" alone does not count
+    # (ACN's results sentence "... at the top end of the company's
+    # guided range ..." is a results sentence, not guidance
+    # commentary) — only the noun/verb "guidance"/"guiding".
+    _first_sentence = nxt
+    _boundary = re.search(r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", nxt)
+    if _boundary:
+        _first_sentence = nxt[: _boundary.start() + 2]
+    if re.search(r"guidance|guiding", _first_sentence, re.IGNORECASE) and not re.search(
+        r"conference call|webcast", _first_sentence, re.IGNORECASE
+    ):
+        return False
     # Batch 203: a section-tagline follower — a heading followed by a
     # short sentence-case fragment ("Building the future of finance,
     # step by step" — COIN's "Product Update" tagline) and then wrapped
@@ -5440,39 +5492,66 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
     # prose's first flattened line is a wrapped fragment, so neither
     # test fires today and the heading is collected as guidance (COIN
     # 2025-12-31 ends on the bare "Product Update" line — the 30-line
-    # budget's last slot). A tagline is short (< 60), unterminated,
-    # carries no $/% (a figure line is a table row, not a tagline), is
-    # not a bullet/dateline/period header/quote (those are handled
-    # above), and is sentence-case, not title-case — a second
-    # heading/label is title-case ("Investor Relations", "CEO
-    # Comment", "BB+", "Diluted 360.5 361.4"), and a bare page number
-    # is title-case by the digit rule. The prose run joins up to 6
-    # following lines (admin lines skipped) until sentence
-    # termination; it must terminate and total >= 100 chars with an
-    # uppercase first cased char. The run may carry $ ("... over $100
-    # million in annualized revenue.") — a 100+ char terminated
-    # sentence is prose, not a table row. The 100-char floor keeps
-    # short colon-terminated pointers ("The following reconciles the
-    # drivers of projected MCO Operating Expense growth:", 82 chars)
-    # from firing. Two run guards keep the join from crossing a
-    # guidance table to a distant disclaimer paragraph: every
-    # NON-terminating run line must be >= 50 chars (a wrapped prose
-    # line is near column width; a table row is short — BMY's
-    # "Other income/(expense) ~($250M) ~($50M)" is 38) and figure-
-    # sparse — at most one $/% character per 25 chars (ordinary prose
-    # runs about one figure per 50+ chars — GPC's "Global Automotive
-    # sales were $3.5 billion, up 0.8% ... with a 2.9% benefit ..." is
-    # 3 tokens in 110 chars; a table row is figure-dense — EL's
-    # "Forecasted/Adjusted EPS - Non-GAAP $3.10 - $3.35 $ 2.51 24% -
-    # 34%" is 4 tokens in 68 chars). A line failing either guard kills
-    # the run: the join is not prose, it is a table. The terminating
-    # line is exempt from both guards — it is the sentence tail
-    # ("revenue.") and may be short or carry the sentence's figures.
+    # budget's last slot).
+    # Batch 212: the same shape with a LONG follower — a heading
+    # followed by a long unterminated sentence-case line that wraps
+    # into terminating prose (GPC's "Plan to Separate Automotive and
+    # Industrial Businesses" / "Non-GAAP Information" / "Comparable
+    # Sales", FDX's "Corporate Overview", SKYD's "Capital Structure &
+    # Capital Allocation" / "Our Proposal to Acquire Warner Bros.
+    # Discovery"). The terminated-prose test never fires on a wrapped
+    # first line, so the post-table sections were collected as guidance
+    # up to the 4000-char cap. The branch is therefore generalized
+    # from taglines to wrapped-prose followers — BUT only at the two
+    # ends of the length scale: a short tagline (< 60 chars, batch 203)
+    # or a long wrapped line (>= 150 chars). The middle (60-149) is
+    # where a guidance section's own sub-headings live: COIN's outlook
+    # commentary sub-headings ("Transaction Revenue", "Subscription and
+    # Services Revenue", "Expenses") are followed by column-wrapped
+    # commentary lines of 97-126 chars, and breaking on them would cut
+    # the outlook commentary (batch 203/204 pins: "USDC rewards.", the
+    # Deribit note). GPC's post-table followers run 163+ chars (its
+    # column width) and FDX's is a 482-char mega-line, so 150 sits
+    # between the attested commentary maxima (126) and the attested
+    # post-table minima (163); the blast is the check that no other
+    # exhibit's commentary falls above it. The first line may carry
+    # sparse figures (a results sentence after a new-section heading —
+    # "We ended the quarter with $3.3 billion in cash ..." — is prose,
+    # not a table row), but it must be figure-sparse (at most one $/%
+    # per 25 chars, the same guard the run lines carry) so a
+    # figure-dense table row never qualifies.
+    # A tagline is short (< 60), unterminated, carries no $/% (a figure
+    # line is a table row, not a tagline), is not a bullet/dateline/
+    # period header/quote (those are handled above), and is
+    # sentence-case, not title-case — a second heading/label is
+    # title-case ("Investor Relations", "CEO Comment", "BB+",
+    # "Diluted 360.5 361.4"), and a bare page number is title-case by
+    # the digit rule. The prose run joins up to 6 following lines
+    # (admin lines skipped) until sentence termination; it must
+    # terminate and total >= 100 chars with an uppercase first cased
+    # char. The run may carry $ ("... over $100 million in annualized
+    # revenue.") — a 100+ char terminated sentence is prose, not a
+    # table row. The 100-char floor keeps short colon-terminated
+    # pointers ("The following reconciles the drivers of projected MCO
+    # Operating Expense growth:", 82 chars) from firing. Two run
+    # guards keep the join from crossing a guidance table to a distant
+    # disclaimer paragraph: every NON-terminating run line must be
+    # >= 50 chars (a wrapped prose line is near column width; a table
+    # row is short — BMY's "Other income/(expense) ~($250M) ~($50M)"
+    # is 38) and figure-sparse — at most one $/% character per 25
+    # chars (ordinary prose runs about one figure per 50+ chars —
+    # GPC's "Global Automotive sales were $3.5 billion, up 0.8% ...
+    # with a 2.9% benefit ..." is 3 tokens in 110 chars; a table row
+    # is figure-dense — EL's "Forecasted/Adjusted EPS - Non-GAAP
+    # $3.10 - $3.35 $ 2.51 24% - 34%" is 4 tokens in 68 chars). A line
+    # failing either guard kills the run: the join is not prose, it is
+    # a table. The terminating line is exempt from both guards — it is
+    # the sentence tail ("revenue.") and may be short or carry the
+    # sentence's figures.
     if (
-        len(nxt) < 60
-        and not _is_sentence_terminated(nxt)
-        and "$" not in nxt
-        and "%" not in nxt
+        not _is_sentence_terminated(nxt)
+        and (len(nxt) < 60 or len(nxt) >= _GUIDANCE_WRAPPED_FOLLOWER_MIN_LEN)
+        and (nxt.count("$") + nxt.count("%")) * 25 <= len(nxt)
         and not _BULLET_LEAD_RE.match(nxt)
         and not nxt.startswith("·")
         and not nxt.lstrip().startswith(("“", '"', "‘", "'"))
@@ -5487,7 +5566,7 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
         while m < len(lines) and len(run) < 6:
             if (
                 _ADMIN_LINE_RE.match(lines[m])
-                or lines[m] == "-more-"
+                or _MORE_MARKER_RE.match(lines[m])
                 or _GUIDANCE_RULE_LINE_RE.match(lines[m])
             ):
                 m += 1
@@ -5520,19 +5599,61 @@ def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
                 break
             m += 1
         if terminated:
-            joined = " ".join(run)
-            first_run = joined.lstrip("“\"'‘’()[]")
-            if len(joined) >= 100 and first_run[:1].isupper():
+            # Batch 212: the 100-char floor measures the RUN alone,
+            # not the follower + run — the follower is the heading's
+            # first prose line, not part of the joined sentence, so
+            # a 48-char tagline must not top a 82-char pointer run
+            # up over the floor (MCO's "The following reconciles
+            # the drivers of projected MCO Operating Expense
+            # growth:", 82 chars, batch 203 pin). The uppercase
+            # read is from the FOLLOWER, though: a wrapped
+            # sentence's capital is on its first line ("This
+            # release contains ..." / "B" tagline), while the run's
+            # first line may be a lowercase continuation ("... with
+            # a 2.9% benefit ...").
+            first_run = nxt.lstrip("“\"'‘’()[]")
+            if len(" ".join(run)) >= 100 and first_run[:1].isupper():
                 return True
     # Batch 200: a quote-led paragraph ("“This was another year ..." —
     # Disney's CEO quote after "Message From Our CEO:") opens with a
     # curly quote, so the uppercase test reads the first cased char.
+    # Batch 212: the terminated prose sentence may carry sparse figures
+    # ("We ended the quarter with $3.3 billion in cash and cash
+    # equivalents and $13.7 billion in gross debt." — SKYD's "Capital
+    # Structure & Capital Allocation" follower, 5 figures in 462 chars)
+    # — a results/capital sentence after a new-section heading is prose,
+    # not a table row, so the no-$/% rule becomes the same figure-sparse
+    # guard the wrapped-prose run carries (at most one $/% per 25
+    # chars) PLUS a lead-value guard: a flattened table value row leads
+    # with its value (its first $/% token sits within the first few
+    # tokens, after an optional parenthesized qualifier — FDX's
+    # "(Continuing Operations) $35.30 to $35.90 ..." and "Revenue Growth
+    # ~12% YoY ..." put their first figure at token 2-3), while a prose
+    # sentence states its subject first and buries figures later (SKYD's
+    # followers put theirs at token 6 and 12). The threshold is 4:
+    # attested prose minima 5/11, attested table maxima 1-2. A
+    # figure-dense line (a table row) still never qualifies. And a
+    # figure-carrying follower must contain an internal sentence
+    # boundary — a single sentence ("... declared a quarterly cash
+    # dividend of $0.60 per common share.") is a declaration, not the
+    # start of a prose paragraph (batch 199 pin: the dividend
+    # declaration after "Dividend Policy" — 90 chars, one figure, no
+    # internal boundary — must not end the section); SKYD's capital-
+    # structure and WBD followers carry 2 and 1 internal boundaries.
     first = nxt.lstrip("“\"'‘’()[]")
+    _first_fig = next(
+        (k for k, _tok in enumerate(nxt.split()) if "$" in _tok or "%" in _tok),
+        None,
+    )
+    if _first_fig is not None and not re.search(
+        r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", nxt
+    ):
+        return False
     return (
         len(nxt) >= 60
         and first[:1].isupper()
-        and "$" not in nxt
-        and "%" not in nxt
+        and (nxt.count("$") + nxt.count("%")) * 25 <= len(nxt)
+        and (_first_fig is None or _first_fig >= 4)
         and _is_sentence_terminated(nxt)
     )
 
@@ -5563,6 +5684,14 @@ def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
     if not ln or not ln[0].isupper() or ln.isupper():
         return False
     if "$" in ln or "%" in ln:
+        return False
+    if re.search(r"\d+(?:\.\d+)?\s*x\b", ln):
+        # Batch 212: a ratio value fragment ("Approx. 2.2x" — DAL's
+        # Gross Leverage value, the last row of its guidance table) is
+        # a table value, not a section heading. The $/% check above
+        # catches money and percent values; a bare ratio needs its own
+        # test. A bare decimal without a unit ("Section 2.2") is still
+        # a heading, so only the x-suffixed form is excluded.
         return False
     if re.search(r"\.(com|net|org|io|co|biz|info)$", ln, re.IGNORECASE):
         # A bare domain ("CrownCastle.com" — CCI's page footer between
@@ -5661,15 +5790,54 @@ def _guidance_has_signal(collected: list[str]) -> bool:
 # safe. The year must follow "Our" (optionally "updated"/"revised")
 # and the sentence must close with "as follows" / "summarized below"
 # — a bare "Our 2024 guidance was strong." never anchors.
+# Batch 212: the second alternative is Akamai's intro sentence —
+# "Financial guidance: The Company reports the following financial
+# guidance for the fourth quarter and full-year 2023:" — the heading
+# and its intro are one 114-116-char line in 6 of 12 AKAM quarters
+# (the other 6 split them: bare "Financial guidance:" + the same
+# intro on the next line, which already anchors). The shape is the
+# same announcement as the first alternative — it states that the
+# guidance that follows is being reported ("reports the following")
+# and closes with a colon — never a claim about guidance, so it
+# anchors safely. The intro check runs before the 90-char cap in
+# _is_guidance_heading: the line is a heading by function, not by
+# length.
 _GUIDANCE_INTRO_RE = re.compile(
-    r"^our (?:updated |revised )?\d{4} guidance\b.*\b(as follows|summarized below)\s*:?\s*$",
+    r"^our (?:updated |revised )?\d{4} guidance\b.*\b(as follows|summarized below)\s*:?\s*$"
+    r"|^financial guidance:\s+the company reports the following\b.*:\s*$",
     re.IGNORECASE,
 )
 
 
 def _is_guidance_heading(ln: str) -> bool:
+    if _GUIDANCE_INTRO_RE.match(ln):
+        # Batch 212: an intro sentence anchors regardless of length
+        # (Akamai's combined heading+intro is 114-116 chars).
+        return True
     if len(ln) > 90:
         return False
+    # Batch 212: a colon followed by a guidance STATEMENT is not a
+    # heading — Biogen's highlights-area intro-statement ("Full year
+    # 2025 financial guidance: Non-GAAP diluted EPS expected between
+    # $15.25 and $16.25") matches the heading regex as a prefix once
+    # "financial" joined the intervening words, and anchoring on it
+    # collects the CEO quote and the results tables instead of the
+    # guidance section. But a colon followed by a LABEL is a heading —
+    # GE's "2026 GUIDANCE: 2026 OPERATING PROFIT (NON-GAAP)" anchors
+    # its outlook tables. The discriminator is the post-colon text: a
+    # statement carries a figure ($/%) or a signal verb (expected /
+    # anticipated / forecast); a label carries neither. The intro regex
+    # above already handles Akamai's "Financial guidance: The Company
+    # reports ..." shape, so a ": " here is either a label or a
+    # statement.
+    if ": " in ln:
+        _after_colon = ln.split(": ", 1)[1]
+        if (
+            "$" in _after_colon
+            or "%" in _after_colon
+            or _GUIDANCE_SIGNAL_RE.search(_after_colon)
+        ):
+            return False
     if re.search(r"[.!?…][”\"]\s*$", ln):
         return False
     if _GUIDANCE_HEADING_RE.match(ln):
@@ -5677,7 +5845,38 @@ def _is_guidance_heading(ln: str) -> bool:
     stripped = ln.rstrip("0123456789").rstrip()
     if _GUIDANCE_HEADING_RE.match(stripped):
         return True
-    return bool(_GUIDANCE_INTRO_RE.match(ln))
+    return False
+
+
+# Batch 212: a guidance heading wrapped across two flattened lines
+# ("Fiscal" / "Year 2024 Financial Guidance and Store Growth Outlook"
+# — DG 2024-11-01 and 2026-07-31): neither fragment matches alone,
+# but the joined line does. The join is attempted only when the single
+# line fails, the first fragment is short (<= 40 chars — a wrapped
+# fragment, not a sentence) and the second line is short (<= 60), so
+# a prose sentence is never joined into a heading: the joined form
+# still has to pass _is_guidance_heading, which requires a
+# quarter/fiscal/year prefix and a guidance/outlook tail. Returns the
+# anchor text (the single line, or the joined line) or None.
+def _guidance_anchor_text(lines: list[str], i: int) -> str | None:
+    ln = lines[i]
+    if _is_guidance_heading(ln):
+        return ln
+    if (
+        i + 1 < len(lines)
+        and len(ln) <= 40
+        and len(lines[i + 1]) <= 60
+        and not _is_guidance_heading(lines[i + 1])
+    ):
+        # Batch 212: never glue a heading onto its own page header —
+        # DLR's outlook page is headed "Second Quarter 2025" above the
+        # real "2025 Outlook" heading, and joining them would anchor on
+        # the page header. When the second line is itself a heading the
+        # scan anchors on it alone at the next index.
+        joined = ln + " " + lines[i + 1]
+        if _is_guidance_heading(joined):
+            return joined
+    return None
 
 
 def _is_toc_entry(lines: list[str], i: int) -> bool:
@@ -5699,6 +5898,60 @@ def _is_toc_entry(lines: list[str], i: int) -> bool:
     if re.fullmatch(r"\d{1,3}", lines[i + 2]):
         return False
     return bool(re.fullmatch(r"\d{1,3}", lines[i + 3]))
+
+
+# Batch 212: a guidance-heading candidate is a highlights-area teaser,
+# not the guidance section, when the release dateline follows it within
+# the window — the body has not started yet, so the heading heads a
+# highlights teaser, a headline fragment, or a wrapped bullet, and the
+# real outlook section sits later in the release. Attested: GPC
+# 2024-12-31 ("2025 Outlook" + 3 teaser bullets, dateline 4 lines on),
+# AKAM 2023-09-30 ("Guidance increased for full-year revenue ..." —
+# a highlights bullet line, dateline 1 line on), DG 2024-08-02 and
+# 2025-05-02 (the headline's "Financial Guidance for Fiscal Year ..."
+# line, dateline 1 line on), CSCO 2024-10-26 / 2025-01-25 / 2025-07-26
+# (the wrapped-bullet fragment "guidance range", dateline 27/28/40
+# lines on; the real "Guidance" heading is ~120 lines later). The
+# window is 50 lines: the farthest attested teaser is CSCO 2025-07-26
+# at 40 lines, and the nearest true anchor with a (false) dateline
+# after it is FIS 2024-09-30 at 72 lines ("Exhibit I Supplemental
+# Financial Information of Worldpay Holdco, LLC - Unaudited ..." matches
+# the dateline regex). A real guidance heading never has the release
+# dateline after it — the dateline opens the body, the section follows.
+# The dateline test is _DATELINE_LEAD_RE plus the city-only shape
+# ("ATLANTA - Genuine Parts Company ... announced today ...", "DUBLIN
+# - February 2, 2024 - Aon plc ... today reported ..."): an all-caps
+# city lead + dash + "announced today" / "today reported|announced".
+# Full-cache survey: 86 lines match the city-only shape and every one
+# is a genuine release dateline (AON/APP/CB/CMCSA/ED/ETN/GPC/HAL/PLTR)
+# — the phrase keeps contact headers ("ADP - Investor Relations") and
+# table headings ("GENERAL INSURANCE - NORTH AMERICA ...") out.
+_GUIDANCE_TEASER_DATELINE_WINDOW = 50
+# Batch 212: the wrapped-prose follower branch fires only for a short
+# tagline (< 60 chars) or a long wrapped line (>= this). The middle
+# (60-149) is where a guidance section's own sub-headings live: COIN's
+# outlook commentary sub-headings ("Transaction Revenue", "Subscription
+# and Services Revenue", "Expenses") are followed by column-wrapped
+# commentary lines of 97-126 chars; GPC's post-table followers run
+# 163+ chars (its column width) and FDX's is a 482-char mega-line.
+_GUIDANCE_WRAPPED_FOLLOWER_MIN_LEN = 150
+_GUIDANCE_TEASER_CITY_DATELINE_RE = re.compile(
+    r"^[A-Z][A-Z]+(?: [A-Z]+)?\s+[–—-]\s+"
+    r".*\b(?:announced today|today (?:reported|announced))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_guidance_teaser_anchor(lines: list[str], i: int) -> bool:
+    """True when a dateline line follows the heading candidate at lines[i]
+    within _GUIDANCE_TEASER_DATELINE_WINDOW lines."""
+    end = min(len(lines), i + 1 + _GUIDANCE_TEASER_DATELINE_WINDOW)
+    for k in range(i + 1, end):
+        if _DATELINE_LEAD_RE.match(lines[k]) or (
+            _GUIDANCE_TEASER_CITY_DATELINE_RE.match(lines[k])
+        ):
+            return True
+    return False
 
 
 # Executive quote extraction pattern. Two common earnings-release formats:
@@ -7983,7 +8236,8 @@ def extract_management_guidance(
 
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for i, ln in enumerate(lines):
-        if _is_guidance_heading(ln):
+        anchor = _guidance_anchor_text(lines, i)
+        if anchor is not None:
             if _is_toc_entry(lines, i):
                 # Batch 210: a heading that heads a table-of-contents
                 # run is a TOC entry, not the section heading — DLR's
@@ -7994,16 +8248,24 @@ def extract_management_guidance(
                 # and keep scanning for the real heading (the outlook
                 # page itself, ~750 lines on in DLR's supplement).
                 continue
-            collected = [ln]
+            if _is_guidance_teaser_anchor(lines, i):
+                # Batch 212: the heading heads a highlights teaser,
+                # headline fragment or wrapped bullet in the pre-body
+                # area (the dateline follows within 50 lines) — skip
+                # it and keep scanning for the real guidance section.
+                continue
+            collected = [anchor]
             # Index loop (batch 193): footnote/note blocks are skipped
             # whole, so the loop can jump past them instead of
             # appending them one line at a time.
-            j = i + 1
+            # Batch 212: a wrapped anchor consumed two lines, so
+            # collection starts after the second fragment.
+            j = i + 1 + (1 if anchor != ln else 0)
             over_budget = False
             budget_cut = 0
             while j < len(lines):
                 follow = lines[j]
-                if _ADMIN_LINE_RE.match(follow) or follow == "-more-":
+                if _ADMIN_LINE_RE.match(follow) or _MORE_MARKER_RE.match(follow):
                     # Batch 193: "-more-" is a page-continuation
                     # marker, never content — skip it like the admin
                     # lines (8 collected guidance texts carry one).

@@ -198,7 +198,11 @@ def test_gpc_2023_12_31_segment_highlights_cut():
     assert "Segment Highlights" not in g
     assert "Balance Sheet, Cash Flow and Capital Allocation" not in g
     assert "Full-Year 2023 Results" not in g
-    assert "Revenue Growth of 3% to 5%" in g
+    # Batch 212: the old assertion pinned the teaser bullet ("Revenue
+    # Growth of 3% to 5%", the highlights-area teaser above the real
+    # section); the teaser-anchor fix now serves the real 2024 Outlook
+    # table, whose row reads "Total sales growth 3% to 5%".
+    assert "Total sales growth 3% to 5%" in g
     assert "$9.70 to $9.90" in g
 
 
