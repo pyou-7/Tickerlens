@@ -8203,26 +8203,23 @@ def _extract_flat_summary_table_highlights(
     return result
 
 
-# Batch 204: the guidance line budget is a backstop against runaway
-# collection, not a guillotine — prose-heavy sections (COIN's outlook
-# prose, ADP's outlook table) run 35–50 lines to their natural end, so
-# a flat 30-line cut truncates them mid-sentence or mid-table while the
-# section end sits a few lines past the cut. When the budget is hit,
-# the collector keeps going for up to _GUIDANCE_BUDGET_LOOKAHEAD_LINES
-# more kept lines, but only keeps them if a section-end break fires
-# inside the window; if no break fires — or the document runs out —
-# the extra lines are discarded and the 30-line cut stands. A runaway
-# section (no end in sight — CSCO, ELV) therefore still stops at 30
-# lines, while a section that ends just past the cut (COIN's "Webcast
-# Information" 6–8 lines out, ADP's "Investor Webcast Today" ~20
-# lines out) completes. The 4000-char cap still bounds table-heavy
-# sections.
+# Batch 213: the 4000-char cap is a guillotine on genuine long sections,
+# not just a runaway bound. Survey over all 1,699 cached exhibits
+# (scripts/batch213_survey.py): 26 sections exceed 4000 chars uncapped,
+# max 7614 (CCI 2023-09-30, ends at its natural "Supplemental Information
+# Package" close), p99 5741, none over 8000 — and 134 of 1307 stored rows
+# end with the truncation "…" (AMT/CHD/CLX lose 140–2,100 chars of real
+# outlook tables and prose). The 30-line budget + 20-line lookahead
+# (batch 204) is the runaway bound; the char cap only needs to cover the
+# longest genuine section, so it moves 4000 -> 8000. ABNB's sections
+# still end mid-sentence at 6135 chars — that is the line budget cutting
+# a 30+ line section with no break in the lookahead window, by design.
 _MAX_GUIDANCE_LINES = 30
 _GUIDANCE_BUDGET_LOOKAHEAD_LINES = 20
 
 
 def extract_management_guidance(
-    document_html: str, max_chars: int = 4000
+    document_html: str, max_chars: int = 8000
 ) -> str | None:
     """Best-effort extract forward-looking management guidance from an earnings release.
 
