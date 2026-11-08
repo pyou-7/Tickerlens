@@ -3067,6 +3067,30 @@ _FOOTNOTE_POINTER_RE = re.compile(
 )
 
 
+# Batch 215: AJG's summary-table footnote — "For fourth quarter 2023,
+# the pretax impact of the Brokerage segment adjustments totals $559.5
+# million, ..." — three sentences (Brokerage / Risk Management /
+# Corporate), the "*" footnote's definition of the adjustment items,
+# sitting between the summary table and the CEO quote. It is table
+# footnote prose, not narrative: it fills the 6-line lede budget and
+# starves the quote (Q4 2023: the quote is lost entirely — the note
+# is 5 lines against a budget already spent on the dateline and the
+# CFO-Commentary pointer lines). Cache survey (1,699 exhibits): 11
+# opener lines, all AJG, all this exact shape — the Risk Management /
+# Corporate sentences usually start mid-line, so they ride the block's
+# continuation/chaining. The three segment names are AJG's actual
+# segments; the fixed "pretax impact of the ... segment adjustments
+# totals $" phrase is footnote language by construction, so no
+# narrative sentence can match. The full-year note ("For the year
+# ended ...") is a different sentence and is deliberately NOT matched
+# — it sits past the lede zone.
+_PRETAX_ADJUSTMENT_NOTE_RE = re.compile(
+    r"^For (first|second|third|fourth) quarter \d{4}, "
+    r"the pretax impact of the (Brokerage|Risk Management|Corporate) "
+    r"segment adjustments totals \$"
+)
+
+
 def _is_bare_numbered_footnote(ln: str) -> bool:
     """True for a bare-numbered footnote sentence ("2 Comp sales for the
     13-week period ...", "3 Source: Rystad Energy ...", "1 Net debt is
@@ -3150,9 +3174,14 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
     ("(MRC) protocol ...", "(QoQ) and ...", "(IV) KEYTRUDA. Merck
     ...") is not a footnote definition — see
     _is_paren_prose_continuation.
+    Batch 215: AJG's pretax-adjustment footnote note (see
+    _PRETAX_ADJUSTMENT_NOTE_RE) opens a footnote-definition block
+    too — the block skip consumes its wrapped continuations and
+    chains onto the following segment sentences.
     """
     if (
         _FOOTNOTE_DEF_RE.match(ln)
+        or _PRETAX_ADJUSTMENT_NOTE_RE.match(ln)
         or _LEDE_FOOTNOTE_NUM_RE.match(ln)
         or (
             include_paren
@@ -6759,6 +6788,18 @@ def extract_press_release_highlights(
                 break
             block = _footnote_def_block_len(lede_lines, i)
             if block:
+                if _PRETAX_ADJUSTMENT_NOTE_RE.match(ln):
+                    # Batch 215: the pretax note is prose that ends the
+                    # summary-table region — the CEO quote follows it.
+                    # Skipping the block must clear table mode the way
+                    # collecting prose does: without this, the quote's
+                    # unterminated head lines are eaten as table-mode
+                    # residue (the batch-191 head-prepend refuses quote
+                    # heads), so the quote opens mid-sentence or is
+                    # lost and the freed budget walks on to the
+                    # nine-month note's tail instead.
+                    in_table = False
+                    table_seen = False
                 i += block
                 continue  # footnote-definition block ("1 Defined as ...",
                 # "*Non-GAAP Financial Measure", "1) See Table A ...",

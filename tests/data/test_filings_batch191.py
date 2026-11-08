@@ -153,41 +153,38 @@ def _extract(ticker_period):
 
 
 def test_ajg_q3_2023_pretax_paragraph_served_whole():
-    # Behavioral pin: on old code the head lines are absent and the tail
-    # is served alone as its own paragraph.
+    # Batch 215 supersedes the batch-191 pin: the pretax paragraph is
+    # the summary table's "*" footnote definition, not narrative, so it
+    # is dropped from the lede now — the quote it used to crowd out is
+    # served instead. The head-join mechanism itself is unchanged (the
+    # unit tests above still exercise it); only this paragraph's
+    # classification changed.
     out = _extract("AJG_2023-09-30")
-    assert "For third quarter 2023, the pretax impact of the Brokerage segment adjustments totals $183.4 million, with" in out
-    assert "a corresponding adjustment to the provision for income taxes of $45.3 million relating to these items." in out
-    assert "income taxes of $3.4 million relating to these items and the other tax items noted on page 7." in out
-    # The tail is no longer a lone dangling paragraph: the paragraph
-    # head precedes it in the output.
-    assert out.index("For third quarter 2023, the pretax impact") < out.index(
-        "income taxes of $3.4 million"
-    )
-    # The CEO quote still follows — the join is budget-neutral.
+    assert "pretax impact" not in out
+    assert "detailed reconciliation" not in out
+    # The CEO quote still follows — now with the note's budget freed.
     assert "“We had an excellent third quarter,” said J. Patrick Gallagher, Jr., Chairman, President and CEO." in out
     assert "22% reported revenue growth" in out
 
 
 def test_ajg_q2_2024_pretax_paragraph_served_whole():
-    # Year-wrap shape: the "2024, the pretax impact ..." continuation
-    # joins, and the quote survives with the same budget.
+    # Batch 215 supersedes the batch-191 pin (see Q3 2023 above): the
+    # pretax note is dropped; the quote head the first blast lost is
+    # served whole thanks to the table-mode clear on the note skip.
     out = _extract("AJG_2024-06-30")
-    assert "For second quarter 2024, the pretax impact of the Brokerage segment adjustments totals $291.3 million," in out
-    assert "2024, the pretax impact of the Risk Management segment adjustments totals $1.6 million" in out
-    assert "income taxes is shown on pages 14 and 15." in out
-    assert out.index("For second quarter 2024, the pretax impact") < out.index(
-        "income taxes is shown on pages 14 and 15."
-    )
+    assert "pretax impact" not in out
+    assert "detailed reconciliation" not in out
     assert "“We had an excellent second quarter,” said J. Patrick Gallagher, Jr., Chairman and CEO." in out
     assert "14% reported revenue growth" in out
 
 
 def test_ajg_q4_2023_pretax_paragraph_served_whole():
-    # Two tails in one paragraph: the Risk Management sentence's tail
-    # joins its head, and the Corporate sentence follows as normal prose.
+    # Batch 215 supersedes the batch-191 pin (see Q3 2023 above): the
+    # pretax note is dropped — this is the quarter whose CEO quote the
+    # note starved entirely before the fix.
     out = _extract("AJG_2023-12-31")
-    assert "For fourth quarter 2023, the pretax impact of the Brokerage segment adjustments totals $559.5 million," in out
-    assert "relating to these items. For fourth quarter 2023, the pretax impact of the Risk Management segment adjustments totals $4.5 million" in out
-    assert "For fourth quarter 2023, the pretax impact of the Corporate segment adjustments totals $46.4 million" in out
-    assert "page 7. A detailed reconciliation of the 2023 and 2022 provision (benefit) for income taxes is shown on pages 14 and 15." in out
+    assert "pretax impact" not in out
+    assert "detailed reconciliation" not in out
+    assert "We had a strong fourth quarter, to wrap up another fantastic year!" in out
+    assert "J. Patrick Gallagher" in out
+    assert "20% growth in revenue, of which 8.1% was organic" in out
