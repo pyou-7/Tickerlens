@@ -2593,7 +2593,23 @@ def _clean_highlights_result(result: str) -> str:
     kept only when the result stays >=200 chars — below that the
     extractor would return None, and a wart is better than dropping
     the row (the batch-153 floor rule).
+
+    Batch 214: a "Cautionary Note on Forward-Looking Statements"
+    heading cuts the result there — everything from the heading on
+    is the safe-harbor risk list, never highlights (Ford Q1 2025:
+    the heading sits mid-line in a flattened footnote bullet and
+    the risk bullets follow it, 1,894 chars). The exact heading is
+    matched, not a bare "Forward-Looking Statements" line: that
+    heading appears in 519 cached exhibits and genuine outlook
+    prose mentions forward-looking figures, so a bare match would
+    eat real content. Cache survey: the exact string appears in
+    exactly one exhibit's highlights output (F 2025-03-31).
     """
+    idx = result.find("Cautionary Note on Forward-Looking Statements")
+    if idx >= 0:
+        candidate = result[:idx].rstrip()
+        if len(candidate) >= 200:
+            result = candidate
     lines = [ln for ln in result.split("\n") if not _RULE_LINE_RE.match(ln.strip())]
     head_end = 0
     for i, ln in enumerate(lines):
@@ -6255,8 +6271,27 @@ def _is_more_page_section_heading(ln: str) -> bool:
     return _is_guidance_title_case(s)
 
 
+# Batch 214: the 4000-char cap is a guillotine on genuine long
+# highlights sections, the same defect class batch 213 fixed for
+# guidance. Survey over all 1,699 cached exhibits
+# (scripts/batch214_survey.py): 54 sections exceed 4000 chars
+# uncapped, max genuine 8797 (CART 2023-09-30, bullets + guidance +
+# footnotes ending at its natural close), p99 5791, median 1250 —
+# and 114 of 2489 stored rows end with the truncation "…". The
+# section/lede line budgets are the runaway bound; the char cap only
+# needs to cover the longest genuine section, so the default moves
+# 4000 -> 9000. Shareholder LETTERS are the exception: when the
+# metric-table mode (batch 94) fails to parse, the standard path
+# falls back to serving the letter body as highlights — an 18,949
+# char runaway for COIN 2023-12-31 — so a letter falling through
+# keeps the old 4000 cap (_LETTER_FALLBACK_MAX_CHARS). The cap is
+# the only bound on that fallback, and 4000 is the least-bad status
+# quo until the metric-table mode parses those letters.
+_LETTER_FALLBACK_MAX_CHARS = 4000
+
+
 def extract_press_release_highlights(
-    document_html: str, max_chars: int = 4000
+    document_html: str, max_chars: int = 9000
 ) -> str | None:
     """Best-effort extract headline + key highlights from an earnings-release exhibit.
 
@@ -6282,7 +6317,11 @@ def extract_press_release_highlights(
     # them before any headline/section/lede logic sees them.
     lines = _split_bullet_runs(lines)
 
-    if _is_shareholder_letter(lines):
+    # Batch 214: remember whether this is a shareholder letter — a
+    # letter that falls through to the standard path below keeps the
+    # old 4000-char cap (see _LETTER_FALLBACK_MAX_CHARS).
+    is_letter = _is_shareholder_letter(lines)
+    if is_letter:
         # Shareholder-letter mode (batch 94): metric-table "Highlights"
         # sections (Duolingo/Affirm/Coinbase style) parse as bullets.
         # Falls back to the standard path when no metric table parses, so
@@ -7195,8 +7234,14 @@ def extract_press_release_highlights(
         ):
             logger.info("Press-release body is only a table of contents")
             return None
-    if len(result) > max_chars:
-        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    # Batch 214: a shareholder letter falling through to the standard
+    # path serves the letter body as highlights — cap it at the old
+    # 4000 so the runaway (COIN 2023-12-31: 18,949 chars uncapped)
+    # does not grow with the new 9000 default. min() keeps an
+    # explicitly smaller cap honored.
+    effective_max = min(max_chars, _LETTER_FALLBACK_MAX_CHARS) if is_letter else max_chars
+    if len(result) > effective_max:
+        result = result[:effective_max].rsplit(" ", 1)[0].rstrip() + "…"
     return result
 
 
