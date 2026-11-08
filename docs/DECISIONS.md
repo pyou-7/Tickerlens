@@ -3247,3 +3247,19 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the batch-212 carry-forward AMT/CHD/CLX budget-rethink item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips, DASH truncated para; plus the 119 still-truncated stored rows (serve complete on refresh).
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 63 pre-batch + batch-213 commits.
+
+## 2026-11-08 — Batch 214: highlights 4000-char cap raised to 9000; letter fallback frozen at 4000; safe-harbor cut
+
+**Fix (`src/tickerlens/data/filings.py`):** the batch-213 defect class applied to press-release highlights — the 4000-char cap guillotined genuine long sections (114 of 2489 stored rows end with "…"). Survey over all 1,699 cached exhibits: 54 sections exceed 4000 chars uncapped, max genuine 8797 (CART 2023-09-30), p99 5791, median 1250 — so the default moves 4000 → 9000. Two carve-outs: a shareholder letter falling through to the standard path keeps the old 4000 cap (its "highlights" is the letter body — COIN 2023-12-31 runs 18,949 chars uncapped — so the cap is the only bound); and `_clean_highlights_result` cuts the result at a "Cautionary Note on Forward-Looking Statements" heading (Ford Q1 2025: 1,894 chars of risk list follow the heading mid-line). Only the exact heading is matched — a bare "Forward-Looking Statements" line appears in 519 cached exhibits.
+
+**Tests:** 11 in `tests/data/test_filings_batch214.py`. Full suite: **1732 passed**. `git diff --check` clean.
+
+**Blast-radius method:** Cache-only new-vs-old over 1,699 exhibits (`scripts/batch214_cache_blast.py`, `hidden_files/blast214/h_new` vs `h_old`): **42 diffs, all pure extensions** (asserted: old ends with "…", new starts with old-minus-ellipsis, new never truncated). 1,657 byte-identical, including all 12 AFRM/COIN letter exhibits.
+
+**Repair (same batch):** `scripts/batch214_repair.py` (blast-pinned gates): **11 repaired, 0 skipped-on-gate-failure beyond the 103 honestly skipped** — CART 2024-09-30, ARCC x3, DASH x3, ED x3, F 2026-09-30. DB-verified 11/11. The 103 skipped: 57 no cached exhibit, 38 stored drift (AXON/APO/V/F cohorts — section-pick drift from older extractor versions), 6 AFRM letter rows frozen by design, 2 blast-None.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, CART, ED, EQIX, F, ARCC, DASH, COIN) after a server restart, plus detail-page content checks (CART Q3 FY2024 repaired text served, ED Q4 FY2025 full text served). No template change; screenshot gate N/A.
+
+**Related:** The DASH 2026-03-31 truncated-para item is now explained as stored drift (serves current extraction on refresh). Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), V release-title tail, DAL wrapped-heading wart, LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, AJG quote loss, C slide-deck exhibit, AXP pointer line, CSCO contact-name lines, batch-157 gate skips; plus the 103 still-truncated stored highlights rows (serve complete on refresh). New: AFRM/COIN letter fallback serves letter prose — the real fix is the batch-94 metric-table mode parsing those narrative-form highlights sections.
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 65 pre-batch + batch-214 commits.
