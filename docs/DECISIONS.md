@@ -3359,3 +3359,19 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the batch-218 drifted-rows item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, CSCO contact-name lines (line-level repair needed), batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); plus the 103 still-truncated stored highlights rows (serve complete on refresh). New: CI 2025-06-30's repaired highlights end mid-quote — the known finish-rule cutoff. Residual wart: freed-budget quote tails end mid-quote-paragraph at the 4-line overrun cap — the known finish-rule cutoff.
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 77 pre-batch + batch-220 commits.
+
+## 2026-11-09 — Batch 221: CSCO contact-name lines stripped from 3 stored highlights rows; 0 extractor change
+
+**Fix (no `src/` change):** closes the stored CSCO contact-name item carried since batch 184 — the 3 stored rows (2026-01-24/04-25/07-25) open with "Robyn Blum Sami Badri", a pre-batch-179 extraction artifact; the current extractor already drops the block, so the repair is line-level (strip the 23-char leading prefix) rather than a re-extraction, which would lose the stored narrative section (live serves bullet highlights; none of the stored narrative lines appear in live).
+
+**Probe (`scripts/batch221_probe.py`):** DB-wide scan of all 2,491 stored highlights rows finds exactly these 3 rows with a leading bare-name line; no stored guidance row carries it; tails are clean narrative with no email/phone residue.
+
+**Tests:** 2 in `tests/data/test_filings_batch221.py` (live pins on the 3 real cached exhibits: names/cisco.com/phone absent, headline is the release title, live serves bullets not narrative). Full suite: **1792 passed**. `git diff --check` clean.
+
+**Repair (same batch):** `scripts/batch221_repair.py` (gates: exact leading prefix; live extraction clean; repaired starts "Revenue -- ", no @/cisco.com residue): **3 repaired, DB-verified** — CSCO 2026-01-24 (2061→2038), 2026-04-25 (2054→2031), 2026-07-25 (1932→1909). Idempotent on re-run.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, CSCO, AAPL, MSFT, CSCO detail Q2 FY2026, CSCO detail-data Q2/Q3/Q4 FY2026) plus content check (Q2 FY2026 serves the repaired 2038-char highlights, 0 "Robyn Blum"). No template change; screenshot gate N/A.
+
+**Related:** Closes the stored CSCO contact-name item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); plus the 103 still-truncated stored highlights rows (serve complete on refresh). CI 2025-06-30's repaired highlights end mid-quote — the known finish-rule cutoff. Residual wart: freed-budget quote tails end mid-quote-paragraph at the 4-line overrun cap — the known finish-rule cutoff.
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 79 pre-batch + batch-221 commits.
