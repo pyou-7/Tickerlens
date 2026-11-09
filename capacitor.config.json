@@ -1,0 +1,15 @@
+{
+  "appId": "com.tickerlens.app",
+  "appName": "Tickerlens",
+  "webDir": "src/tickerlens/static",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#090a0f"
+    }
+  }
+}

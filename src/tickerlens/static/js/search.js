@@ -65,10 +65,12 @@
     }
 
     function openTo(ticker) {
+      if (window.triggerHaptic) window.triggerHaptic('medium');
       window.location = "/company/" + encodeURIComponent(ticker);
     }
 
     function setActive(i) {
+      if (i !== activeIndex && window.triggerHaptic) window.triggerHaptic('light');
       activeIndex = i;
       var rows = dropdown.querySelectorAll("[role=option]");
       rows.forEach(function (row, j) {

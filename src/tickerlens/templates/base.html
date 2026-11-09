@@ -2,8 +2,19 @@
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>{% block title %}Tickerlens — Financial Research{% endblock %}</title>
+
+  <!-- PWA & Mobile Web App Capabilities -->
+  <link rel="manifest" href="{{ url_for('static', path='manifest.json') }}" />
+  <meta name="theme-color" content="#6366f1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#090a0f" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tickerlens" />
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='icons/icon-192.png') }}" />
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='icons/icon.svg') }}" />
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', path='icons/icon-192.png') }}" />
 
   <!-- Prevent FOUC: Apply dark class immediately before render -->
   <script>
@@ -28,10 +39,21 @@
   <style>
     /* Global tabular numbers alignment & font smoothing */
     .tabular-nums { font-variant-numeric: tabular-nums; }
+    
+    /* Mobile safe-area variables for iPhone notch / Dynamic Island / home indicator */
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+    }
     body {
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
       text-rendering: optimizeLegibility;
+      -webkit-tap-highlight-color: transparent;
+      padding-bottom: var(--sab);
+    }
+    nav.sticky {
+      padding-top: var(--sat);
     }
     
     /* Top Progress Bar for HTMX Requests */
@@ -281,6 +303,7 @@
               document.documentElement.classList.remove('dark');
             }
             window.dispatchEvent(new CustomEvent('theme-changed', { detail: { theme: t, isDark: isDark } }));
+            if (window.triggerHaptic) window.triggerHaptic('light');
           },
           init() {
             window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
@@ -539,6 +562,25 @@
     document.addEventListener('htmx:sendError', () => {
       document.body.classList.remove('htmx-request');
     });
+
+    // Register Service Worker for PWA shell and offline asset resilience
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register("{{ url_for('static', path='sw.js') }}").catch(() => {});
+      });
+    }
+
+    // Native mobile haptic feedback helper
+    window.triggerHaptic = function(style = 'light') {
+      try {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics) {
+          const s = style.toUpperCase();
+          window.Capacitor.Plugins.Haptics.impact({ style: s === 'MEDIUM' ? 'MEDIUM' : (s === 'HEAVY' ? 'HEAVY' : 'LIGHT') }).catch(() => {});
+        } else if (navigator.vibrate) {
+          navigator.vibrate(8);
+        }
+      } catch (err) {}
+    };
   </script>
 </body>
 </html>

@@ -2926,3 +2926,34 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Why:** Addresses user mandate: "Keep improving my websites. Everything on my website should be good-looking. You should focus on UI now to make it perfect. Think, iterate, test, validate, and make it better and better until you can't. Keep improving I want to keep it like a very clean product and easy to navigate and use so complicated stuff can be deleted."
 
 **Blast radius:** Template and UI enhancements only. Zero database schema, route URL, or calculation changes. Green tests across 1,329 tests.
+
+---
+
+## 2026-11-08 — Batch 185: Mobile App Architecture, Standalone PWA & Capacitor Foundation
+
+**What:** Transformed Tickerlens into a mobile phone application via standalone Progressive Web App (PWA) architecture and Capacitor 6 foundation:
+1. **PWA Standalone Manifest & Assets (`static/manifest.json`, `static/icons/`):**
+   - Created `manifest.json` configured with `display: "standalone"`, portrait orientation, dark background `#090a0f`, brand theme `#6366f1`.
+   - Generated high-resolution vector and PNG app icons: `icon.svg`, `icon-192.png`, and `icon-512.png` with official `TL` squircle branding.
+   - Configured Service Worker (`static/sw.js`) for app shell caching and static asset resilience.
+2. **Mobile Viewport & Safe-Area Integration (`templates/base.html`):**
+   - Configured `<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />`.
+   - Added iOS meta tags: `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style: black-translucent`, and `apple-touch-icon`.
+   - Handled hardware safe areas in CSS: `padding-top: env(safe-area-inset-top)` for iPhone Dynamic Island / notch and `padding-bottom: env(safe-area-inset-bottom)` for iOS home indicator bar.
+3. **Native Micro-Interactions & Haptic Feedback:**
+   - Implemented cross-platform `triggerHaptic()` supporting both native Capacitor Haptics and standard Web Vibration API.
+   - Wired tactile haptic feedback to:
+     - Search combobox keyboard navigation and ticker selection.
+     - Theme toggle between light/dark modes.
+     - Watchlist star button toggles.
+     - DCF valuation sensitivity scenario buttons (Bear, Base, Bull presets).
+4. **Capacitor 6 Foundation (`package.json`, `capacitor.config.json`):**
+   - Scaffolds `@capacitor/core`, `@capacitor/cli`, `@capacitor/status-bar`, and `@capacitor/haptics` for App Store and Google Play packaging.
+   - Created native splash loader (`static/index.html`) ensuring graceful connection handling in native wrappers.
+5. **Verification & Testing:**
+   - 4 new automated route and integration tests in `tests/test_pwa_mobile.py`.
+   - Full test suite: 1,333 passed, 0 failed in 9.79s.
+
+**Why:** Addresses user request to "make our websites a phone app too" with optimal efficiency and modern tech stacks, eliminating the need to duplicate complex financial models and UI in a secondary codebase.
+
+**Blast radius:** Pure additive PWA and mobile assets; 100% backwards compatible with existing desktop web routes. Green tests across 1,333 tests.

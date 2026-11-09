@@ -14,3 +14,6 @@ notebooks/*.csv
 tickerlens.db-journal
 tickerlens.db-wal
 tickerlens.db-shm
+node_modules/
+package-lock.json
+ios/
