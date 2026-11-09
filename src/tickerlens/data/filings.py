@@ -8741,11 +8741,16 @@ def _html_to_text(document_html: str) -> str:
     # sides). The key is never part of a split word (unlike span-split
     # text), so wrap digit keys in \x02 markers here and resolve them
     # to spaces at the end, once the neighbors are visible in flattened
-    # text. Letter keys ("(a)", "th", "SM") and "®" are untouched —
-    # same class, separate batch. Census of the 1,699-exhibit cache:
-    # 4,097 digit-key sups; zero unit-exponent shapes ("m²", "ft²") and
-    # zero digit-key-digit chains, so a bare key after a digit is a
-    # footnote on a year/amount ("2022 3,"), never an exponent.
+    # text. Batch 219: the same treatment for parenthesized letter
+    # keys ("(a)", "(b)" — 547 single + ~52 multi-key runs in the
+    # cache, mostly Citi tables) and for multi-key runs ("(a)(b)",
+    # "(1)(2)"). Letter keys are footnote keys exactly like digit
+    # ones; ordinals ("th"), trademarks ("SM", "®") and "○"/"." stay
+    # glued — ordinals are word parts, marks are typographically
+    # attached. Census of the 1,699-exhibit cache: 4,290 digit-key
+    # sups, 547 paren-letter singles, 52 multi-letter runs, 35
+    # ordinals, 158 SM/TM/® (+147 "&reg;" entities), 22 "○", 126
+    # empty sups, 1 "."; zero bare letter keys, zero mixed runs.
     text = _SUP_KEY_RE.sub(_sup_key_marker, text)
     # Inline formatting tags carry no whitespace of their own: adjacent inline
     # elements with no whitespace between them render concatenated in a
@@ -8786,6 +8791,11 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?m)^([•●○◦▪■·])(\S)", r"\1 \2", text)
     text = re.sub(r"(?m)^([–—])([A-Za-z])", r"\1 \2", text)
     # Batch 218 (continued): resolve the \x02 footnote-key markers.
+    # Batch 219: parenthesized letter keys resolve through the same
+    # rules — they always start with "(", so they space after a digit
+    # ("2025 (a) Sales") and before a following letter, exactly like
+    # parenthesized digit keys. The exponent-wedge guard can never fire
+    # on them (it requires a bare key).
     # Space before the key unless it already follows whitespace, a line
     # start, "(" or "$"; space after it when a letter follows, except
     # for a bare key after a digit (the "10²cm" shape — no corpus
@@ -8800,21 +8810,39 @@ def _html_to_text(document_html: str) -> str:
 
 _SUP_KEY_RE = re.compile(r"(?i)<sup\b[^>]*>(.*?)</sup>", re.S)
 _SUP_MARKER_RE = re.compile(r"\x02([^\x02]*)\x02")
+_PAREN_KEY_RE = re.compile(r"\(\s*([0-9A-Za-z])\s*\)")
 
 
 def _sup_key_marker(match: re.Match) -> str:
-    """Wrap a digit-only <sup> footnote key in \\x02 markers.
+    """Wrap a <sup> footnote key in \\x02 markers.
 
-    Returns the match unchanged for anything that is not a bare footnote
-    key (ordinals, "®"/"SM", letter keys like "(a)"), so the later
-    inline-tag strip removes those sups exactly as before.
+    Digit keys ("1", "(1)") and parenthesized letter keys ("(a)")
+    are footnote keys, never part of a split word, so they space like
+    the older extractor rendered them. Anything else is returned
+    unchanged, so the later inline-tag strip removes those sups
+    exactly as before: ordinals ("th"), trademarks ("®"/"SM"),
+    glyphs ("○"), punctuation ("."), empty sups, and sups carrying
+    prose ("(a) Represents ...").
     """
     inner = re.sub(r"<[^>]+>", "", match.group(1))
-    inner = re.sub(r"&(?:nbsp|#8203|#160);", " ", inner).strip()
-    digits = re.sub(r"[\s(),]", "", inner)
-    if not digits or not digits.isdigit():
+    # Batch 219: em-space / thin-space entities (CB's "(1)&#8195;&#8201;")
+    # are whitespace too — strip them so the key still reads as a key.
+    inner = re.sub(r"&(?:nbsp|#8203|#160|#8195|#8201);", " ", inner).strip()
+    # Batch 219: a run of parenthesized single-char keys — "(a)(b)",
+    # "(1)(2)", "(a) (b)" — normalizes to space-joined keys so each
+    # key spaces like a lone one. Mixed digit/letter runs stay
+    # unchanged (no corpus occurrences; ambiguous).
+    keys = _PAREN_KEY_RE.findall(inner)
+    if keys and re.sub(r"\s+", "", inner) == "".join(f"({k})" for k in keys):
+        if all(k.isdigit() for k in keys) or all(k.isalpha() for k in keys):
+            return "\x02" + " ".join(f"({k})" for k in keys) + "\x02"
         return match.group(0)
-    return f"\x02{inner}\x02"
+    digits = re.sub(r"[\s(),]", "", inner)
+    if digits and digits.isdigit():
+        return f"\x02{inner}\x02"
+    if re.fullmatch(r"\([A-Za-z]\)", inner):
+        return f"\x02{inner}\x02"
+    return match.group(0)
 
 
 def _resolve_sup_key(text: str, match: re.Match) -> str:

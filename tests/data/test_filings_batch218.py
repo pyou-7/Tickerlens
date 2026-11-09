@@ -77,12 +77,13 @@ def test_consecutive_keys_and_multi_keys():
 
 
 def test_non_digit_sup_untouched():
-    # Ordinals, letter keys, ®/SM: the old glued form stands.
+    # Ordinals, ®/SM: the old glued form stands. Batch 219: a
+    # parenthesized letter key is now a spaced footnote key, like (1).
     assert _html_to_text("<div>10<sup>th</sup> anniversary</div>") == (
         "10th anniversary"
     )
     assert _html_to_text("<div>Item 1<sup>(a)</sup> text</div>") == (
-        "Item 1(a) text"
+        "Item 1 (a) text"
     )
     assert _html_to_text("<div>Brand<sup>&reg;</sup> shoes</div>") == (
         "Brand® shoes"
