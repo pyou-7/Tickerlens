@@ -3327,3 +3327,19 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the batch-217 footnote-spacing wart. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, CSCO contact-name lines (line-level repair needed), batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); plus the 103 still-truncated stored highlights rows (serve complete on refresh). New: letter-key sups still glue (digit keys only this batch); 4 drifted highlights rows need their own batches. Residual wart: freed-budget quote tails end mid-quote-paragraph at the 4-line overrun cap — the known finish-rule cutoff.
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 73 pre-batch + batch-218 commits.
+
+## 2026-11-08 — Batch 219: parenthesized letter <sup> footnote keys spaced in _html_to_text; 0 stored rows affected
+
+**Fix (`src/tickerlens/data/filings.py`):** closes the batch-218 letter-key item — parenthesized letter keys ("(a)"–"(z)") are footnote keys like "(1)", so they space through the same `\x02`-marker rules; multi-key runs ("(a)(b)", "(1)(2)") normalize to space-joined keys. The entity-strip also gains `&#8195;`/`&#8201;`, so CB's "(1)&#8195;&#8201;" digit key spaces. Still glued: ordinals, trademarks ("SM"/"TM"/"®"/"©"), "○", ".", empty sups, prose sups, mixed runs. Census of the 1,699-exhibit cache: 4,290 digit-key sups, 547 paren-letter singles, 52 multi-letter runs (all Citi), 35 ordinals, 158 SM/TM/® (+147 "&reg;"), 22 "○", 126 empty, 1 "."; zero bare letter keys, zero mixed runs.
+
+**Tests:** 7 in `tests/data/test_filings_batch219.py` (spacing units + rejections, CB em-space digit key, live pin: C_2024-12-31 flattens to 85 spaced letter keys, 0 glued). 1 older pin updated to the spaced form (batch 218 "Item 1 (a) text"). Full suite: **1782 passed**. `git diff --check` clean.
+
+**Blast-radius method:** Guidance + highlights old-vs-new over 1,699 exhibits (`scripts/batch219_guidance_blast.py`, `scripts/batch219_cache_blast.py`, `hidden_files/blast219/`): **0 diffs in both** — letter keys live in table text the extractors drop, so no extracted output changes; live risk-factor/quote text still benefits (verified on the real Citi exhibit).
+
+**Repair (same batch):** `scripts/batch219_repair.py` dry run: **0 rows** — nothing to repair (blast 0-diff). No stored row carries a glued letter key.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, C, AAPL, MSFT, C detail + detail-data Q4 FY2024, DAL, CI) after a server restart, plus content check (C detail-data Q4 FY2024: 0 "RoTCE(d)"). No template change; screenshot gate N/A.
+
+**Related:** Closes the batch-218 letter-key item. Still open: CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, CSCO contact-name lines (line-level repair needed), batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); plus the 103 still-truncated stored highlights rows (serve complete on refresh) and the 4 drifted highlights rows (CI 2025-06-30, C 2024-12-31, ELV 2025-09-30, GIS 2025-05-25). Residual wart: freed-budget quote tails end mid-quote-paragraph at the 4-line overrun cap — the known finish-rule cutoff.
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 75 pre-batch + batch-219 commits.
