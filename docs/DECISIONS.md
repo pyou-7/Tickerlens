@@ -3391,3 +3391,19 @@ Related: the disclosure pipeline's `discover_earnings_filings` still reads only 
 **Related:** Closes the finish-rule cutoff wart (CI 2025-06-30's "said David M. Cordani," and AJG's "“We have excellent" are fixed). Still open: the noun/number-ending hole (HAL 2025-12-31 "Operating income was $746 million", DAL 2024-09-30, DG 2025-01-31, AEP heading line — a cut on a noun/figure-ending line carries no unfinished signal; needs a next-line lookahead, a bigger trim-input refactor, not a heuristic bolt-on); CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); the 8 drifted batch-222 repair skips need their own investigations; plus the 103 still-truncated stored highlights rows (serve complete on refresh).
 
 **Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 81 pre-batch + batch-222 commits.
+
+## 2026-11-09 — Batch 223: numbered event announcements are narrative, not footnotes
+
+**Fix:** `_is_bare_numbered_footnote` now returns False for a bare-numbered line opening "The Company" + an event verb (`_BARE_NUMBERED_EVENT_RE` — announced, added, launched, completed, entered into, signed, acquired, opened, appointed, expanded, introduced, received, began, closed, unveiled, named), so the line never opens a footnote-definition block on any collection path. Rescues APLD's two "Recent Operational Highlights" items, which the section collector was dropping as footnotes.
+
+**Blast-radius method:** Guidance + highlights old-vs-new over 1,699 exhibits (`scripts/batch223_guidance_blast.py`, `scripts/batch223_cache_blast.py`, `hidden_files/blast223/`): **0 guidance diffs, 1 highlights diff** (APLD only, pure insertion of the two items; quote completion survives). The exemption fires exactly twice cache-wide, as the pre-fix survey predicted.
+
+**Tests:** 7 in `tests/data/test_filings_batch223.py` (live pins on real cached exhibits + unit pins for the exemption and its guards). Full suite: **1813 passed**.
+
+**Repair (same batch):** `scripts/batch223_repair.py` (per-row named gates): **8 repaired, DB-verified** — AEP, ANET, APLD, CINF ×3, DG, FDX. Idempotent on re-run. The 8 drifted batch-222 repair skips are now zero.
+
+**Live verification:** **8/8 routes 200** on :8123 (home, APLD, AEP, CINF, DG, FDX, ANET, AAPL) after a server restart, plus detail-data content checks (APLD serves the items + completed quote; FDX serves narrative, 0 table rows; AEP serves bullets, 0 table-fragment lines; CINF serves section bullets + completed quote; DG serves full headline + Q4 lede; ANET serves 0 footnote line). No template change; screenshot gate N/A.
+
+**Related:** Closes the 8 drifted batch-222 repair skips. Still open: the noun/number-ending hole (DG, HAL, DAL, AEP heading-line end — needs a next-line lookahead, a bigger trim-input refactor); CCI 2026-09-30's stored guidance furniture (no cached exhibit), LUV tail (no cached exhibit), SKYD NULL, SPG/MU/BMY tables, DIS footnote shape, batch-184 list, C slide-deck exhibit, batch-157 gate skips, DASH truncated para (stored letter narrative vs fresh lede); plus the 103 still-truncated stored highlights rows (serve complete on refresh).
+
+**Status:** committed locally; **not pushed** (no token pasted this session). Queued commits: 83 pre-batch + batch-223 commits.
