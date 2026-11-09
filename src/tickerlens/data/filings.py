@@ -614,6 +614,74 @@ def _lede_quote_is_open(lines: list[str]) -> bool:
                 depth = depth + 1 if depth == 0 else depth - 1
     return depth > 0
 
+
+def _lede_tail_quote_open(lines: list[str]) -> bool:
+    """True when the lines' most recent quote activity is an opening
+    mark — the quote the tail belongs to is still open.
+
+    _lede_quote_is_open answers the whole-text question, which a stray
+    mark from an earlier quote pollutes: a first quote that never
+    closes (AJG's "“Looking ahead..." has no closing mark in the
+    source) keeps the whole-text depth above zero forever, so the
+    finish rule's allowance would keep pulling past a second quote
+    that DID close — into the pointer sentence after it (AJG: the
+    "reconciliation ... is shown on pages 14 and 15" line) and, in a
+    Highlights section, into the next section's heading and bullets
+    (GIS: "Fourth Quarter Results Summary" + results bullets). The
+    tail question is narrower: scan the marks in order and ask what
+    the LAST one did. A close after the last open means the tail's
+    quote closed, whatever an earlier quote did; an open after the
+    last close means the tail is still inside a quote. The marks pair
+    on the same stack as _lede_quote_is_open (curly open pushes,
+    curly close pops, straight toggles), so a curly open closed by a
+    straight mark counts as closed. Batch 222.
+    """
+    depth = 0
+    last_open = -1
+    last_close = -1
+    pos = 0
+    for ln in lines:
+        for ch in ln:
+            if ch == "“":
+                depth += 1
+                last_open = pos
+            elif ch == "”":
+                if depth > 0:
+                    last_close = pos
+                depth = max(0, depth - 1)
+            elif ch == '"':
+                if depth == 0:
+                    depth += 1
+                    last_open = pos
+                else:
+                    depth -= 1
+                    last_close = pos
+            pos += 1
+    return last_open > last_close
+
+
+def _lede_item_still_unfinished(lede: list[str]) -> bool:
+    """True when the lede's last collected item has not finished: its
+    last line is a wrap tail, a quote attribution (whose quote has not
+    arrived yet), a split attribution, or the tail's quote is still
+    open. The same signals the finish rule uses to decide the budget
+    item is unfinished (batches 165/180/181/188), re-read on the
+    current lede so the batch-222 completion allowance knows when to
+    keep pulling lines in — and when the item has finished and the cap
+    may fire. The quote test is the tail test (_lede_tail_quote_open),
+    not the whole-lede test: a stray mark from an earlier quote must
+    not keep the allowance pulling after the tail's own quote closed.
+    """
+    if not lede:
+        return False
+    last = lede[-1]
+    return (
+        bool(_LEDE_WRAP_TAIL_RE.search(last))
+        or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(last))
+        or _is_lede_split_quote_attribution(last)
+        or _lede_tail_quote_open(lede)
+    )
+
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
 # Full-line (possibly repeated for multi-period headers) so a prose
@@ -2744,6 +2812,57 @@ def _trim_lede_table_tail(lede: list[str]) -> list[str]:
     ):
         trimmed = trimmed[:-1]
     if trimmed and len("\n\n".join(trimmed)) >= 200:
+        return trimmed
+    return lede
+
+
+def _trim_unfinished_tail(lede: list[str]) -> list[str]:
+    """Drop a trailing mid-sentence fragment from collected highlights.
+
+    The finish rule's completion allowance (batch 222) lets a quote or
+    sentence run up to 8 lines past the lede budget, but a quote longer
+    than that (AJG's 12-line quotes) still strands the highlights
+    mid-sentence — the stored rows end "“We have excellent" or "said
+    David M. Cordani,". The Highlights-section collector's 12-line cap
+    strands the same way (GEV's CEO quote ends "and slot"). A dangling
+    fragment reads broken on the company page, so the tail is dropped
+    back to the last sentence-terminated line instead: the highlights
+    end clean, just shorter.
+
+    The walk-back fires only on a genuine mid-sentence cut — the last
+    line is prose, not sentence-terminated, and still unfinished by
+    the finish rule's own signals (wrap tail, quote attribution, split
+    attribution, open quote — _lede_item_still_unfinished). Bullets are
+    complete items without terminal punctuation (Nike's "•Diluted
+    earnings per share was $0.78") and are never touched; table residue
+    and headings belong to _trim_lede_table_tail /
+    _clean_highlights_result and are left alone. A colon-ended quote
+    attribution ("... commented on the results:") is unfinished even
+    though ":" counts as terminated elsewhere (batch 180), so the
+    terminated stop exempts it. The floor mirrors batch 153: the trim
+    is kept only when the remaining lines still hold a terminated line
+    and >=200 chars (measured on the "\\n" join, the shorter of the two
+    assemblies); otherwise the original is kept, since a wart is better
+    than dropping the row to None.
+    """
+    end = len(lede)
+    while end > 0:
+        last = lede[end - 1]
+        if _BULLET_LEAD_RE.match(last):
+            break
+        if _is_lede_table_line(last) or _is_bare_highlights_heading(last):
+            break
+        if _is_sentence_terminated(last) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(
+            last
+        ):
+            break
+        if not _lede_item_still_unfinished(lede[:end]):
+            break
+        end -= 1
+    if end == len(lede) or end == 0:
+        return lede
+    trimmed = lede[:end]
+    if len("\n".join(trimmed)) >= 200:
         return trimmed
     return lede
 
@@ -7294,7 +7413,22 @@ def extract_press_release_highlights(
                     # overrun cap (4 lines) still bounds the pull-in.
                     # Batch 165.
                 if overrun >= 4:
-                    break  # finishing cap: at most 4 lines past the budget
+                    # Batch 222: completion allowance — the 4-line cap
+                    # can still strand a quote/sentence mid-item (the
+                    # stored rows end "“We have excellent" — AJG — or
+                    # "said David M. Cordani," — CI — because the
+                    # sentence needs 1-7 more lines to terminate). When
+                    # the last collected line is still unfinished (wrap
+                    # tail, quote attribution, open quote), allow up to
+                    # 4 more lines so the sentence can terminate and the
+                    # quote close; the finish_sentence break above stops
+                    # the pull-in as soon as it does. Bounded at 8 past
+                    # the budget: a quote that never closes (stray mark,
+                    # batch 181) can cost at most 8 lines, and the
+                    # post-loop trim drops the dangling tail when even 8
+                    # is not enough (AJG's 12-line quotes).
+                    if overrun >= 8 or not _lede_item_still_unfinished(lede):
+                        break  # finishing cap: at most 8 lines past the budget
                 lede.append(ln)
                 in_table = False  # Batch 185: narrative resumes.
                 table_seen = False
@@ -7341,6 +7475,10 @@ def extract_press_release_highlights(
             content_lines += 1
             i += 1
         lede = _trim_lede_table_tail(lede)
+        # Batch 222: a quote/sentence longer than the completion
+        # allowance still strands the lede mid-sentence — drop the
+        # dangling tail back to the last complete sentence instead.
+        lede = _trim_unfinished_tail(lede)
         body = "\n\n".join(lede)
 
     # A trailing comma means the headline's continuation was too long to join
@@ -7629,7 +7767,17 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
         else:
             break  # first line isn't a bullet — no leading block
         if len(bullets) >= 14:
-            break
+            # Batch 222: completion allowance — the same mid-sentence
+            # wart as the lede loop and the section collector: the
+            # 14-line cap can strand a quote/sentence (GEV's quote
+            # attribution ends "said GE Vernova CEO"). When the last
+            # collected line is still unfinished (wrap tail, quote
+            # attribution, open quote), allow up to 4 more lines so
+            # the sentence can terminate and the quote close; bounded
+            # at 18. The post-selection trim drops the dangling tail
+            # when even 18 is not enough.
+            if len(bullets) >= 18 or not _lede_item_still_unfinished(bullets):
+                break
     if len("\n".join(bullets)) >= 150:
         # Batch 140: drop lone-marker lines AFTER qualification, so the
         # 150-char floor and the item-close logic above see the same
@@ -7704,6 +7852,17 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
         ):
             collected.append(ln)
         hit_table = False
+        # Batch 222: snapshot the section as the old 12-line cap saw
+        # it. The qualification checks below (thin-section, financial
+        # table) must judge the section on its first 12 follow lines,
+        # not on the allowance-extended tail: the extra lines are quote
+        # prose, and their $/% figures would otherwise trip the
+        # data-row count and discard a narrative section (CINF Q4
+        # 2025: the CEO quote's "$2.393 billion ... 4%" lines push
+        # data_rows to 4 and the whole section is rejected for the lede
+        # fallback). The allowance changes only how much of a qualified
+        # section is served, never whether it qualifies.
+        snapshot: list[str] | None = None
         # Batch 194: a "-more-" page marker inside a Highlights
         # section is never content, and a heading-shaped line right
         # after it ends the section (same rule as the lede loop).
@@ -7795,13 +7954,30 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # matches neither and would be collected as content.
             collected.append(follow)
             n_follow += 1
+            if n_follow == 12 and snapshot is None:
+                snapshot = list(collected)
             if n_follow >= 12:
-                break
+                # Batch 222: completion allowance — the same
+                # mid-sentence wart as the lede loop: the 12-line cap
+                # can strand a quote/sentence (GEV's CEO quote ends
+                # "and slot"). When the last collected line is still
+                # unfinished (wrap tail, quote attribution, open
+                # quote), allow up to 4 more follow lines so the
+                # sentence can terminate and the quote close; bounded
+                # at 16. The post-selection trim in
+                # _extract_highlights_section drops the dangling tail
+                # when even 16 is not enough.
+                if n_follow >= 16 or not _lede_item_still_unfinished(collected):
+                    break
+        # Batch 222: the qualification checks judge the snapshot (the
+        # section as the old 12-line cap saw it), never the
+        # allowance-extended tail — see the snapshot note above.
+        checked = snapshot if snapshot is not None else collected
         if hit_table and (
-            len("\n".join(collected)) < 150
+            len("\n".join(checked)) < 150
             or not any(
                 _BULLET_LEAD_RE.match(ln) or ln.startswith("·")
-                for ln in collected
+                for ln in checked
             )
         ):
             continue  # table-headed section too thin — try later headings,
@@ -7817,8 +7993,8 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             # a bullet (batch 138/139: Plug/Chubb flatten bullets onto
             # that marker), so a "·"-bulleted section is never rejected
             # for lacking a "•"-style lead.
-        if len("\n".join(collected)) >= 150:
-            if _looks_like_financial_table(collected):
+        if len("\n".join(checked)) >= 150:
+            if _looks_like_financial_table(checked):
                 continue  # table, not narrative highlights — try later headings
             # Batch 140: drop lone-marker lines AFTER qualification, so the
             # 12-line cap and the 150-char floor see the same lines as
@@ -7944,11 +8120,17 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     # the served text loses the dangling heading (Datadog: "Third
     # Quarter & Recent Business Highlights:" between the financial
     # bullets and the business bullets).
-    return [
+    best = [
         ln
         for ln in best
         if not _is_lede_colon_heading(ln) and not _is_lede_table_header(ln)
     ]
+    # Batch 222: drop a trailing mid-sentence fragment (the same wart
+    # as the lede loop — the 12-line cap strands GEV's quote at "and
+    # slot"); post-selection, so the financial-density competition is
+    # untouched (batch 177). Applies to whichever candidate won —
+    # a leading-bullet block's trailing continuation is the same shape.
+    return _trim_unfinished_tail(best)
 
 
 # --- Shareholder-letter extraction mode (batch 94) ---------------------------

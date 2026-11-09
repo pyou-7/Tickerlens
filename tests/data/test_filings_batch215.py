@@ -201,9 +201,11 @@ def test_synthetic_pretax_note_after_table_keeps_quote_head():
 def test_ajg_q4_2023_quote_rescued():
     # The batch's target: the quote was entirely lost before the fix
     # (live extraction: pretax note only, no quote; stored row NULL).
+    # Batch 222: the completion allowance lets the quote run to its
+    # close (2017 chars, was 1540) instead of stranding it mid-quote.
     result = extract_press_release_highlights(_load("AJG_2023-12-31.html"))
     assert result is not None
-    assert len(result) == 1540
+    assert len(result) == 2017
     assert "pretax impact" not in result
     assert "detailed reconciliation" not in result
     assert "We had a strong fourth quarter, to wrap up another fantastic year!" in result
@@ -212,22 +214,26 @@ def test_ajg_q4_2023_quote_rescued():
 
 
 def test_ajg_q3_2024_note_gone_quote_kept():
+    # Batch 222: the quote now completes (2124 chars, was 1867) — the
+    # old pin asserted the mid-quote ending ("...get losses paid."),
+    # which is exactly the cut batch 222 removes.
     result = extract_press_release_highlights(_load("AJG_2024-09-30.html"))
     assert result is not None
-    assert len(result) == 1867
+    assert len(result) == 2124
     assert "pretax impact" not in result
     assert "Our excellent financial performance continued during the third quarter!" in result
     assert "J. Patrick Gallagher" in result
     assert result.rstrip().endswith(
-        "helping clients sort through their coverages, file claims and "
-        "ultimately get losses paid."
+        "The opportunities ahead of us are immense and I am very excited "
+        "about our long-term prospects!”"
     )
 
 
 def test_ajg_q3_2023_note_gone_quote_kept():
+    # Batch 222: the quote now completes (1794 chars, was 1507).
     result = extract_press_release_highlights(_load("AJG_2023-09-30.html"))
     assert result is not None
-    assert len(result) == 1507
+    assert len(result) == 1794
     assert "pretax impact" not in result
     assert "We had an excellent third quarter" in result
     assert "J. Patrick Gallagher" in result

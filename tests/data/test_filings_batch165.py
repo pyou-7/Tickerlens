@@ -160,8 +160,13 @@ def test_inline_bullet_at_budget_boundary_does_not_start() -> None:
 def test_inline_bullet_finishing_cap_bounds_long_wrapped_item() -> None:
     # The final bullet is one sentence wrapped across 7 fragment lines
     # (the attested shape — Skydance's bullets wrap mid-sentence, never
-    # with terminal punctuation mid-item); only the first 4 continuation
-    # lines are taken, and the next bullet never starts.
+    # with terminal punctuation mid-item). Batch 165 capped the pull-in
+    # at the first 4 continuation lines; batch 222's completion
+    # allowance lets the unfinished item run to its close (all 7 lines,
+    # ending terminated), so the highlights no longer end mid-bullet at
+    # "tangible common equity of 18.2 percent annualized and". The cap
+    # still bounds the pull-in (8 past the budget) and the next bullet
+    # never starts.
     hl = extract_press_release_highlights(
         _contact_release_html(
             "Acme Reports Third Quarter Results",
@@ -194,9 +199,11 @@ def test_inline_bullet_finishing_cap_bounds_long_wrapped_item() -> None:
         "annualized and ROTE of 21.7 percent annualized and core",
         "operating ROE of 13.9 percent annualized and return on",
         "tangible common equity of 18.2 percent annualized and",
+        "a CET1 ratio of 11.4 percent at quarter end with",
+        "a supplementary leverage ratio of 7.1 percent and",
+        "a liquidity coverage ratio of 132 percent at quarter end.",
     ]
     assert "Delta bullet" not in hl
-    assert "supplementary leverage ratio" not in hl
 
 
 def test_complete_figure_bullet_does_not_extend() -> None:
