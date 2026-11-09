@@ -71,20 +71,20 @@ def test_compound_heading_with_digit_still_a_heading():
 
 def test_ci_2024_q4_outlook2_served():
     out = _live("CI_2024-12-31")
-    assert out.startswith("OUTLOOK2")
+    assert out.startswith("OUTLOOK 2")  # batch 218: footnote key now spaced
     assert "at least $29.50 per share" in out
     assert "Consolidated Results" not in out
 
 
 def test_ci_2025_q1_outlook2_served():
     out = _live("CI_2025-03-31")
-    assert out.startswith("OUTLOOK2")
+    assert out.startswith("OUTLOOK 2")  # batch 218: footnote key now spaced
     assert "is $29.60 per share" in out
 
 
 def test_ci_2025_q3_outlook2_served():
     out = _live("CI_2025-09-30")
-    assert out.startswith("OUTLOOK2")
+    assert out.startswith("OUTLOOK 2")  # batch 218: footnote key now spaced
     assert "at least $29.60 per share" in out
     assert "at least $7,200" in out  # Evernorth adjusted income table row
     # Known wart (carried forward, not a batch-196 regression): the

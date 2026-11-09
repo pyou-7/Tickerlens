@@ -164,13 +164,12 @@ def test_dal_q4_2024_guidance_drops_wrapped_heading():
     assert g is not None
     assert "Revenue Environment" not in g
     assert "and Outlook" not in g
-    # Live footnote spacing is glued ("4Introduced ...") — the stored
-    # row's spaced rendering is an older extractor's, see the repair
-    # script's normalization gate; the wart removal is the only
-    # content change (956 -> 922 = the two heading fragments plus
-    # their joins).
-    assert len(g) == 922
-    assert g.endswith("4Introduced at November 2024 Investor Day")
+    # Batch 218: live footnote spacing is now spaced ("4 Introduced
+    # ..."), matching the stored row's older rendering; the wart
+    # removal is the only content change (956 -> 930 = the two heading
+    # fragments plus their joins, plus 8 footnote-key spaces).
+    assert len(g) == 930
+    assert g.endswith("4 Introduced at November 2024 Investor Day")
 
 
 def test_dal_q2_2025_guidance_unchanged():

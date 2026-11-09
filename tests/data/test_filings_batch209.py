@@ -168,7 +168,7 @@ def test_ci_2025_03_31_guidance_stops_at_call_notice():
         "Forward-Looking Statements included in this release. Management "
         "does not assume any obligation to update these estimates."
     )
-    assert len(text) == 1143
+    assert len(text) == 1152
     assert len(text.split("\n")) == 39
 
 
@@ -187,7 +187,7 @@ def test_ci_2025_09_30_walk_back_drops_availability_fragment():
     assert text.rstrip().endswith(
         "Management does not assume any obligation to update these estimates."
     )
-    assert len(text) == 1108
+    assert len(text) == 1117
 
 
 def test_cop_2024_12_31_guidance_stops_at_host_notice():

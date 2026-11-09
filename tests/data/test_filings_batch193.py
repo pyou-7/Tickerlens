@@ -253,7 +253,7 @@ def test_afl_asterisk_pointer_dropped():
 
 def test_dal_real_guidance_heading_found():
     out = _live("DAL_2024-09-30")
-    assert out.startswith("Financial Guidance1")
+    assert out.startswith("Financial Guidance 1")  # batch 218: footnote key now spaced
     assert "Total Revenue YoY" in out
     assert "$1.60 - $1.85" in out
     assert "Cost Performance" not in out

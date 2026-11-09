@@ -8735,6 +8735,18 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
+    # Batch 218: a digit-only <sup> footnote key glues to its neighbors
+    # when the tags are stripped ("Financial Guidance1", "1Non-GAAP" —
+    # the batch-217 residual wart; the older extractor spaced both
+    # sides). The key is never part of a split word (unlike span-split
+    # text), so wrap digit keys in \x02 markers here and resolve them
+    # to spaces at the end, once the neighbors are visible in flattened
+    # text. Letter keys ("(a)", "th", "SM") and "®" are untouched —
+    # same class, separate batch. Census of the 1,699-exhibit cache:
+    # 4,097 digit-key sups; zero unit-exponent shapes ("m²", "ft²") and
+    # zero digit-key-digit chains, so a bare key after a digit is a
+    # footnote on a year/amount ("2022 3,"), never an exponent.
+    text = _SUP_KEY_RE.sub(_sup_key_marker, text)
     # Inline formatting tags carry no whitespace of their own: adjacent inline
     # elements with no whitespace between them render concatenated in a
     # browser. Replacing them with a space corrupts words that filers split
@@ -8773,4 +8785,44 @@ def _html_to_text(document_html: str) -> str:
     text = text.strip()
     text = re.sub(r"(?m)^([•●○◦▪■·])(\S)", r"\1 \2", text)
     text = re.sub(r"(?m)^([–—])([A-Za-z])", r"\1 \2", text)
-    return text
+    # Batch 218 (continued): resolve the \x02 footnote-key markers.
+    # Space before the key unless it already follows whitespace, a line
+    # start, "(" or "$"; space after it when a letter follows, except
+    # for a bare key after a digit (the "10²cm" shape — no corpus
+    # occurrences, but a parenthesized key after a digit still spaces:
+    # "2025 (1) Sales"). A bare key wedged between a digit and a
+    # letter is left glued on both sides (exponent/unit, never a
+    # footnote key in the census: the one attested digit-letter case
+    # is parenthesized). A marker next to another marker spaces too
+    # ("word 1 2" for consecutive sups).
+    return _SUP_MARKER_RE.sub(lambda m: _resolve_sup_key(text, m), text)
+
+
+_SUP_KEY_RE = re.compile(r"(?i)<sup\b[^>]*>(.*?)</sup>", re.S)
+_SUP_MARKER_RE = re.compile(r"\x02([^\x02]*)\x02")
+
+
+def _sup_key_marker(match: re.Match) -> str:
+    """Wrap a digit-only <sup> footnote key in \\x02 markers.
+
+    Returns the match unchanged for anything that is not a bare footnote
+    key (ordinals, "®"/"SM", letter keys like "(a)"), so the later
+    inline-tag strip removes those sups exactly as before.
+    """
+    inner = re.sub(r"<[^>]+>", "", match.group(1))
+    inner = re.sub(r"&(?:nbsp|#8203|#160);", " ", inner).strip()
+    digits = re.sub(r"[\s(),]", "", inner)
+    if not digits or not digits.isdigit():
+        return match.group(0)
+    return f"\x02{inner}\x02"
+
+
+def _resolve_sup_key(text: str, match: re.Match) -> str:
+    key = match.group(1)
+    prev = text[match.start() - 1] if match.start() > 0 else ""
+    nxt = text[match.end()] if match.end() < len(text) else ""
+    if prev.isdigit() and not key.startswith("(") and nxt.isalpha():
+        return key  # exponent/unit wedge: leave glued on both sides
+    left = " " if prev and prev not in " \t\n($" else ""
+    right = " " if nxt.isalpha() and (key.startswith("(") or not prev.isdigit()) else ""
+    return f"{left}{key}{right}"
