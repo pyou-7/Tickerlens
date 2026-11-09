@@ -1401,10 +1401,33 @@ def _is_lede_data_row(ln: str) -> bool:
     if _is_lede_dollar_range_statement(ln):
         return False
     figures = _LEDE_FIGURE_RE.findall(ln)
-    if len(figures) < 2:
-        return False
     tokens = ln.split()
-    if len(figures) / max(len(tokens), 1) >= 0.4:
+    # Batch 220: value figures exclude a leading bare year (a label
+    # token, not a value — "2024 PAYOUT RATIO OF 58% (3)") and a
+    # trailing parenthesized single-digit/letter footnote key (a footnote
+    # on the value, not a second value). A data row is a label plus
+    # values; a single-value metric line is not a row, so the density
+    # branches below count values, not figure tokens. The key exclusion
+    # is narrow: the key must occur once (a repeated "(2)" is a column
+    # value, not a footnote — batch 159's "Acquisition and Disposition
+    # Impacts — (2) — (2)") and the line must carry a % or $ value for
+    # the key to footnote. The raw count still gates the $-figure
+    # branches: a line with 2 $ figures always has 2 value figures
+    # (a $ figure is never a year or a key).
+    value_figures = len(figures)
+    if tokens and _LEDE_YEAR_RE.fullmatch(tokens[0].rstrip(",")):
+        value_figures -= 1
+    key = tokens[-1].rstrip(",") if tokens else ""
+    if (
+        re.fullmatch(r"\([0-9a-zA-Z]\)", key)
+        and sum(1 for t in tokens if t.rstrip(",") == key) == 1
+        and (re.search(r"\d[\d,.]*%", ln) or "$" in ln)
+    ):
+        value_figures -= 1
+    value_figures = max(value_figures, 0)
+    if value_figures < 2:
+        return False
+    if value_figures / max(len(tokens), 1) >= 0.4:
         if _LEDE_DATA_ROW_RE.search(ln):
             return True  # $-carrying: the pre-batch-157 behavior
         return len(ln) <= 120  # $-less: short rows only, never mega-lines
@@ -1423,10 +1446,14 @@ def _is_lede_data_row(ln: str) -> bool:
     # else — and a data row is a label plus values, never a "versus" /
     # "greater than" narration, so comparison phrases exempt the line.
     # Batch 160: the ending may be "NM" (see above) and the cap is 120.
+    # Batch 220: the density counts value figures (see above) — a
+    # single-value metric line ("2024 PAYOUT RATIO OF 58% (3)") reads
+    # 1 of 6, not 3 of 6.
     if (
         "$" not in ln
         and len(ln) <= 120
-        and len(figures) / max(len(tokens), 1) >= 0.25
+        and value_figures >= 2
+        and value_figures / max(len(tokens), 1) >= 0.25
         and (
             _LEDE_FIGURE_RE.search(tokens[-1])
             or re.fullmatch(r"\(?NM\)?", tokens[-1], re.IGNORECASE)
@@ -1702,6 +1729,31 @@ def _is_lede_single_value_row(ln: str) -> bool:
     return True
 
 
+def _is_lede_caps_metric_line(ln: str) -> bool:
+    """True for an all-caps key-metric line ending in a footnote key:
+    "2024 PAYOUT RATIO OF 58% (3)". The line is a complete metric
+    statement — a multi-word all-caps label, exactly one digit-% value,
+    and a single-digit/letter footnote key on that value — not table
+    residue. The corpus attests exactly this shape and nothing else
+    like it (11 lines over 1,699 exhibits, all Citi payout ratios, all
+    with a (3)/(5) key); bare values ("20.9% (a)"), threshold labels
+    ("Less than 60% (5)"), and security descriptions ("Series J 8.375%
+    Cumulative Redeemable (4)") are mixed case and stay residue. No $
+    variant is attested, so a $ figure disqualifies the line. Batch 220.
+    """
+    words = ln.split()
+    if len(words) > 6 or "$" in ln:
+        return False
+    if not _LEDE_FOOTNOTE_TAIL_RE.search(ln):
+        return False
+    if len(re.findall(r"\d[\d,.]*%", ln)) != 1:
+        return False
+    letters = re.sub(r"[^A-Za-z ]", "", ln)
+    if not letters or letters != letters.upper():
+        return False
+    return len(letters.split()) >= 3
+
+
 def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
     # Batch 187: a dash-led wordless value row ("– – 65 33 87 44
@@ -1803,8 +1855,10 @@ def _is_lede_table_line(ln: str) -> bool:
             return True
     if _looks_like_table_cell(ln):
         return True
+    # Batch 220: an all-caps key-metric line is content, not a footnote
+    # tail — see _is_lede_caps_metric_line.
     if len(words) <= 6 and _LEDE_FOOTNOTE_TAIL_RE.search(ln):
-        return True
+        return not _is_lede_caps_metric_line(ln)
     return False
 
 
