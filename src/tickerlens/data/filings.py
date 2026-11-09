@@ -3286,6 +3286,38 @@ _PRETAX_ADJUSTMENT_NOTE_RE = re.compile(
 )
 
 
+# Batch 223: a bare-numbered EVENT ANNOUNCEMENT is narrative, not a
+# footnote definition — "1.The Company announced on September 5, 2024
+# that it has entered into definitive agreements ..." / "2.The Company
+# added two additional clusters ..." (APLD's Recent Operational
+# Highlights: the only genuine numbered list in the cache's Highlights
+# zones). The subject must be "The Company" and the verb an event verb:
+# cache survey of all 4,034 bare-numbered footnote lines shows the
+# "The Company / We" openers are otherwise definitions and disclaimers
+# ("We define Adjusted Net Income ...", "The Company does not provide
+# a reconciliation ...", "The Company declared and paid quarterly
+# dividends ...", "The Company had no outstanding borrowings ...",
+# "We have not provided the forward-looking GAAP equivalents ...",
+# "We calculate average revenue per subscriber ...") — none of those
+# verbs is in this list, and the two EL event-ish lines ("In fiscal
+# 2025, the Company expanded ...", "From the end of August 2024 ...,
+# the Company entered into agreements ...") do not start with the
+# subject, so the anchored subject keeps them out. "declared" is
+# deliberately NOT in the list: DKS's dividend footnote opens that
+# way. A company-name subject ("American Express received the highest
+# score ...", AXP's footnote-run item 6) is deliberately NOT exempted
+# either — it rides a footnote run, and naming every filer is not a
+# rule. The exemption returns False from _is_bare_numbered_footnote,
+# so the line never opens a footnote-definition block on any path
+# (headline, lede, leading-bullet block, Highlights section, guidance).
+_BARE_NUMBERED_EVENT_RE = re.compile(
+    r"^\d{1,3}\.?[ ]?The Company\s+"
+    r"(announced|added|launched|completed|entered into|signed|acquired"
+    r"|opened|appointed|expanded|introduced|received|began|closed"
+    r"|unveiled|named)\b"
+)
+
+
 def _is_bare_numbered_footnote(ln: str) -> bool:
     """True for a bare-numbered footnote sentence ("2 Comp sales for the
     13-week period ...", "3 Source: Rystad Energy ...", "1 Net debt is
@@ -3329,7 +3361,12 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
         unchanged, so a decimal-led figure ("1.5 million shares ...",
         "1.25 billion ...") still never opens — the char after the
         period is a digit, not a capital.
+      - Batch 223: an event announcement ("1.The Company announced
+        ...", "2.The Company added ...") is narrative, never a
+        footnote — see _BARE_NUMBERED_EVENT_RE.
     """
+    if _BARE_NUMBERED_EVENT_RE.match(ln):
+        return False
     if len(ln) > 1000 or not _is_sentence_terminated(ln):
         return False
     return bool(re.match(r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
