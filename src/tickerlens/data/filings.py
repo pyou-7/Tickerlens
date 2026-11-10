@@ -329,6 +329,25 @@ _DATELINE_LEAD_RE = re.compile(
     r"(?:\s*[–—-]{1,2}\s*|\s+)(?:[A-Z][a-z]+\.? \d{1,2}, \d{4}\s*[–—-]{1,2}\s*)?"
 )
 
+# A dated dateline sentence lead ("ST. LOUIS, October 25, 2024 --
+# Centene Corporation ... announced ..."): a city + full month/day/year
+# + dash opening body prose. _DATELINE_LEAD_RE's location segments
+# allow no digits, so this dated form never matches it — and a dateline
+# sentence after the leading bullets was swallowed as a bullet
+# continuation, dragging the flattened earnings table behind it into
+# the block (Centene: the dateline paragraph plus 7 table rows served
+# as highlights in all 8 quarters). The shape is narrow by
+# construction — a city, a spelled-out month, a day and a year, then a
+# dash — so a bullet continuation (mid-sentence prose, never a
+# city/date/dash open) can never match it. Batch 228.
+_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+"
+    r"(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|"
+    r"Jul\.?|Aug\.?|Sep\.?|Sept\.?|Oct\.?|Nov\.?|Dec\.?)"
+    r"\s+\d{1,2},\s+\d{4}\s+[–—-]{1,2}\s"
+)
+
 # Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
 # EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
 # headline follows "FOR IMMEDIATE RELEASE" / the date line). Narrow: quarter
@@ -8742,11 +8761,17 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
             break  # a headed section follows; it competes on its own
-        if not bullets and _DATELINE_LEAD_RE.match(ln):
+        if not bullets and (
+            _DATELINE_LEAD_RE.match(ln) or _DATED_DATELINE_LEAD_RE.match(ln)
+        ):
             continue  # dateline sentence before the bullets (Prudential):
             # the bullets are still the leading block, not the dateline
             # prose. Only before any bullet is collected; mid-block lines
             # keep the existing continuation behavior. Batch 118.
+            # Batch 228: the dated form ("ST. LOUIS, October 25, 2024
+            # -- ...") joins the skip — _DATELINE_LEAD_RE allows no
+            # digits, so it never matched a dated dateline, and a dated
+            # dateline ahead of the bullets broke the block instead.
         if not bullets and _is_lede_period_header(ln):
             continue  # bare period label between the dateline and the
             # bullets (Amazon Q4: "Fourth Quarter 2024" sits on its own
@@ -8822,6 +8847,7 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 )
                 or _is_lede_period_header(ln)
                 or _is_bare_period_fragment(ln)
+                or _DATED_DATELINE_LEAD_RE.match(ln)
             ):
                 break  # a table starts where the bullets end (AppLovin's
                 # "First Quarter 2026 Financial Guidance Summary" heading
@@ -8837,7 +8863,14 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # bullet — a bare "Guidance" heading that introduces
                 # bullets (Air Products) is a sub-heading, not a table
                 # title, so the heading is kept as a label line and the
-                # bullets below it stay in the block.
+                # bullets below it stay in the block. Batch 228: a dated
+                # dateline sentence ("ST. LOUIS, October 25, 2024 -- ...")
+                # is body prose, never a bullet continuation — the
+                # dateline paragraph opens the body, and the flattened
+                # table behind it (Centene: 7 rows in all 8 quarters)
+                # rode the block as continuations of the open bullet
+                # item because neither the dateline nor the data rows
+                # matched any break shape above.
             bullets.append(ln)
             if (
                 # Batch 158: the terminal-punctuation check sees through a

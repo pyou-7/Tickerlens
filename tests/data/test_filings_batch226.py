@@ -180,9 +180,20 @@ def test_cor_guidance_range_kept() -> None:
 
 
 def test_cnc_single_value_row_kept() -> None:
+    # Batch 228: the live half of this pin changed — Centene's table
+    # never reaches the trim anymore (the leading-bullet block breaks
+    # at the dated dateline, so the dateline + table are not collected
+    # at all), and the highlights now end on the final bullet. The
+    # guard itself is unchanged and stays pinned at the predicate
+    # level: a single-value row is a metric value, not a data row, so
+    # the trim would still keep it if one ever reached it.
+    assert not _is_trailing_table_data_row("GAAP diluted EPS $ 1.36")
+    assert not _is_trailing_table_data_row("8.9 % 8.5 %")
     hl = extract_press_release_highlights(_read("CNC_2024-09-30.html"))
     assert hl is not None
-    assert _last(hl) == "GAAP diluted EPS $ 1.36"
+    assert "GAAP diluted EPS $ 1.36" not in hl
+    assert "Total revenues (in millions)" not in hl
+    assert _last(hl).endswith("through October 2024.")
 
 
 # --- unit pins: row labels --------------------------------------------
