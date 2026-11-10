@@ -150,9 +150,15 @@ def test_cmcsa_junk_and_period_header_dropped() -> None:
 
 
 def test_gis_footnote_glyph_dropped() -> None:
+    # Batch 227: the "¹" glyph is still dropped, and now the wrap
+    # fragment below it ("market share trends" — the sentence continues
+    # "improvement from fiscal 2024 levels." on the next source line)
+    # is dropped too, so the highlights end on the last terminated
+    # line instead.
     hl = extract_press_release_highlights(_read("GIS_2024-11-24.html"))
     assert hl is not None
-    assert _last(hl) == "market share trends"
+    assert "market share trends" not in hl
+    assert _last(hl).endswith("in the second half")
 
 
 # --- live guard pins: genuine content tails survive -------------------

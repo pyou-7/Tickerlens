@@ -2777,7 +2777,12 @@ def _is_trailing_row_label(ln: str) -> bool:
     figures), no headline/quote verb, no mid-line sentence boundary.
     A genuine bullet is terminated or figure-carrying, so it never
     qualifies; a wrap fragment ends on a function word, not a
-    statement noun. Batch 226."""
+    statement noun. Batch 226. Batch 227: a row label glued to its
+    column qualifier ("...attributable TO noncontrolling interests -
+    Consolidated sponsored investment products", BlackRock) — a short
+    " - <qualifier>" (1-6 words, no digits/$/%) is stripped and the
+    base is re-tested; every guard below runs on the base.
+    """
     s = ln.strip()
     if not s or _BULLET_LEAD_RE.match(s):
         return False
@@ -2785,8 +2790,14 @@ def _is_trailing_row_label(ln: str) -> bool:
         return False
     if "$" in s:
         return False
-    words = s.split()
-    if not 2 <= len(words) <= 14 or len(s) > 140:
+    base = s
+    if " - " in s:
+        head, qual = s.rsplit(" - ", 1)
+        qwords = qual.split()
+        if 1 <= len(qwords) <= 6 and not re.search(r"[\d$%]", qual):
+            base = head
+    words = base.split()
+    if not 2 <= len(words) <= 14 or len(base) > 140:
         return False
     if words[-1].strip(",;:").lower() not in _TRAILING_ROW_LABEL_END_WORDS:
         return False
@@ -2798,9 +2809,9 @@ def _is_trailing_row_label(ln: str) -> bool:
             return False
         if re.search(r"\d", clean) and not re.fullmatch(r"[A-Za-z]+[0-9]", clean):
             return False
-    if re.search(r"[.!?]\s", s):
+    if re.search(r"[.!?]\s", base):
         return False
-    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+    if _LEDE_HEADLINE_VERB_RE.search(base) or _LEDE_QUOTE_VERB_RE.search(base):
         return False
     return True
 
@@ -3008,6 +3019,290 @@ def _is_trailing_table_header_orphan(ln: str) -> bool:
     if not re.search(r"[A-Za-z0-9]", s):
         return True
     return False
+
+
+# Batch 227: the wrap-fragment tail class — stored/live highlights ending
+# mid-sentence on a wrapped continuation (General Mills' "market share
+# trends" — the sentence continues "improvement from fiscal 2024
+# levels." on the next source line; Nasdaq's "Annualized Recurring
+# Revenue (ARR)4 of"; Goldman's "...during the second quarter of";
+# Synopsys' "...at the midpoint, including"; Kroger's comma tails;
+# Coinbase's "...than any other company;" after a terminated sentence
+# in the same line; Genuine Parts' "...comparable sales. Segment";
+# Berkshire's "Other-than-temporary impairment of investments in Kraft
+# Heinz and in Occidental" under "Net earnings includes:"). The trim
+# drops the fragment back to the last terminated line (the batch-222
+# precedent: the highlights end clean, just shorter), or truncates
+# the tail line at its last sentence terminator when the fragment
+# follows one in the same line. Bullets without terminal periods are
+# the house style (AGNC's ◦ sub-bullets, AIG's ■ bullets, Palantir's
+# ◦ bullets, WTW's "Adjusted Operating Margin was ...") and are never
+# touched: the fragment tests require a strong unfinished signal
+# (comma/semicolon end, dangling function word, open quote, short
+# lowercase noun phrase) or a verb-less post-terminator fragment.
+# The full-cache blast is the arbiter for every predicate here.
+_TRAILING_DANGLE_WORDS = frozenset(
+    {
+        "of", "and", "to", "in", "for", "with", "per", "on", "as", "at",
+        "by", "the", "a", "an", "including", "that", "which", "who",
+        "from", "or", "into", "after", "before", "during", "through",
+        "under", "between", "while", "than", "then",
+    }
+)
+# Finite verbs a wrap fragment never carries — the headline/quote verb
+# regexes plus copulas and auxiliaries, for the verbless tests below.
+_TRAILING_VERB_WORDS = frozenset(
+    {
+        "is", "was", "were", "are", "be", "been", "being",
+        "has", "have", "had", "will", "would", "can", "could",
+        "may", "might", "must", "shall", "should", "do", "does", "did",
+    }
+)
+# Common finite verbs in highlights prose ("reduced", "increased",
+# "reflected") — the headline regex covers headline verbs only, so a
+# content line with an ordinary verb ("Impairment ... reduced fourth
+# quarter earnings") needs this list to read as verbed, not a label.
+# Adjectival past participles ("acquired", "consolidated") are
+# deliberately excluded: they modify labels, they do not verb them.
+_TRAILING_COMMON_VERBS = frozenset(
+    {
+        "reduced", "increased", "decreased", "grew", "drove", "led",
+        "improved", "declined", "rose", "fell", "reported", "announced",
+        "reflected", "resulted", "totaled", "reached", "exceeded",
+        "generated", "delivered", "achieved", "recorded", "recognized",
+        "incurred", "provided", "included", "represented", "contributed",
+        "benefited", "strengthened", "expanded", "dropped", "gained",
+        "sold", "comprised", "remains", "remain", "continues",
+        "continue", "reflects", "includes", "represents", "totals",
+        "stands", "ended", "grows", "falls", "rises",
+    }
+)
+# Imperatives a post-terminator fragment can legitimately start with
+# ("See page 5 for details") — a fragment starting with one is a
+# complete sentence, never truncated.
+_TRAILING_IMPERATIVE_WORDS = frozenset(
+    {
+        "see", "refer", "note", "contact", "visit", "call", "click",
+        "read", "find", "go", "check", "view", "access",
+    }
+)
+# Statement-label nouns for the colon-intro list-item rule (Berkshire's
+# impairment label under "Net earnings includes:").
+_TRAILING_LABEL_NOUNS = frozenset(
+    {
+        "impairment", "amortization", "depreciation", "accretion",
+        "divestiture", "acquisition", "restructuring", "settlement",
+        "litigation", "goodwill", "intangible", "intangibles",
+        "investment", "investments", "earnings", "income", "loss",
+        "expense", "expenses", "revenue", "revenues", "cost", "costs",
+        "charge", "charges", "gain", "gains", "proceeds", "liability",
+        "liabilities", "asset", "assets", "equity", "benefit",
+        "benefits", "obligation", "obligations", "reserve", "reserves",
+        "provision", "provisions", "writedown", "write-down",
+        "writeoff", "write-off", "disposal", "merger", "severance",
+        "pension", "dividend", "dividends", "repurchase", "issuance",
+        "redemption", "lease", "royalty", "franchise", "segment",
+        "subsidiary",
+    }
+)
+# Words that make the dot before them an abbreviation, not a sentence
+# terminator ("Inc.", "U.S.", "e.g.") — the truncate search skips
+# those dots, as it does dots preceded by a single initial.
+_TRAILING_ABBREV_WORDS = frozenset(
+    {
+        "inc", "ltd", "corp", "co", "u.s", "u.k", "e.g", "i.e", "vs",
+        "dr", "mr", "mrs", "ms", "st", "no", "jan", "feb", "mar",
+        "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+        "ave", "blvd", "rd", "fig", "approx", "etc", "ex",
+    }
+)
+# A sentence terminator followed by a space + capital/quote (or the
+# line end) — the split point for truncating a tail line at its last
+# terminated sentence. Decimals ("$1.50") fail the lookahead (a digit
+# follows the dot); the abbreviation guard above handles the rest.
+_TRAILING_FRAGMENT_TERMINATOR_RE = re.compile(
+    r"[.!?…][\"”'’\)\]]*(?=\s+[A-Z\"“\(]|$)"
+)
+
+
+def _strip_trailing_footnote_markers(s: str) -> str:
+    """Strip trailing footnote markers for tail-shape tests: asterisks,
+    daggers, a parenthesized letter/digit ("(a)", "(1)"), and a bare
+    footnote digit after a sentence terminator ("...performance. 9",
+    Instacart). A value figure ("11.7%") is never stripped — it is the
+    object of a trailing "of", so stripping it would fake a dangle."""
+    s = s.strip()
+    s = re.sub(r"[*†‡]+\s*$", "", s)
+    s = re.sub(r"\s*\([A-Za-z0-9]{1,2}\)\s*$", "", s)
+    s = re.sub(r"([.!?…])\s+\d{1,2}\s*$", r"\1", s)
+    return s.strip()
+
+
+def _has_trailing_verb(s: str) -> bool:
+    """True when `s` carries a finite verb by the headline/quote verb
+    regexes or the copula/auxiliary set — the verbless test for wrap
+    fragments and colon-intro list-item labels."""
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return True
+    words = {w.strip(",;:()").lower() for w in s.split()}
+    return bool(words & (_TRAILING_VERB_WORDS | _TRAILING_COMMON_VERBS))
+
+
+def _prev_line_unfinished(prev: str) -> bool:
+    """True when the previous non-blank line ends mid-sentence (comma,
+    semicolon, or a dangling function word) — the tail line continues
+    a sentence that was already unfinished, so a short lowercase
+    fragment below it is a cut, not a completion. Without this gate
+    the short-fragment branch eats wrapped bullet completions (Cisco's
+    "Product orders ... for the fifth / consecutive quarter" — the
+    previous line ends "fifth", so the fragment stays)."""
+    p = _strip_trailing_footnote_markers(prev.strip())
+    if not p:
+        return False
+    if p.endswith((",", ";")):
+        return True
+    words = [w.strip(",;:()").lower() for w in p.split() if w.strip(",;:()")]
+    return bool(words) and words[-1] in _TRAILING_DANGLE_WORDS
+
+
+def _is_trailing_wrap_fragment(ln: str, prev: str = "") -> bool:
+    """True for an unfinished wrap fragment at the tail: the last line
+    is prose (never a bullet) that ends mid-sentence — on a comma or
+    semicolon, on a dangling function word, with an open quote, or as
+    a short lowercase noun phrase ("market share trends", General
+    Mills — the sentence continues on the next source line).
+    Guards: bullet-led lines are complete items; a terminated line
+    (after the footnote-marker strip — Instacart's "...performance.
+    9", Akamai's "...foreign exchange.*") is complete; a ";" after a
+    headline verb separates headline items, not a sentence ("Affirms
+    Fiscal 2027 Outlook ... 3% to 5%;", Estee Lauder); a trailing
+    value figure is the object of its "of" ("...ROE* of 11.7%", AIG),
+    so figures are never stripped before the dangle test; a lowercase
+    fragment must be short (<=4 words), verb-less and figure-free,
+    and must continue a line that already ends unfinished
+    (_prev_line_unfinished) — a wrapped bullet completion ("share of
+    incremental interest income ...", American Water, 12 words; "of
+    Directors Declares ... $0.59 per share", Dollar General,
+    figure-carrying; "consecutive quarter", Cisco, whose previous
+    line ends "fifth") is a complete item, not a fragment. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    clean = _strip_trailing_footnote_markers(s)
+    if _is_sentence_terminated(clean):
+        return False
+    if clean.endswith(","):
+        return True
+    if clean.endswith(";") and not _LEDE_HEADLINE_VERB_RE.match(clean):
+        # A ";" after a headline verb separates headline items
+        # ("Affirms Fiscal 2027 Outlook ... 3% to 5%;", Estee Lauder
+        # — the next line is another headline, not a continuation), so
+        # it is not a cut; a prose ";" is.
+        return True
+    if clean.count("“") > clean.count("”"):
+        return True
+    words = [w.strip(",;:()").lower() for w in clean.split() if w.strip(",;:()")]
+    if words and words[-1] in _TRAILING_DANGLE_WORDS:
+        return True
+    if (
+        s[:1].islower()
+        and len(words) <= 4
+        and not re.search(r"[\d$%]", s)
+        and not _has_trailing_verb(s)
+        and _prev_line_unfinished(prev)
+    ):
+        return True
+    return False
+
+
+def _truncate_trailing_fragment(ln: str) -> str | None:
+    """Truncate a tail line at its last sentence terminator when the
+    text after it is an unfinished fragment (Coinbase's "...on that
+    transition. Our customers trust us to store more crypto than any
+    other company;" — the ";"-ended clause follows a terminated
+    sentence in the same line; Genuine Parts' "...comparable sales.
+    Segment"). Returns the truncated line, or None when there is no
+    terminator or the post-terminator text is a complete item.
+    The fragment is unfinished when it ends on "," / ";" / a dangling
+    function word, has unbalanced quotes, or is short (<=2 words)
+    with no verb and no figure. A ";" after a headline verb separates
+    headline items, not a sentence (Estee Lauder), so it never
+    truncates. An imperative-led fragment ("See page 5 for details")
+    and a figure-carrying one are complete items and block the
+    truncate; abbreviation dots ("Inc.", "U.S.") are never split
+    points. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return None
+    matches = list(_TRAILING_FRAGMENT_TERMINATOR_RE.finditer(s))
+    if not matches:
+        return None
+    for m in reversed(matches):
+        before = s[: m.start()].rstrip()
+        prev_word = before.split()[-1].strip(",;:()").lower() if before.split() else ""
+        if len(prev_word) <= 1 or prev_word in _TRAILING_ABBREV_WORDS:
+            continue
+        head, frag = s[: m.end()], s[m.end() :].strip()
+        if not frag:
+            return None
+        if frag[:1] in "▪■·○◦•":
+            return None
+        frag_words = [
+            w.strip(",;:()").lower() for w in frag.split() if w.strip(",;:()")
+        ]
+        if not frag_words:
+            return None
+        unfinished = (
+            frag.rstrip().endswith(",")
+            or (
+                frag.rstrip().endswith(";")
+                and not _LEDE_HEADLINE_VERB_RE.match(frag)
+            )
+            or frag_words[-1] in _TRAILING_DANGLE_WORDS
+            or frag.count("“") > frag.count("”")
+            or (
+                len(frag_words) <= 2
+                and not _has_trailing_verb(frag)
+                and not re.search(r"[\d$%]", frag)
+                and frag_words[0] not in _TRAILING_IMPERATIVE_WORDS
+            )
+        )
+        if not unfinished:
+            return None
+        return head.strip()
+    return None
+
+
+def _is_trailing_list_item_label(ln: str, prev: str) -> bool:
+    """True for a table/list row label sitting under a colon-ended
+    list intro ("Net earnings includes:" / "Other-than-temporary
+    impairment of investments in Kraft Heinz and in Occidental",
+    Berkshire — the intro's items are row labels, and the tail one
+    reads truncated). Guards: the intro is short (<=8 words) and ends
+    ":"; the label is long (>=8 words), verbless, figure-free (a
+    guidance line under an intro carries figures), not bullet-led,
+    not terminated, and carries a statement-label noun. The batch-226
+    colon rule then pops the intro itself, and the row-label
+    predicate pops the line above it — the cascade clears the whole
+    residue block. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    p = prev.strip()
+    if not p.endswith(":") or len(p.split()) > 8:
+        return False
+    words = [w.strip(",;:()").lower() for w in s.split() if w.strip(",;:()")]
+    if len(words) < 8:
+        return False
+    if re.search(r"[\d$%]", s):
+        return False
+    if not (set(words) & _TRAILING_LABEL_NOUNS):
+        return False
+    if _has_trailing_verb(s):
+        return False
+    return True
 
 
 def _is_lede_title_line(ln: str) -> bool:
@@ -3453,6 +3748,36 @@ def _clean_highlights_result(result: str) -> str:
             popped_residue = True
             continue
         if _is_trailing_table_header_orphan(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 227: a row label under a colon-ended list intro
+        # ("Net earnings includes:" / the impairment label, Berkshire).
+        # The intro is the previous non-blank line — blank lines
+        # separate the intro from its items in the stored text.
+        prev = ""
+        for _ln in reversed(trimmed[:-1]):
+            if _ln.strip():
+                prev = _ln.strip()
+                break
+        if _is_trailing_list_item_label(last, prev):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 227: a tail line whose last terminated sentence is
+        # followed by an unfinished fragment — truncate at the
+        # terminator instead of dropping the whole line (Coinbase,
+        # Genuine Parts, Kroger, ON Semiconductor).
+        trunc = _truncate_trailing_fragment(last)
+        if trunc is not None:
+            trimmed[-1] = trunc
+            break
+        # Batch 227: the wrap-fragment tail class — an unterminated
+        # prose tail ending mid-sentence (comma/semicolon, dangling
+        # function word, open quote, short lowercase noun phrase).
+        # `prev` is the previous non-blank line, computed above for
+        # the list-item-label check.
+        if _is_trailing_wrap_fragment(last, prev):
             trimmed.pop()
             popped_residue = True
             continue
