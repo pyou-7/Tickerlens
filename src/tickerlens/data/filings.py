@@ -6317,8 +6317,16 @@ def _cover_block_headline(lines: list[str], i: int) -> tuple[str, int] | None:
     return " ".join(parts), j
 
 # Guidance and Outlook section headings in earnings releases
+# Batch 229: "financial targets" joins the bare forms — Adobe heads its
+# guidance section "Financial Targets" (all 12 cached quarters), and the
+# old set could not see it: the guidance extractor returned None for
+# every ADBE quarter (its targets table was never anchored), and the
+# Highlights section collector ran past the heading into the targets
+# table, serving guidance rows as highlights in 6 quarters. A prose
+# line can only match when it starts with "Financial" and ends on the
+# targets tail, so no sentence qualifies.
 _GUIDANCE_HEADING_RE = re.compile(
-    r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
+    r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|financial\s+targets|"
     # Quarter-prefixed long forms: "Fourth Quarter Fiscal Year 2026 Business
     # Outlook" (AVGO), "Full Year Fiscal 2027 Guidance" / "First Quarter Fiscal
     # 2027 Guidance" (INTU), "Full-year 2026 guidance:" (JNJ). Up to five
@@ -9069,6 +9077,10 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 or _is_lede_period_header(follow)
                 or _is_lede_date_header(follow)
                 or _is_bare_period_fragment(follow)
+                or (
+                    _GUIDANCE_HEADING_RE.match(follow)
+                    and not _next_content_line_is_bullet(lines, j)
+                )
             ):
                 hit_table = True
                 break  # a table starts where the highlights end (AppLovin's
@@ -9098,6 +9110,16 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # same signal — the period header needs a year and the date
                 # header needs "ended" or a month, so the fragment alone
                 # matches neither and would be collected as content.
+                # Batch 229: a guidance-section heading ends the section
+                # the same way — Adobe's "Financial Targets" heading
+                # (now in _GUIDANCE_HEADING_RE) is followed by its
+                # targets table, which the collector served as highlights
+                # in 6 quarters because the heading matches no table
+                # shape above (no outlook/guidance word, so
+                # _is_lede_table_heading never fires). The bullet gate
+                # is the batch-195 one: a bare "Guidance" heading that
+                # introduces bullets (Air Products) is a sub-heading,
+                # not a table title, so it is kept as a label line.
             collected.append(follow)
             n_follow += 1
             if n_follow == 12 and snapshot is None:

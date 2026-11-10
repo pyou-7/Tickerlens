@@ -37,6 +37,7 @@ from tickerlens.data.filings import (
     _is_trailing_row_label,
     _is_trailing_wrap_fragment,
     _truncate_trailing_fragment,
+    extract_management_guidance,
     extract_press_release_highlights,
 )
 
@@ -160,9 +161,18 @@ def test_pltr_sub_bullet_kept() -> None:
 
 
 def test_adbe_guidance_range_kept() -> None:
+    # Batch 229: the EPS guidance range no longer serves as a
+    # highlight — the "Financial Targets" table it came from is
+    # guidance, and the section collector now ends at that heading.
+    # The range still exists, in the guidance extraction (Adobe's
+    # "Financial Targets" section is now a recognized guidance
+    # heading, so guidance extracts instead of returning None).
     hl = extract_press_release_highlights(_read("ADBE_2025-05-30.html"))
     assert hl is not None
-    assert "Earnings per share GAAP: $4.00 to $4.05" in hl
+    assert "Earnings per share GAAP: $4.00 to $4.05" not in hl
+    gd = extract_management_guidance(_read("ADBE_2025-05-30.html"))
+    assert gd is not None
+    assert "Earnings per share GAAP: $4.00 to $4.05" in gd
 
 
 def test_akam_footnote_asterisk_kept() -> None:

@@ -132,11 +132,18 @@ def test_cart_q3_2023_served_whole_at_8797_chars():
     assert "Includes cash and cash equivalents" in result
 
 
-def test_eqix_q2_2024_served_whole_at_7001_chars():
+def test_eqix_q2_2024_served_whole_at_3912_chars():
+    # Batch 229: was 7001 chars — the "Business Outlook" guidance prose
+    # (Q3 + full-year expectations) no longer serves as highlights: the
+    # section collector now breaks at a guidance heading, so the
+    # highlights end on the heat-export bullet instead. Still served
+    # whole (no "…").
     result = extract_press_release_highlights(_load("EQIX_2024-06-30.html"))
     assert result is not None
-    assert len(result) == 7001
+    assert len(result) == 3912
     assert not result.endswith("…")
+    assert "Business Outlook" not in result
+    assert "For the third quarter of 2024, the company expects revenues" not in result
 
 
 def test_ford_q1_2025_cut_before_safe_harbor_risk_list():

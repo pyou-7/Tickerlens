@@ -174,9 +174,21 @@ def test_pltr_flat_bullet_kept() -> None:
 
 
 def test_cor_guidance_range_kept() -> None:
+    # Batch 229: the pin's old assertion (highlights ending on the
+    # guidance-table row "5% to 7% growth $285.0B") pinned the defect
+    # itself — the "Recent Company Highlights" section ran through the
+    # "2026 Guidance Fiscal 2025 Actuals" table header into the
+    # guidance table. The section collector now breaks at that
+    # guidance heading, the bullet-less section fails qualification,
+    # and the lede (the real headline bullets + dateline + CEO quote)
+    # wins instead. The guidance range still exists — in the guidance
+    # extraction, not in highlights.
     hl = extract_press_release_highlights(_read("COR_2025-09-30.html"))
     assert hl is not None
-    assert _last(hl) == "5% to 7% growth $285.0B"
+    assert "5% to 7% growth $285.0B" not in hl
+    assert "2026 Guidance Fiscal 2025 Actuals" not in hl
+    assert "Revenue of $83.7 Billion for the Fourth Quarter" in hl
+    assert _last(hl).startswith("“Cencora furthered key initiatives")
 
 
 def test_cnc_single_value_row_kept() -> None:
