@@ -2401,11 +2401,23 @@ _HEADING_END_WORDS = frozenset(
 )
 
 
-def _is_trailing_heading(ln: str) -> bool:
+def _is_trailing_heading(
+    ln: str,
+    *,
+    end_words: frozenset = _HEADING_END_WORDS,
+    small_words: frozenset = _HEADING_SMALL_WORDS,
+) -> bool:
     """True for a heading-shaped line: short, unterminated, every word
     capitalized (or a number / small word), no figures or currency,
     ending with a section word, and never bullet- or dash-led (a quote
-    attribution is not a heading)."""
+    attribution is not a heading).
+
+    The word sets are parameters so the batch-225 final trim can use
+    its extended sets without touching the shared ones: _is_lede_title_line
+    reads this predicate too, and widening the shared sets would make
+    mid-lede title lines out of table headers ("Fourth Quarter Full Year")
+    and change what the lede collects — a different mechanism from the
+    trailing trim. Batch 225."""
     s = ln.strip()
     if not s or _BULLET_LEAD_RE.match(s):
         return False
@@ -2416,7 +2428,7 @@ def _is_trailing_heading(ln: str) -> bool:
     words = s.split()
     if not words or len(words) > 8:
         return False
-    if words[-1].strip(",;:").lower() not in _HEADING_END_WORDS:
+    if words[-1].strip(",;:").lower() not in end_words:
         return False
     for w in words:
         clean = w.strip(",;:")
@@ -2424,12 +2436,143 @@ def _is_trailing_heading(ln: str) -> bool:
             return False
         if clean[0].isdigit():
             continue
-        if clean in _HEADING_SMALL_WORDS:
+        if clean in small_words:
             continue
         if clean[0].isupper():
             continue
         return False
     return True
+
+
+# Batch-225 extended word sets for the FINAL trailing trim only (see the
+# _is_trailing_heading docstring — the shared sets stay narrow because
+# _is_lede_title_line reads them). End words the attested heading-tail
+# family needs: "work" (Accenture "Revenues by Type of Work"), "year"
+# (Caterpillar "Fourth Quarter Full Year"), "operations" (Digital Realty
+# "Adjusted Funds From Operations"), "liquidity" (Welltower "Capital
+# Activity and Liquidity"), "area" (Autodesk "Net Revenue by Geographic
+# Area"), "metrics" (Expedia "Financial Summary & Operating Metrics")
+# and "share" (Best Buy "Diluted Earnings per Share"). Small words:
+# "by" ("Revenues by Type of Work") and "per" ("Diluted Earnings per
+# Share"). Batch 225.
+_TRAILING_HEADING_END_WORDS = _HEADING_END_WORDS | {
+    "work",
+    "year",
+    "operations",
+    "liquidity",
+    "area",
+    "metrics",
+    "share",
+}
+_TRAILING_HEADING_SMALL_WORDS = _HEADING_SMALL_WORDS | {"by", "per"}
+
+
+# A "Table N." caption ("Table 1. Summary Financial Results Third
+# Quarter Nine Months" — Boeing's tail, 6 quarters): the table's rows
+# never follow in highlights, so the caption dangles. The "Table N."
+# prefix is itself the heading signal, so the end-word requirement is
+# waived — the remainder only has to be heading-shaped (capitalized /
+# small words / numbers / period words, no figures or currency).
+# Batch 225.
+_TRAILING_TABLE_HEADING_RE = re.compile(r"^table\s+\d+[.:]\s+", re.IGNORECASE)
+
+
+def _is_trailing_table_heading(ln: str) -> bool:
+    """True for a "Table N. ..." caption line at the highlights tail."""
+    s = ln.strip()
+    if not s or s.endswith((".", "!", "?", "…")):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    m = _TRAILING_TABLE_HEADING_RE.match(s)
+    if not m:
+        return False
+    words = s.split()
+    if len(words) > 12:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _TRAILING_HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+# Words a lowercase-led table caption may consist of ("Preliminary,
+# unaudited results" — AEP's tail; "Overall financial results" —
+# J&J's). A closed set on attested data: a wrapped prose fragment
+# ending in "results" ("... delivered strong quarterly results")
+# is not in it, because it carries a verb or other words. Batch 225.
+_TRAILING_CAPTION_RESULTS_WORDS = frozenset(
+    {"preliminary", "unaudited", "overall", "financial", "results"}
+)
+
+
+def _is_trailing_caption_results(ln: str) -> bool:
+    """True for a short lowercase-led caption ending in "results"."""
+    s = ln.strip()
+    if not s or s.endswith((".", "!", "?", "…")):
+        return False
+    if "$" in s or "%" in s or any(ch.isdigit() for ch in s):
+        return False
+    words = [w.strip(",;:") for w in s.split()]
+    if not words or len(words) > 4:
+        return False
+    if words[-1].lower() != "results":
+        return False
+    return all(w.lower() in _TRAILING_CAPTION_RESULTS_WORDS for w in words)
+
+
+def _is_trailing_heading_tail(ln: str) -> bool:
+    """True for any trailing-heading shape the final cleanup drops.
+
+    Batch 225: the heading-tail family the batch-157 test missed —
+    the plain heading test (now with the batch-225 end/small words),
+    a "Table N." caption, a lowercase-led results caption, and a
+    heading carrying one trailing parenthetical: a GAAP marker
+    ("Third Quarter Total Company Results (GAAP)", Colgate), a units
+    note ("Financial Summary & Operating Metrics (In millions except
+    per share amounts)", Expedia) or a segment list ("Household
+    (Bags and Wraps; Cat Litter; Grilling)", Clorox — a bare label
+    plus a semicolon list). The parenthetical branch strips exactly
+    one trailing group and re-tests the base, so a quote attribution
+    or a prose line with parens never qualifies: the base must itself
+    be heading-shaped, or a single capitalized label word.
+    """
+    if _is_trailing_heading(
+        ln,
+        end_words=_TRAILING_HEADING_END_WORDS,
+        small_words=_TRAILING_HEADING_SMALL_WORDS,
+    ):
+        return True
+    if _is_trailing_table_heading(ln):
+        return True
+    if _is_trailing_caption_results(ln):
+        return True
+    s = ln.strip()
+    if not s.endswith(")"):
+        return False
+    m = re.match(r"^(.*?)\s*\([^()]*\)\s*$", s)
+    if not m:
+        return False
+    base = m.group(1).strip()
+    if not base:
+        return False
+    if _is_trailing_heading(
+        base,
+        end_words=_TRAILING_HEADING_END_WORDS,
+        small_words=_TRAILING_HEADING_SMALL_WORDS,
+    ):
+        return True
+    if ";" in s and re.fullmatch(r"[A-Z][A-Za-z'&-]*", base):
+        return True
+    return False
 
 
 _TRAILING_COMPANY_SUFFIXES = frozenset(
@@ -2867,7 +3010,9 @@ def _clean_highlights_result(result: str) -> str:
         if _TRAILING_TABLE_INTRO_RE.match(last):
             trimmed.pop()
             continue
-        if _is_trailing_heading(last):
+        if _is_trailing_heading_tail(last):
+            # Batch 225: the full heading family (plain heading, "Table
+            # N." caption, results caption, parenthesized heading).
             trimmed.pop()
             continue
         if last == "-more-":
