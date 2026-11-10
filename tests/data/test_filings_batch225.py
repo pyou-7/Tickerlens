@@ -67,10 +67,17 @@ def test_ba_table_1_caption_dropped() -> None:
 
 
 def test_aep_preliminary_unaudited_results_dropped() -> None:
+    # Batch 226 update: the "AMERICAN ELECTRIC POWER" caps footer is
+    # now dropped too (batch 226's _is_trailing_caps_line — the footer
+    # is page furniture, and it became the tail once the caption was
+    # popped). The pin's intent — the caption is gone, the bullets
+    # stay — is unchanged; the footer assertion flips to the intended
+    # new behavior.
     hl = extract_press_release_highlights(_read("AEP_2024-09-30.html"))
     assert hl is not None
     assert "Preliminary, unaudited results" not in hl
-    assert "AMERICAN ELECTRIC POWER" in hl
+    assert "AMERICAN ELECTRIC POWER" not in hl
+    assert "Expands five-year capital plan to $54 billion" in hl
 
 
 def test_cat_fourth_quarter_full_year_dropped() -> None:

@@ -2544,21 +2544,29 @@ def _is_trailing_heading_tail(ln: str) -> bool:
     one trailing group and re-tests the base, so a quote attribution
     or a prose line with parens never qualifies: the base must itself
     be heading-shaped, or a single capitalized label word.
+
+    Batch 226: a trailing " - <period> <year>" suffix is stripped
+    first and the base re-tested ("Financial Summary & Operating
+    Metrics (In millions, except per share amounts) - Fourth Quarter
+    2023", Expedia — the title dangles once its table rows are
+    trimmed, and the suffix alone kept the heading test from firing).
     """
+    s = ln.strip()
+    m = _TRAILING_PERIOD_SUFFIX_RE.match(s)
+    probe = m.group(1).strip() if m else s
     if _is_trailing_heading(
-        ln,
+        probe,
         end_words=_TRAILING_HEADING_END_WORDS,
         small_words=_TRAILING_HEADING_SMALL_WORDS,
     ):
         return True
-    if _is_trailing_table_heading(ln):
+    if _is_trailing_table_heading(probe):
         return True
-    if _is_trailing_caption_results(ln):
+    if _is_trailing_caption_results(probe):
         return True
-    s = ln.strip()
-    if not s.endswith(")"):
+    if not probe.endswith(")"):
         return False
-    m = re.match(r"^(.*?)\s*\([^()]*\)\s*$", s)
+    m = re.match(r"^(.*?)\s*\([^()]*\)\s*$", probe)
     if not m:
         return False
     base = m.group(1).strip()
@@ -2570,7 +2578,7 @@ def _is_trailing_heading_tail(ln: str) -> bool:
         small_words=_TRAILING_HEADING_SMALL_WORDS,
     ):
         return True
-    if ";" in s and re.fullmatch(r"[A-Z][A-Za-z'&-]*", base):
+    if ";" in probe and re.fullmatch(r"[A-Z][A-Za-z'&-]*", base):
         return True
     return False
 
@@ -2623,6 +2631,383 @@ def _is_trailing_company_signature(ln: str) -> bool:
             continue
         return False
     return True
+
+
+# Batch 226: the table-residue tail class — stored/live highlights
+# ending on a flattened table row or label with no heading shape
+# (BlackRock/Berkshire row labels, Aon's units+period header, AEP's
+# all-caps page footer, Expedia's metric rows). _clean_highlights_result's
+# trailing trim is the single final-assembly point, so the predicates
+# live here, not in the shared lede helpers: _is_lede_table_line itself
+# is NOT consulted — its 262 stored-tail matches include genuine
+# content (Cencora's "5% to 7% growth $285.0B" guidance fragment,
+# Centene's "GAAP diluted EPS $ 1.36" single-value row, JPMorgan's
+# truncated prose), because the lede loop skips a line to free budget
+# for later lines while the final trim drops it for good. Each
+# predicate below drops only furniture, and the full-cache blast is
+# the arbiter for every one of them.
+_TRAILING_ROW_LABEL_END_WORDS = frozenset(
+    {
+        "shareholders",
+        "interests",
+        "revenue",
+        "revenues",
+        "income",
+        "earnings",
+        "equity",
+        "assets",
+        "liabilities",
+        "expenses",
+        "costs",
+        "sales",
+        "profit",
+        "margin",
+        # Batch 226 re-blast: "Net earnings per average equivalent
+        # Class A Share" (Berkshire) — a per-share row label, not a
+        # prose tail; the $ veto still keeps figure-carrying lines
+        # ("...dividends per common share and $0.42...") out.
+        "share",
+    }
+)
+_TRAILING_HEADER_ORPHAN_WORDS = frozenset(
+    {
+        "revenues",
+        "stock",
+        "split",
+        "impact",
+        "margin",
+        "op",
+        "gaap",
+        "non-gaap",
+        "adj",
+        "adjusted",
+    }
+)
+_TRAILING_UNITS_PHRASE_RE = re.compile(
+    r"in\s+(millions|thousands|billions)|except\s+per\s+share|"
+    r"except\s+percentages|\(millions|\(in\s+millions",
+    re.IGNORECASE,
+)
+_TRAILING_FIGURE_RANGE_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*%\s+to\s+\d+|"
+    r"\$\s?[\d,]+(?:\.\d+)?\s*(?:billions?|millions?|thousands?)?\s+to\s+\$"
+)
+# A table title's trailing period suffix ("Financial Summary &
+# Operating Metrics (In millions, except per share amounts) - Fourth
+# Quarter 2023", Expedia): the suffix is stripped and the base is
+# re-tested as a heading. Batch 226.
+_TRAILING_PERIOD_SUFFIX_RE = re.compile(
+    r"^(.*?)\s+-\s+(?:(?:First|Second|Third|Fourth)\s+Quarter|Full\s+Year|Q[1-4])"
+    r"\s+(?:19|20)\d\d\s*$",
+    re.IGNORECASE,
+)
+# Period words the shared _LEDE_PERIOD_TOKEN_RE lacks ("nine",
+# "months", "ended"): the final trim's own period-header vocabulary
+# — kept local so the lede loop's period header stays narrow.
+# Batch 226. Month names, day numbers and "year-to-date" join in
+# the batch-226 re-blast: AEP's flattened earnings table ends on
+# "Fourth Quarter ended December 31 Year-to-date ended December 31"
+# once its rows are trimmed, and that line is a period header with
+# no year to anchor it — the year lives on the popped line below.
+_TRAILING_PERIOD_WORDS = frozenset(
+    {
+        "nine",
+        "three",
+        "six",
+        "twelve",
+        "month",
+        "months",
+        "ended",
+        "years",
+        "quarters",
+        "variance",
+        "year-to-date",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    }
+)
+# Bare ordinal/period fragments ("Third Quarter", "First Quarter"):
+# a table's period header flattened onto one line with no year or
+# month to anchor it. Every word must be a period word — a prose
+# tail ("Third Quarter ended September 30, 2025 ...") carries a
+# month and digits, so it never qualifies. Batch 226 re-blast.
+_TRAILING_FRAGMENT_WORDS = frozenset(
+    {
+        "first",
+        "second",
+        "third",
+        "fourth",
+        "three",
+        "six",
+        "nine",
+        "twelve",
+        "quarter",
+        "quarters",
+        "half",
+        "year",
+        "years",
+        "month",
+        "months",
+        "ended",
+        "full",
+    }
+)
+
+
+def _is_trailing_row_label(ln: str) -> bool:
+    """True for a verbless financial-statement row label at the tail
+    ("Net earnings attributable to Berkshire shareholders", Berkshire;
+    "...attributable TO noncontrolling interests", BlackRock — the
+    label's values row was already dropped, so the label dangles;
+    "Adjusted1 operating income as a % of revenue", Best Buy).
+    Guards: not bullet-led, not terminated, no $ (a value-carrying
+    line is content), 2-14 words, ends in a closed set of statement
+    nouns, no standalone figure (a footnote digit glued to a word,
+    "Adjusted1", and a bare "%" in "as a % of revenue" are not
+    figures), no headline/quote verb, no mid-line sentence boundary.
+    A genuine bullet is terminated or figure-carrying, so it never
+    qualifies; a wrap fragment ends on a function word, not a
+    statement noun. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s:
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 14 or len(s) > 140:
+        return False
+    if words[-1].strip(",;:").lower() not in _TRAILING_ROW_LABEL_END_WORDS:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if re.fullmatch(r"[\d,]+(?:\.\d+)?%?", clean):
+            return False
+        if "%" in clean and clean != "%":
+            return False
+        if re.search(r"\d", clean) and not re.fullmatch(r"[A-Za-z]+[0-9]", clean):
+            return False
+    if re.search(r"[.!?]\s", s):
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    return True
+
+
+def _is_trailing_units_period_header(ln: str) -> bool:
+    """True for a units declaration glued to its period columns
+    ("(millions, except percentages and per share data) 2026 2025
+    Change 2026 2025 Change", Aon; "In millions, except per share
+    amounts 2024 2023 Change", CVS; "In thousands, except per share
+    data (unaudited) 2025 2024 % Change", MSCI) or a bare units
+    declaration the bare-units regexes miss ("In millions" alone,
+    Kraft Heinz — the capital form needs ", except ... data";
+    "(Amounts in thousands, except per share data)", W.R. Berkley —
+    the parenthesized form; "In millions, except per share data
+    (unaudited)", MSCI — the "(unaudited)" suffix). Guards: not
+    bullet-led, not terminated, a units phrase must be present, and
+    either 2+ years/dates or a Change word follows it, or the line IS
+    only the declaration (any leftover words must be "amounts",
+    "data" or "information"). A prose sentence that merely mentions
+    units ("In billions, ... revenue grew 8%") carries other words
+    after the phrase, so both branches keep it out. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if not _TRAILING_UNITS_PHRASE_RE.search(s):
+        return False
+    years = re.findall(r"\b(?:19|20)\d\d\b", s)
+    dates = re.findall(
+        r"\b(?:January|February|March|April|May|June|July|August|September|"
+        r"October|November|December)\s+\d{1,2},\s*(?:19|20)\d\d\b",
+        s,
+    )
+    has_change = bool(re.search(r"\bchange\b|% chg|% change", s, re.IGNORECASE))
+    if len(years) >= 2 or len(dates) >= 2 or (years and has_change):
+        return True
+    rest = re.sub(r"\(unaudited\)", " ", s, flags=re.IGNORECASE)
+    rest = _TRAILING_UNITS_PHRASE_RE.sub("", rest)
+    rest = re.sub(r"[(),;]", " ", rest)
+    leftover = {w.lower() for w in rest.split()}
+    # An empty leftover is the bare declaration itself ("In millions").
+    return leftover <= {"amounts", "data", "information"}
+
+
+def _is_trailing_caps_line(ln: str) -> bool:
+    """True for a short all-caps verbless line at the tail ("AMERICAN
+    ELECTRIC POWER" — AEP's page footer, served after the bullets
+    when the table below it is cut). Guards: 2-5 words, no digits/$/%,
+    not terminated, not bullet-led, no headline/quote verb. A genuine
+    all-caps sub-headline carries a verb ("MAINTAINS FISCAL YEAR
+    SALES ..."), so the verb veto is load-bearing. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if re.search(r"[\d$%]", s):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 5:
+        return False
+    if not s.isupper():
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    return True
+
+
+def _is_trailing_table_data_row(ln: str) -> bool:
+    """True for a table data row at the tail: a label plus 2+ period
+    values ("Booked room nights 97.4 89.3 9%", Expedia; "Organic
+    Sales Growth +1.4 %", Colgate; "Enterprise $ 13,814 $ 13,948
+    $ 41,691 $ 41,528", Best Buy; "GAAP 0.64 1.01 (0.37) 2.55 1.78
+    0.77", AEP). _is_lede_data_row supplies the density rule; the
+    final trim adds three guards the lede loop does not need. (1) A
+    flattened-list bullet ("◦ US commercial customer count grew 37%
+    ... to 181 customers in Q3 2023", Palantir — a real bullet the
+    25%-density branch reads as a row) is never a row: "▪■·○◦" are
+    not in _BULLET_LEAD_RE, so the refusal is explicit here. (2) The
+    density floor is 40%, not the 25% branch: a $-less prose sentence
+    ending in a figure ("...from 132 customers in Q3 2022 to 181
+    customers in Q3 2023", 26%) is prose, while every attested row
+    is >=40% (Colgate's "Organic Sales Growth +1.4 %" sits exactly
+    on the floor); the 25%-branch shapes (3-4-word labels at 33%)
+    stay unhandled at the tail rather than risk eating prose.
+    (3) The line must carry a label word (a bare value row — "8.9 %
+    8.5 %", Centene; "$2.65 17% $9.73 17%", Visa — is a metric
+    value, not a row, and its figures appear nowhere else) and must
+    not be a range statement ("5% to 7% growth $285.0B", Cencora —
+    a guidance fragment; the $-to-$ range is already exempt inside
+    _is_lede_data_row). Batch 226."""
+    if not _is_lede_data_row(ln):
+        return False
+    if ln[:1] in "▪■·○◦":
+        return False
+    if _TRAILING_FIGURE_RANGE_RE.search(ln):
+        return False
+    figures = _LEDE_FIGURE_RE.findall(ln)
+    tokens = ln.split()
+    value_figures = len(figures)
+    if tokens and _LEDE_YEAR_RE.fullmatch(tokens[0].rstrip(",")):
+        value_figures -= 1
+    key = tokens[-1].rstrip(",") if tokens else ""
+    if (
+        re.fullmatch(r"\([0-9a-zA-Z]\)", key)
+        and sum(1 for t in tokens if t.rstrip(",") == key) == 1
+        and (re.search(r"\d[\d,.]*%", ln) or "$" in ln)
+    ):
+        value_figures -= 1
+    value_figures = max(value_figures, 0)
+    if value_figures < 2 or value_figures / max(len(tokens), 1) < 0.4:
+        return False
+    for tok in tokens:
+        clean = tok.strip(",;:")
+        if re.fullmatch(r"[A-Za-z]{2,}", clean):
+            return True
+    return False
+
+
+def _is_trailing_period_header(ln: str) -> bool:
+    """True for a flattened period header the shared predicate misses:
+    every word is a period token and a year is present ("First Nine
+    Months 2026", Aon — "nine"/"months" are not in
+    _LEDE_PERIOD_TOKEN_RE, so _is_lede_period_header reads False).
+    A month name plus a day number anchors the header instead of a
+    year ("Fourth Quarter ended December 31 Year-to-date ended
+    December 31", AEP — the year lives on the popped line below).
+    The widened vocabulary is LOCAL to the final trim: the lede
+    loop's period header stays narrow (batch 225). Batch 226."""
+    words = ln.split()
+    if not 2 <= len(words) <= 10:
+        return False
+    has_year = any(re.fullmatch(r"\d{4}", w.strip(",;:")) for w in words)
+    has_month_day = any(
+        w.strip(",;:").lower() in _TRAILING_PERIOD_WORDS
+        and w.strip(",;:").lower()
+        in {
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+        }
+        for w in words
+    ) and any(
+        re.fullmatch(r"\d{1,2}", w.strip(",;:")) for w in words
+    )
+    if not (has_year or has_month_day):
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if re.fullmatch(r"\d{4}", clean):
+            continue
+        if re.fullmatch(r"\d{1,2}", clean):
+            continue
+        if _LEDE_PERIOD_TOKEN_RE.match(clean):
+            continue
+        if clean.lower() in _TRAILING_PERIOD_WORDS:
+            continue
+        return False
+    return True
+
+
+def _is_trailing_table_header_orphan(ln: str) -> bool:
+    """True for a dangling table header at the tail: a period header
+    ("Full Year 2024", Boeing; "Fiscal 2026 Fiscal 2025", FedEx),
+    a table header ("Metric Q1 2025 Q1 2024 Δ Y/Y", Expedia), a bare
+    period fragment ("Six Months", "Ended", BlackRock — batch 174),
+    a short header orphan of closed vocabulary ("Revenues",
+    Accenture; "Stock Split", Arista; "Impact", eBay; "GAAP
+    Non-GAAP", Intuit), or a letter-less, digit-less junk line
+    ("\\\\", Comcast; "¹", General Mills; "◾", Goldman). Guards:
+    not bullet-led, not terminated, no $ or % in the orphan branch.
+    A bare value line ("7.6 %", Centene) carries a digit, so the junk
+    branch never eats it. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if _is_lede_period_header(s) or _is_lede_table_header(s):
+        return True
+    if _is_trailing_period_header(s):
+        return True
+    if _is_bare_period_fragment(s):
+        return True
+    words = s.split()
+    if len(words) <= 3 and all(
+        w.strip(",;:").lower() in _TRAILING_FRAGMENT_WORDS for w in words
+    ):
+        return True
+    if "$" in s or "%" in s:
+        return False
+    if len(words) <= 2 and not re.search(r"\d", s):
+        if all(w.strip(",;:").lower() in _TRAILING_HEADER_ORPHAN_WORDS for w in words):
+            return True
+    if not re.search(r"[A-Za-z0-9]", s):
+        return True
+    return False
 
 
 def _is_lede_title_line(ln: str) -> bool:
@@ -3002,6 +3387,7 @@ def _clean_highlights_result(result: str) -> str:
         return "\n".join(lines).strip()
     body = lines[head_end:]
     trimmed = list(body)
+    popped_residue = False
     while trimmed:
         last = trimmed[-1].strip()
         if not last:
@@ -3009,23 +3395,27 @@ def _clean_highlights_result(result: str) -> str:
             continue
         if _TRAILING_TABLE_INTRO_RE.match(last):
             trimmed.pop()
+            popped_residue = True
             continue
         if _is_trailing_heading_tail(last):
             # Batch 225: the full heading family (plain heading, "Table
             # N." caption, results caption, parenthesized heading).
             trimmed.pop()
+            popped_residue = True
             continue
         if last == "-more-":
             # Batch 194: a page-continuation marker at the very tail
             # (a path that bypasses the lede/section loops, e.g. the
             # shareholder-letter or flat-table modes) is never content.
             trimmed.pop()
+            popped_residue = True
             continue
         if _is_trailing_company_signature(last):
             # Batch 194: a bare company-name signature at the very tail
             # (CarMax's "CarMax, Inc." page-2 header, pulled in when the
             # "-more-" skip freed a section slot) is page furniture.
             trimmed.pop()
+            popped_residue = True
             continue
         # Batch 178: a trailing bare units declaration (eBay's "in
         # millions, except per share data and percentages" — the next
@@ -3035,6 +3425,50 @@ def _clean_highlights_result(result: str) -> str:
         # directly, so the units fragment lands at the very end of the
         # assembled body and only this final trim can catch it.
         if _LEDE_BARE_UNITS_RE.match(last) or _LEDE_BARE_UNITS_LOWER_RE.match(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 226: the table-residue tail class — a flattened table
+        # row or label with no heading shape (Berkshire/BlackRock row
+        # labels, Aon's units+period header, AEP's all-caps page
+        # footer, Expedia's metric rows, dangling period/table headers).
+        # _is_lede_table_line is deliberately NOT consulted here: it
+        # also matches genuine content tails (guidance fragments,
+        # single-value rows, truncated prose) — see the batch-226
+        # module comment above the predicates.
+        if _is_trailing_row_label(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_units_period_header(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_caps_line(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_table_data_row(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_table_header_orphan(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 226: a short colon-ended line left dangling by the
+        # residue pops above ("EPS ($):" once its GAAP/operating rows
+        # are gone, AEP; "Net earnings includes:" once its label is
+        # gone, Berkshire). The popped-residue gate is load-bearing:
+        # a colon-ended line in an untouched result is a quote intro
+        # or a live list intro, never popped. The quote-verb veto
+        # keeps "...commented on the results:" safe.
+        if (
+            popped_residue
+            and last.endswith(":")
+            and len(last.split()) <= 6
+            and not _LEDE_QUOTE_VERB_RE.search(last)
+        ):
             trimmed.pop()
             continue
         break
