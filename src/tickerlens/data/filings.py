@@ -682,6 +682,123 @@ def _lede_item_still_unfinished(lede: list[str]) -> bool:
         or _lede_tail_quote_open(lede)
     )
 
+
+def _lede_next_line_continues(tail: str, nxt: str) -> bool:
+    """True when `nxt` is a wrapped continuation of the sentence `tail`
+    ends mid-way: the tail line is unterminated (no sentence
+    punctuation) and `nxt` starts with a lowercase letter.
+
+    Batch 224: the noun/number-ending hole. A cut landing on a line
+    ending in a noun or figure ("Operating income was $746 million",
+    "... related to the store portfolio") carries no unfinished
+    signal — no wrap tail, no comma, no open quote — so the finish
+    rule treats the item as complete and the trim cannot see it
+    either (it has no next line to look at). But the sentence
+    continues on the next line, and a wrapped continuation starts
+    lowercase ("in the fourth quarter of 2025,", "optimization
+    review as discussed below ...", "reported 2024 results, ...").
+    A new item never starts lowercase: bullets carry markers,
+    headings and datelines are capitalized, table rows are caught by
+    the table checks, so the lowercase lead is a tight signal. A
+    digit- or $-led line is deliberately NOT a continuation — a table
+    row can start with a figure. All 9 attested rows continue
+    lowercase (ABNB, CI, DG x4, HAL x3); the blast proves the
+    radius.
+
+    The unterminated gate is load-bearing: a terminated tail (a
+    closed quote, "...long-term growth prospects!”") followed by a
+    lowercase-led line is NOT a continuation — AJG's pointer line
+    ("reconciliation of the 2023 and 2022 provision ... is shown on
+    pages 14 and 15.") starts lowercase because it is the wrapped
+    tail of its own pointer sentence, not a continuation of the
+    quote. Without the gate the lookahead pulls the pointer in —
+    batch 222's regression, re-introduced by the first cut of this
+    fix and caught by its pins.
+    """
+    if _is_sentence_terminated(tail):
+        return False
+    s = nxt.strip()
+    if not s:
+        return False
+    if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if _is_lede_table_line(s) or _is_bare_highlights_heading(s):
+        return False
+    if _LEDE_FOOTNOTE_RE.match(s):
+        return False
+    return s[0].islower()
+
+
+def _lede_termination_ahead(
+    collected: list[str], next_lines: list[str], limit: int = 4
+) -> bool:
+    """True when the sentence the cap just cut terminates within the next
+    `limit` raw lines, so pulling a few more lines ends it cleanly
+    instead of stranding it mid-sentence.
+
+    Batch 224: the hard caps (lede 8 past budget, section 16, block 18)
+    are absolute — Halliburton Q4 2025's sentence terminates ONE line
+    past the block's 18-line cap ("$748 million in the third quarter
+    of 2025."), so the cap strands it and the post-selection trim then
+    walks the highlights back two more lines. The scan walks forward
+    from the next line while each line is a continuation of the same
+    sentence (unfinished by the finish rule's own signals, or followed
+    by a lowercase-led line) and returns True as soon as a line ends
+    the sentence with its quote closed. It stops — False — at a bullet,
+    heading, table line or boilerplate (a new item, not a continuation),
+    and at a line that ends in a noun or figure with no continuation
+    signal (the sentence's end is not visible from here). A colon does
+    NOT terminate here: it introduces a quote or a table, so only
+    ".", "!", "?" and "…" count, with the same trailing-quote/paren
+    tolerance as _is_sentence_terminated. The quote state is tracked
+    over the collected lines plus the scanned ones, so a multi-sentence
+    quote's first terminated line does not count while the quote is
+    still open. Bounded at `limit` lines past the cap, mirroring the
+    +4 completion allowance — the pull can run at most `limit` lines
+    past the hard cap, and only while termination stays in sight.
+    """
+    seen = list(collected)
+    window = next_lines[:limit]
+    if not window or not collected:
+        return False
+    # Entry gate: the first scanned line must continue the collected
+    # tail — the tail is unfinished by the finish rule's own signals,
+    # or it is unterminated and the next line starts lowercase. A
+    # terminated tail followed by a lowercase-led line (AJG's pointer
+    # line after a closed quote) is a new sentence's wrap tail, not a
+    # continuation — without this gate the scan would count the
+    # pointer's own termination as the sentence's end and pull it in.
+    if not (
+        _lede_item_still_unfinished(collected)
+        or _lede_next_line_continues(collected[-1], window[0])
+    ):
+        return False
+    for k, ln in enumerate(window):
+        s = ln.strip()
+        if not s:
+            return False
+        if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+            return False
+        if _is_lede_table_line(s) or _is_bare_highlights_heading(s):
+            return False
+        if _BOILERPLATE_RE.match(s):
+            return False
+        seen.append(s)
+        stripped = s.rstrip().rstrip("”\"'’)]}\")")
+        if stripped.endswith((".", "!", "?", "…")) and not _lede_tail_quote_open(
+            seen
+        ):
+            return True
+        if k + 1 >= len(window):
+            return False
+        nxt = window[k + 1]
+        if _lede_item_still_unfinished(seen) or _lede_next_line_continues(
+            seen[-1], nxt
+        ):
+            continue
+        return False
+    return False
+
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
 # Full-line (possibly repeated for multi-period headers) so a prose
@@ -7419,6 +7536,15 @@ def extract_press_release_highlights(
                         # finish decision. The 4-line overrun cap
                         # still bounds the pull-in.
                         or _lede_quote_is_open(lede)
+                        # Batch 224: the noun/number-ending hole — a
+                        # budget line ending in a noun or figure
+                        # ("Operating income was $746 million") looks
+                        # complete, but the sentence wraps onto the
+                        # next line. `ln` here IS that next line (the
+                        # first line past the budget): a lowercase
+                        # lead on an unterminated budget line means the
+                        # item is unfinished.
+                        or _lede_next_line_continues(lede[-1], ln)
                     )
                     finish_sentence = not marker_seen and finish_item
                 if not finish_item:
@@ -7463,8 +7589,33 @@ def extract_press_release_highlights(
                     # the budget: a quote that never closes (stray mark,
                     # batch 181) can cost at most 8 lines, and the
                     # post-loop trim drops the dangling tail when even 8
-                    # is not enough (AJG's 12-line quotes).
-                    if overrun >= 8 or not _lede_item_still_unfinished(lede):
+                    # is not enough (AJG's 12-line quotes). Batch 224:
+                    # the same allowance fires on the lookahead — `ln`
+                    # is the next candidate line, and a lowercase lead
+                    # means the sentence the cap just cut is still
+                    # running, even when its tail line ends in a noun
+                    # or figure with no other unfinished signal. And the
+                    # 8-line cap itself yields when the sentence
+                    # terminates just ahead (_lede_termination_ahead):
+                    # Halliburton's sentence ends one line past the cap,
+                    # so an absolute cap would strand it and the trim
+                    # would walk it back further — the pull runs at most
+                    # 4 lines past the cap, only while termination stays
+                    # in sight. The termination lookahead is gated on the
+                    # sentence still being unfinished (or the next line
+                    # continuing it): once the tail terminates, the pull
+                    # stops even when another terminated line sits ahead
+                    # — otherwise the allowance would keep pulling past
+                    # a completed quote into the pointer sentence after
+                    # it (CI's "is provided on the following page", AJG's
+                    # "shown on pages 14 and 15").
+                    term_ahead = _lede_termination_ahead(lede, lede_lines[i : i + 4])
+                    if not (
+                        _lede_item_still_unfinished(lede)
+                        or _lede_next_line_continues(lede[-1], ln)
+                    ):
+                        break
+                    if overrun >= 8 and not term_ahead:
                         break  # finishing cap: at most 8 lines past the budget
                 lede.append(ln)
                 in_table = False  # Batch 185: narrative resumes.
@@ -7812,8 +7963,29 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # attribution, open quote), allow up to 4 more lines so
             # the sentence can terminate and the quote close; bounded
             # at 18. The post-selection trim drops the dangling tail
-            # when even 18 is not enough.
-            if len(bullets) >= 18 or not _lede_item_still_unfinished(bullets):
+            # when even 18 is not enough. Batch 224: the same
+            # allowance fires on the lookahead — the next line
+            # (lines[idx + 1]) starting lowercase means the sentence
+            # the cap just cut is still running, even when its tail
+            # line ends in a noun or figure. And the 18-line cap
+            # itself yields when the sentence terminates just ahead
+            # (_lede_termination_ahead): Halliburton's sentence ends
+            # one line past the cap, so an absolute cap would strand
+            # it and the trim would walk it back further — the pull
+            # runs at most 4 lines past the cap, only while
+            # termination stays in sight. The termination lookahead is
+            # gated on the sentence still being unfinished (or the next
+            # line continuing it): once the tail terminates, the pull
+            # stops even when another terminated line sits ahead.
+            term_ahead = _lede_termination_ahead(bullets, lines[idx + 1 : idx + 5])
+            if not (
+                _lede_item_still_unfinished(bullets)
+                or _lede_next_line_continues(
+                    bullets[-1], lines[idx + 1] if idx + 1 < n else ""
+                )
+            ):
+                break
+            if len(bullets) >= 18 and not term_ahead:
                 break
     if len("\n".join(bullets)) >= 150:
         # Batch 140: drop lone-marker lines AFTER qualification, so the
@@ -8003,8 +8175,29 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # sentence can terminate and the quote close; bounded
                 # at 16. The post-selection trim in
                 # _extract_highlights_section drops the dangling tail
-                # when even 16 is not enough.
-                if n_follow >= 16 or not _lede_item_still_unfinished(collected):
+                # when even 16 is not enough. Batch 224: the same
+                # allowance fires on the lookahead — the next line
+                # (lines[j + 1]) starting lowercase means the sentence
+                # the cap just cut is still running, even when its tail
+                # line ends in a noun or figure. And the 16-line cap
+                # itself yields when the sentence terminates just ahead
+                # (_lede_termination_ahead) — the pull runs at most 4
+                # lines past the cap, only while termination stays in
+                # sight. The termination lookahead is gated on the
+                # sentence still being unfinished (or the next line
+                # continuing it): once the tail terminates, the pull
+                # stops even when another terminated line sits ahead.
+                term_ahead = _lede_termination_ahead(
+                    collected, lines[j + 1 : j + 5]
+                )
+                if not (
+                    _lede_item_still_unfinished(collected)
+                    or _lede_next_line_continues(
+                        collected[-1], lines[j + 1] if j + 1 < len(lines) else ""
+                    )
+                ):
+                    break
+                if n_follow >= 16 and not term_ahead:
                     break
         # Batch 222: the qualification checks judge the snapshot (the
         # section as the old 12-line cap saw it), never the

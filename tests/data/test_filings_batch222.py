@@ -105,16 +105,19 @@ def test_ajg_pointer_line_not_pulled() -> None:
 # --- live pins: trim drops the dangling tail -------------------------------
 
 
-def test_gev_unfinishable_quote_trimmed_to_dateline() -> None:
-    # GEV Q3 2025's quote needs 5 lines past the section cap; the
-    # allowance gives 4, so the trim drops the quote fragment back to
-    # the terminated dateline instead of serving "said GE Vernova CEO".
+def test_gev_quote_completes_past_section_cap() -> None:
+    # Batch 224 (renamed from test_gev_unfinishable_quote_trimmed_to_
+    # dateline): GEV Q3 2025's quote needs 5 lines past the section cap;
+    # the batch-222 allowance gives 4, so the trim used to drop the quote
+    # fragment back to the terminated dateline. The termination lookahead
+    # sees the quote's closing line just past the cap, so the section
+    # pulls it and the quote completes instead of being trimmed.
     hl = extract_press_release_highlights(_read("GEV_2025-09-30.html"))
     assert hl is not None
-    assert "said GE Vernova CEO" not in hl
-    assert "Scott Strazik" not in hl
+    assert "said GE Vernova CEO" in hl
+    assert "Scott Strazik" in hl
     assert _is_sentence_terminated(_last(hl))
-    assert hl.endswith("September 30, 2025.")
+    assert hl.endswith("decarbonize.”")
 
 
 def test_fdx_quote_fragment_trimmed() -> None:
