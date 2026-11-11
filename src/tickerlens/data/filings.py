@@ -10021,9 +10021,10 @@ _GUIDANCE_BUDGET_LOOKAHEAD_LINES = 20
 # the footnote-definition blocks, keeping the heading, the units line,
 # period sub-headings, prose and quotes. Anything that does not match
 # the clean shapes passes through untouched, so an ambiguous table
-# (Emerson's wrapped labels and line-split ranges, Autodesk's wrapped
-# header run, Delta's wordy "Greater than 10%" values) is served
-# exactly as before.
+# (Autodesk's wrapped header run, Delta's wordy "Greater than 10%"
+# values, GE's interleaved FCF/Conversion rows) is served exactly as
+# before. Batch 235: Emerson's wrapped labels now join ("Underlying
+# Sales Growth: 2% - 3% / 3% - 5%") instead of refusing.
 _GUIDANCE_VALUE_WORDS = frozenset(["up", "down", "n/a", "to"])
 _GUIDANCE_VALUE_SCALE_WORDS = frozenset(
     ["million", "millions", "billion", "billions", "thousand", "thousands", "percent"]
@@ -10049,6 +10050,11 @@ _GUIDANCE_LABEL_VERB_WORDS = frozenset(
         "remained", "remain", "came", "comes", "estimates", "estimate",
         "forecast", "forecasts", "project", "projects", "assume",
         "assumes", "believe", "believes", "guide", "guides",
+        # Batch 235: "add" / "subtract" — Elevance's "Add / (Subtract):"
+        # is an add/subtract list header, not a row label; without
+        # these it counts as a label and the wrapped-label guard
+        # refuses every row of the list below it.
+        "add", "subtract",
     ]
 )
 # A label never opens with a qualifier word: "at least $7,000" is a
@@ -10216,7 +10222,17 @@ def _is_guidance_table_label(ln: str) -> bool:
         return False
     if ln[0] in "•●○◦▪■·\"“(":
         return False
-    if ln.isupper():
+    # Batch 235: a short all-caps line is a metric, not a heading —
+    # Digital Realty's "G&A" is a row label. A heading is never
+    # followed by a value line, so the fuse loop (which requires one)
+    # cannot misfire on a real heading; longer all-caps lines stay
+    # excluded.
+    if ln.isupper() and len(ln.split()) > 2:
+        return False
+    # Batch 235: a bare value word is a value, never a label — "N/A"
+    # (DuPont's current-guidance cell, Visa's) fused as a label
+    # misattributes the next row's figures to it ("N/A: ~$0.43").
+    if ln.strip().rstrip(".:").lower() in _GUIDANCE_VALUE_WORDS:
         return False
     if _is_sentence_terminated(ln.rstrip().rstrip(":")):
         return False
@@ -10273,7 +10289,22 @@ def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
     (Delta's footnotes 1-4 end the section on an unterminated "4
     Introduced at November 2024 Investor Day"); anything else is left
     in place.
+
+    Batch 235: a block also drops when the prose after it terminates
+    within a few lines (Delta's footnotes end on an unterminated "1
+    Non-GAAP measures; ..." and the section's prose resumes after
+    them, wrapped over two lines — the definition is over, new content
+    began). And a bare-number footnote key ("1." on its own line,
+    Elevance) is merged with its definition line first, so the generic
+    opener sees "1. Adjustment item ..." and the block drops whole.
+    A prior/updated column header ("(Prior) April", "(Updated)") never
+    opens a block — the paren shape matches the footnote opener, and
+    the digit-led table row after it counts as a "plausible
+    continuation", which ate Bristol Myers' "2026 WW Revenue Growth*"
+    row whole. A block whose last line is a table row never drops,
+    for the same reason.
     """
+    lines = _merge_bare_number_footnotes(lines)
     out: list[str] = []
     i = 0
     seen_table = False
@@ -10289,6 +10320,12 @@ def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
             _is_guidance_value_line(ln) or _is_lede_data_row(ln)
         ):
             seen_table = True
+        # Batch 235: a prior/updated header is table chrome, not a
+        # footnote — it is dropped downstream by _clean_guidance_result.
+        if _is_guidance_prior_updated_header(ln):
+            out.append(ln)
+            i += 1
+            continue
         block = _footnote_def_block_len(lines, i)
         if not block and seen_table:
             block = _footnote_def_block_len(
@@ -10296,9 +10333,84 @@ def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
             )
         if block and block <= 10:
             last = lines[i + block - 1]
-            if _is_sentence_terminated(last) or i + block == len(lines):
+            if (
+                not _is_guidance_value_line(last)
+                and not _is_lede_data_row(last)
+                and _split_guidance_fused_row(last) is None
+                and (
+                    _is_sentence_terminated(last)
+                    or i + block == len(lines)
+                    or _prose_terminates_within(lines, i + block)
+                )
+            ):
                 i += block
                 continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+def _prose_terminates_within(
+    lines: list[str], j: int, limit: int = 3
+) -> bool:
+    """True when the prose starting at lines[j] reaches a terminated
+    sentence within `limit` lines — a wrapped prose sentence ("Given
+    current uncertainty, Delta is not reaffirming full year" / "2025
+    financial guidance ... improves.") still counts as new content
+    after a footnote block. Stops (False) at a table line, a footnote
+    opener, or the end of lines without termination."""
+    k = j
+    while k < len(lines) and k < j + limit:
+        ln = lines[k]
+        if (
+            _is_guidance_value_line(ln)
+            or _is_guidance_table_label(ln)
+            or _is_guidance_header_line(ln)
+            or _is_guidance_units_line(ln)
+            or _guidance_footnote_opener(ln)
+        ):
+            return False
+        if _is_sentence_terminated(ln):
+            return True
+        k += 1
+    return False
+
+
+def _merge_bare_number_footnotes(lines: list[str]) -> list[str]:
+    """Merge a bare-number footnote key with its definition line.
+
+    Elevance puts the key on its own line ("1." / "Adjustment item
+    resides in the Corporate & Other reportable segment.") — the
+    generic opener never fires on the bare "1.", so the definition
+    survives as stray prose. Merging gives "1. Adjustment item ...",
+    which the generic opener catches and the block logic drops whole
+    (including a wrapped second line). Only after a table value line
+    has been seen — a bare number ahead of any table could be an
+    ordered-list marker in prose — and only when the next line is
+    prose, never a table line, so a row is never absorbed into a key.
+    """
+    out: list[str] = []
+    seen_table = False
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if not _is_sentence_terminated(ln) and (
+            _is_guidance_value_line(ln) or _is_lede_data_row(ln)
+        ):
+            seen_table = True
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (
+            seen_table
+            and re.fullmatch(r"\d{1,3}[.)]", ln.strip())
+            and nxt.strip()
+            and not _is_guidance_value_line(nxt)
+            and not _is_guidance_table_label(nxt)
+            and not _is_guidance_header_line(nxt)
+            and not _is_guidance_units_line(nxt)
+        ):
+            out.append(f"{ln.strip()} {nxt.strip()}")
+            i += 2
+            continue
         out.append(ln)
         i += 1
     return out
@@ -10308,10 +10420,14 @@ def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
 # Low/High marker, or a period word. A pending header line is
 # droppable (in the Low/High range-join case) only when every word is
 # one of these — "June 30, 2024 Year Ended" keeps its month, so it is
-# never dropped, only emitted as context.
+# never dropped, only emitted as context. Batch 235: "guidance",
+# "gaap" and "non-gaap" — Salesforce's column headers are "Q4 FY25 /
+# Guidance5" and "GAAP Non-GAAP(1)"; without these they count as row
+# labels and the wrapped-label guard refuses the row below them.
 _GUIDANCE_HEADER_TOKEN_RE = re.compile(
     r"^(low|high|end|full|years?|quarters?|first|second|third|fourth|"
     r"fiscal|current|prior|updated|\(prior\)|\(updated\)|q[1-4]|"
+    r"guidance|gaap|non-gaap|"
     r"fy\d{2,4}|\d{4}e?|[1-4]q['’]?\d{2}e?)$",
     re.IGNORECASE,
 )
@@ -10335,9 +10451,22 @@ def _is_guidance_header_line(ln: str) -> bool:
         return True
     if _is_lede_period_header(ln) or _is_bare_period_fragment(ln):
         return True
-    return all(
-        _GUIDANCE_HEADER_TOKEN_RE.match(w.strip(",.:;")) for w in words
-    )
+    # Batch 235: a header word may carry a glued footnote key, a
+    # trailing digit, or asterisks ("Guidance5", "Non-GAAP(1)",
+    # "Current Guidance**") — try the raw token first (so "FY25"
+    # still matches as-is), then the key-stripped form. Stripping
+    # only ever adds matches for a header word plus a key; a
+    # non-header word ("Growth2") still fails.
+    def _header_token(w: str) -> bool:
+        tok = w.strip(",.:;")
+        if _GUIDANCE_HEADER_TOKEN_RE.match(tok):
+            return True
+        tok = re.sub(r"\*+$", "", tok)
+        tok = re.sub(r"\(\d{1,3}\)$", "", tok)
+        tok = re.sub(r"\d+$", "", tok)
+        return bool(_GUIDANCE_HEADER_TOKEN_RE.match(tok))
+
+    return all(_header_token(w) for w in words)
 
 
 def _is_guidance_header_token_line(ln: str) -> bool:
@@ -10438,20 +10567,130 @@ def _split_guidance_fused_row(ln: str) -> tuple[str, str] | None:
     return label, values
 
 
+_GUIDANCE_PRIOR_HEADER_RE = re.compile(r"^\(Prior\)(?:\s+[A-Za-z]+\d*)?$")
+_GUIDANCE_UPDATED_HEADER_RE = re.compile(r"^\(Updated\)\d*$")
+_GUIDANCE_REAFFIRMED_HEADER_RE = re.compile(r"^\(Reaffirmed\)\d*$")
+
+
+def _is_guidance_prior_updated_header(ln: str) -> bool:
+    """True for a Bristol Myers column header fragment: "(Prior)
+    April" / "(Prior)" / "(Updated)" / "(Updated)4" /
+    "(Reaffirmed)" — the prior-vs-updated columns of its guidance
+    table, flattened onto their own lines (BMY 2026-03-31 pairs each
+    bare month with its own marker line: "February" / "(Prior)" /
+    "April" / "(Reaffirmed)"). They are table chrome, not footnote
+    definitions (the probe flags them only because the paren shape
+    matches the footnote opener)."""
+    return bool(
+        _GUIDANCE_PRIOR_HEADER_RE.match(ln.strip())
+        or _GUIDANCE_UPDATED_HEADER_RE.match(ln.strip())
+        or _GUIDANCE_REAFFIRMED_HEADER_RE.match(ln.strip())
+    )
+
+
+def _is_bare_month_line(ln: str) -> bool:
+    """True for a line that is exactly one month name ("February") —
+    the first column of Bristol Myers' prior/updated header group."""
+    return (
+        len(ln.split()) == 1
+        and ln.strip().strip("(),:;").lower() in _GUIDANCE_MONTH_WORDS
+    )
+
+
+def _is_guidance_bare_value_word(ln: str) -> bool:
+    """True for a bare table value word on its own line ("Unchanged"
+    — First Solar's prior-column value). It is label-shaped, so
+    without this the wrapped-label guard refuses the row below it."""
+    return ln.strip().rstrip(".:").lower() == "unchanged"
+
+
+def _is_guidance_sub_label_line(ln: str) -> bool:
+    """True for a parenthetical-only sub-label line ("(Reported &
+    Ex-FX)" under Bristol Myers' "Total Revenues") — part of the row's
+    label, not a row of its own. A bare footnote key ("(2)") and the
+    prior/updated header fragments are not sub-labels."""
+    s = ln.strip()
+    if not re.fullmatch(r"\([^)]*\)", s):
+        return False
+    if re.fullmatch(r"\(\d{1,3}\)", s):
+        return False
+    # Batch 235: a parenthesized VALUE ("($35 - $40 million)") is
+    # not a sub-label — without the digit guard Digital Realty's
+    # first value line joins the label ("Net non-cash rent
+    # adjustments (1) ($35 - $40 million): ...").
+    if re.search(r"\d", s):
+        return False
+    if s in ("(Prior)", "(Updated)"):
+        return False
+    return any(ch.isalpha() for ch in s)
+
+
+def _carries_footnote_marker(ln: str) -> bool:
+    """True when a line carries a footnote marker: an asterisk, a
+    parenthesized key ("(2)", "(c)"), or a glued trailing digit
+    ("expenses1", "assets 3"). A wrapped-label fragment never carries
+    one — the key belongs to the complete label — so a marked line is
+    a complete row label (or a column header), never a fragment."""
+    s = ln.strip()
+    if "*" in s:
+        return True
+    if re.search(r"\([0-9a-z]\)", s):
+        return True
+    t = re.sub(r"\([0-9a-z]\)", "", s).replace("*", "")
+    return bool(re.search(r"\d$", t.strip()))
+
+
+def _is_wrapped_label_fragment(prev: str, cur: str) -> bool:
+    """True when prev is the first line of a label wrapped over two
+    lines (Emerson's "Underlying Sales" / "Growth") — the current row
+    must join with it, not fuse alone. Narrow on purpose: a longer
+    prev line is a section sub-heading ("Top-Line and Cost Structure",
+    "Rental rates on renewal leases", "Changes to Midpoint from
+    Previous Outlook(b)"), a bare value word ("Unchanged") is a value,
+    a header line is a column header, a marked prev line is itself a
+    row label (GE's "Operating Profit*", "Free cash flow*"), and a
+    current label carrying its own slash phrase ("U.S. Dollar / Pound
+    Sterling"), more than two words, or a footnote marker ("assets 3",
+    "International pass-through revenue(5)", "FCF* Conversion-b)") is
+    a complete metric — none of those is a wrapped fragment."""
+    if not _is_guidance_table_label(prev):
+        return False
+    if _is_guidance_header_line(prev):
+        return False
+    if _is_guidance_bare_value_word(prev):
+        return False
+    if _carries_footnote_marker(prev):
+        return False
+    if len(prev.split()) > 3:
+        return False
+    if len(cur.split()) > 2:
+        return False
+    if "/" in cur:
+        return False
+    if _carries_footnote_marker(cur):
+        return False
+    return True
+
+
 def _clean_guidance_result(collected: list[str]) -> list[str]:
     """Fuse split guidance-table rows and drop table chrome.
 
     Walks the footnote-cleaned collected lines with a pending buffer
     for the short non-prose lines ahead of a row (column headers,
-    period sub-headings). When a label line is followed by one or two
-    figure-only value lines, the row fuses to "Label: v1 / v2" — or
-    "Label: low – high" when the table's columns are exactly one
+    period sub-headings). When a label line is followed by one to four
+    figure-only value lines, the row fuses to "Label: v1 / v2 / ..." —
+    or "Label: low – high" when the table's columns are exactly one
     Low/High pair and the row carries exactly two figures in one value
     unit. A value line starting with a range dash continues the
     previous value ("$3.2B" + "- $3.3B" is one range, not two columns).
-    A label is refused when the previous line is itself a label (a
-    wrapped label — Emerson's "Underlying Sales" / "Growth") or when a
-    third value unit follows (a three-column table), and the pending
+    A label wrapped over two lines (Emerson's "Underlying Sales" /
+    "Growth") joins with the previous line — the previous line was
+    already emitted, so it is popped back and the joined label fuses.
+    A parenthetical sub-label line between a label and its values
+    ("Total Revenues" / "(Reported & Ex-FX)") joins the label, and
+    Bristol Myers' "(Prior) <Month>" / "(Updated)" column headers drop
+    with the bare month line heading their group. A fifth value unit
+    still refuses the row (an ambiguous table), and the pending
     headers then flush unchanged. The Low/High state is carried across
     the table's rows (AppLovin's first row drops the "1Q25 / Low /
     High" headers, so later rows range-join from the carried flag),
@@ -10534,6 +10773,17 @@ def _clean_guidance_result(collected: list[str]) -> list[str]:
         if _GUIDANCE_RULE_LINE_RE.match(ln):
             i += 1
             continue
+        if _is_guidance_prior_updated_header(ln):
+            # Batch 235: Bristol Myers' prior/updated column headers
+            # are table chrome — drop them, and the bare month line
+            # heading the group with them ("February" / "(Prior)
+            # April" / "(Updated)", or each month paired with its
+            # own marker: "February" / "(Prior)" / "April" /
+            # "(Reaffirmed)").
+            if out and _is_bare_month_line(out[-1]):
+                out.pop()
+            i += 1
+            continue
         if _is_guidance_units_line(ln):
             out.extend(pending)
             pending = []
@@ -10541,11 +10791,28 @@ def _clean_guidance_result(collected: list[str]) -> list[str]:
             i += 1
             continue
         if _is_guidance_table_label(ln) and i + 1 < len(lines):
-            # Collect the value units: 1-2 value lines, with a
-            # dash-led line merging onto the previous unit.
+            # A parenthetical sub-label line between the label and
+            # its values ("Total Revenues" / "(Reported & Ex-FX)" /
+            # "~$45.5 billion ...") joins the label.
+            label = ln.rstrip().rstrip(":")
+            j0 = i + 1
+            if (
+                i + 2 < len(lines)
+                and _is_guidance_sub_label_line(lines[i + 1])
+                and _is_guidance_value_line(lines[i + 2])
+            ):
+                label = f"{label} {lines[i + 1].strip()}"
+                j0 = i + 2
+            # Collect the value units: 1-4 value lines, with a
+            # dash-led line merging onto the previous unit. Batch
+            # 235: the cap was 2 — a three/four-column table (DuPont
+            # prior/current/Q4, Digital Realty's three As-of dates,
+            # GE's 2025-prior/updated + 2028-prior/updated) refused
+            # every row; the units are consecutive value lines after
+            # one label, so they belong to that row.
             units: list[str] = []
-            j = i + 1
-            while j < len(lines) and len(units) < 3:
+            j = j0
+            while j < len(lines) and len(units) < 5:
                 v = lines[j]
                 if not _is_guidance_value_line(v):
                     break
@@ -10554,20 +10821,51 @@ def _clean_guidance_result(collected: list[str]) -> list[str]:
                 else:
                     units.append(v.strip())
                 j += 1
-            if 1 <= len(units) <= 2:
-                # Refuse on a wrapped label: the previous original
-                # line is itself a label (Emerson's split label) —
-                # but a period sub-heading ("Year Ending") is a
-                # header line, not a wrapped label, so it never
-                # refuses (Akamai's "Revenue growth rates" row follows
-                # one).
+                # A lone closing-paren continuation (")%") belongs to
+                # the value just collected ("(5.8" + ")%" — Elevance's
+                # wrapped "(5.8%)").
+                while j < len(lines) and re.fullmatch(
+                    r"\)\s*[%BKMx]?", lines[j].strip()
+                ):
+                    units[-1] = units[-1] + lines[j].strip()
+                    j += 1
+            if 1 <= len(units) <= 4:
+                # A wrapped label (Emerson's "Underlying Sales" /
+                # "Growth") joins with the previous line instead of
+                # refusing: the previous line was already emitted as
+                # a standalone line, so pop it back and fuse the
+                # joined label. Anything else that merely looks like
+                # a label (a sub-heading, a column header, a bare
+                # value word) is not a fragment — see
+                # _is_wrapped_label_fragment — and the row fuses
+                # alone, leaving it in place.
                 prev = lines[i - 1] if i > 0 else ""
-                if not (
+                join = _is_wrapped_label_fragment(prev, ln)
+                # Batch 235: a short marked prev line is itself a row
+                # label (GE's "Operating Profit*", "Free cash flow*")
+                # whose values have not been served — the current row's
+                # values may be interleaved with them, so refuse and
+                # emit as-is rather than misattribute. A header line
+                # is exempt (a column header, not a row), and so is a
+                # long marked line (Crown Castle's "Changes to
+                # Midpoint from Previous Outlook(b)" is a column
+                # header, not a row label).
+                refuse = not join and bool(prev) and (
                     _is_guidance_table_label(prev)
                     and not _is_guidance_header_line(prev)
-                ):
+                    and len(prev.split()) <= 3
+                    and _carries_footnote_marker(prev)
+                )
+                if join:
+                    if out and out[-1] == prev:
+                        out.pop()
+                        label = f"{prev.rstrip().rstrip(':')} {label}"
+                    else:
+                        # The fragment is not the last emitted line
+                        # — do not join across whatever intervened.
+                        refuse = True
+                if not refuse:
                     resolve_pending()
-                    label = ln.rstrip().rstrip(":")
                     # A trailing qualifier belongs with the values —
                     # moved before the range-join so it is not lost
                     # when the join re-emits the figures.

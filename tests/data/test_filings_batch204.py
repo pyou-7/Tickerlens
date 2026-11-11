@@ -186,8 +186,9 @@ def test_csco_runaway_section_still_stops_at_budget():
 def test_skyd_runaway_section_still_stops_at_budget():
     # SKYD's fragmentary-table section runs 152 lines uncapped.
     # Batch 233: 30 -> 26 blocks as the split rows fuse.
+    # Batch 235: 26 -> 22 as the Studios row fuses (5 lines -> 1).
     g = _guidance("SKYD_2026-06-30.html")
-    assert len(g.split("\n\n")) == 26
+    assert len(g.split("\n\n")) == 22
 
 
 def test_lookahead_keeps_extras_when_section_ends_inside_window():

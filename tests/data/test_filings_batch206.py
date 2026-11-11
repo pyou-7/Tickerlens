@@ -98,7 +98,8 @@ def test_cci_2025_06_30_footer_pair_dropped():
     assert "CrownCastle.com" not in g
     assert "$10 million increase to site rental revenues" in g
     # Batch 233: 45 -> 33 blocks as the split table rows fuse.
-    assert len(g.split("\n\n")) == 33
+    # Batch 235: 33 -> 32 as Site rental billings fuses.
+    assert len(g.split("\n\n")) == 32
 
 
 def test_cci_2025_09_30_footer_pair_dropped():
@@ -134,7 +135,8 @@ def test_cci_2026_06_30_footer_pair_dropped():
     assert "CrownCastle.com" not in g
     assert "$5 million increase to site rental revenues" in g
     # Batch 233: 47 -> 36 blocks as the split table rows fuse.
-    assert len(g.split("\n\n")) == 36
+    # Batch 235: 36 -> 35 as Site rental billings fuses.
+    assert len(g.split("\n\n")) == 35
 
 
 def test_cci_2024_09_30_stays_furniture_free():
@@ -145,7 +147,8 @@ def test_cci_2024_09_30_stays_furniture_free():
     assert "CrownCastle.com" not in g
     assert "$125 to $150 million asset write-down" in g
     # Batch 233: 37 -> 29 blocks as the split table rows fuse.
-    assert len(g.split("\n\n")) == 29
+    # Batch 235: 29 -> 28 as Site rental billings fuses.
+    assert len(g.split("\n\n")) == 28
 
 
 # --- The bare-domain regex ----------------------------------------------

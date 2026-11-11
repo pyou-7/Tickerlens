@@ -181,7 +181,8 @@ def test_dlr_2025_06_30_guidance_is_core_ffo_outlook_not_toc():
     assert "Core FFO per share outlook to $7.15 - $7.25" in text
     assert "Constant-Currency Core FFO per share outlook to $7.10 - $7.20" in text
     assert text.startswith("2025 Outlook")
-    assert len(text) == 765
+    # Batch 235: 765 -> 775 as the three-column rows fuse (": " + " / ").
+    assert len(text) == 775
 
 
 def test_dlr_2024_06_30_guidance_is_core_ffo_outlook_not_toc():
@@ -189,7 +190,8 @@ def test_dlr_2024_06_30_guidance_is_core_ffo_outlook_not_toc():
     assert text is not None
     assert "Consolidated Quarterly Statements of Operations" not in text
     assert "Core FFO per share and Constant-Currency Core FFO per share outlook of $6.60 - $6.75" in text
-    assert len(text) == 735
+    # Batch 235: 735 -> 745 as the three-column rows fuse.
+    assert len(text) == 745
 
 
 def test_dlr_2026_09_30_guidance_is_core_ffo_outlook_not_toc():
@@ -197,7 +199,8 @@ def test_dlr_2026_09_30_guidance_is_core_ffo_outlook_not_toc():
     assert text is not None
     assert "Consolidated Quarterly Statements of Operations" not in text
     assert "Core FFO per share (excluding net promote) outlook to $8.30 - $8.35" in text
-    assert len(text) == 879
+    # Batch 235: 879 -> 891 as the four-column rows fuse.
+    assert len(text) == 891
 
 
 # Guard pins: no-change behavior — these pass on old code too.
@@ -212,7 +215,8 @@ def test_elv_guidance_summary_anchor_unchanged():
     text = extract_management_guidance(_load("ELV_2023-12-31.html"))
     assert text is not None
     # Batch 233: 359 -> 360 as the membership rows fuse.
-    assert len(text) == 360
+    # Batch 235: 360 -> 361 as the Employer Group row fuses ("(5.8" + ")%").
+    assert len(text) == 361
 
 
 def test_spg_guidance_reconciliation_anchor_unchanged():
