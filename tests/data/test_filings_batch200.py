@@ -176,7 +176,8 @@ def test_csco_editors_notes_tail_cut():
     g = _guidance("CSCO_2026-07-25.html")
     assert "Editor's Notes:" not in g
     assert "conference call to discuss" not in g
-    assert "Revenue $72.2 billion" in g
+    # Batch 233: the fused revenue row normalizes to "Label: values".
+    assert "Revenue: $72.2 billion" in g
 
 
 def test_dis_ceo_message_tail_cut():

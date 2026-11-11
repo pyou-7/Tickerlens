@@ -213,8 +213,12 @@ def test_real_gpc_2024_12_31_anchors_on_real_outlook_table():
     g = extract_management_guidance(_load("GPC_2024-12-31.html"))
     assert g is not None
     assert g.split("\n\n")[0] == "2025 Outlook"
+    # Batch 233: "Total sales growth" is the section's first fused row
+    # and has no table context yet, so it stays unfused; the later
+    # fused rows normalize to "Label: values" once the split
+    # "Diluted earnings per share(1)" row establishes the table.
     assert "Total sales growth 2% to 4%" in g
-    assert "Free cash flow $800 million to $1.0 billion" in g
+    assert "Free cash flow: $800 million to $1.0 billion" in g
     assert "ATLANTA" not in g
     assert "Fourth Quarter 2024 Results" not in g
 

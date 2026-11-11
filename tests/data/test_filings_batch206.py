@@ -76,7 +76,8 @@ def test_cci_2024_12_31_footer_pair_dropped_table_kept():
     assert "CrownCastle.com" not in g
     assert "$3,885 to $3,915" in g
     assert "AFFO" in g
-    assert len(g.split("\n\n")) == 30
+    # Batch 233: 30 -> 19 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 19
 
 
 def test_cci_2025_03_31_footer_pair_dropped_mid_table():
@@ -87,7 +88,8 @@ def test_cci_2025_03_31_footer_pair_dropped_mid_table():
     assert "CrownCastle.com" not in g
     assert "$3,885 to $3,915" in g
     assert "(in millions, except per share amounts) Full Year 2025" in g
-    assert len(g.split("\n\n")) == 37
+    # Batch 233: 37 -> 24 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 24
 
 
 def test_cci_2025_06_30_footer_pair_dropped():
@@ -95,7 +97,8 @@ def test_cci_2025_06_30_footer_pair_dropped():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$10 million increase to site rental revenues" in g
-    assert len(g.split("\n\n")) == 45
+    # Batch 233: 45 -> 33 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 33
 
 
 def test_cci_2025_09_30_footer_pair_dropped():
@@ -103,7 +106,8 @@ def test_cci_2025_09_30_footer_pair_dropped():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$10 million increase to site rental revenues" in g
-    assert len(g.split("\n\n")) == 42
+    # Batch 233: 42 -> 33 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 33
 
 
 def test_cci_2025_12_31_footer_pair_dropped():
@@ -111,7 +115,8 @@ def test_cci_2025_12_31_footer_pair_dropped():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$65 million reduction in annualized run-rate operating costs" in g
-    assert len(g.split("\n\n")) == 30
+    # Batch 233: 30 -> 21 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 21
 
 
 def test_cci_2026_03_31_two_footer_pairs_dropped():
@@ -119,7 +124,8 @@ def test_cci_2026_03_31_two_footer_pairs_dropped():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$40 million decrease in interest expense" in g
-    assert len(g.split("\n\n")) == 40
+    # Batch 233: 40 -> 29 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 29
 
 
 def test_cci_2026_06_30_footer_pair_dropped():
@@ -127,7 +133,8 @@ def test_cci_2026_06_30_footer_pair_dropped():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$5 million increase to site rental revenues" in g
-    assert len(g.split("\n\n")) == 47
+    # Batch 233: 47 -> 36 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 36
 
 
 def test_cci_2024_09_30_stays_furniture_free():
@@ -137,7 +144,8 @@ def test_cci_2024_09_30_stays_furniture_free():
     assert "The pathway to possible." not in g
     assert "CrownCastle.com" not in g
     assert "$125 to $150 million asset write-down" in g
-    assert len(g.split("\n\n")) == 37
+    # Batch 233: 37 -> 29 blocks as the split table rows fuse.
+    assert len(g.split("\n\n")) == 29
 
 
 # --- The bare-domain regex ----------------------------------------------

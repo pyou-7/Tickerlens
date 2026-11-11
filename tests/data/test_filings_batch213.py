@@ -95,9 +95,11 @@ def test_section_over_8000_still_truncates_at_word_boundary():
 def test_amt_2026_q1_completes_capex_table():
     out = extract_management_guidance(_load("AMT_2026-03-31.html"))
     assert out is not None
-    assert len(out) == 4198
+    # Batch 233: 4198 -> 4140 as the split rows fuse and the rule
+    # lines drop; the section now ends on the fused Total row.
+    assert len(out) == 4140
     assert not out.endswith("…")
-    assert out.endswith("Total $ 1,800 to $ 1,910\n\n_______________")
+    assert out.endswith("Total: $ 1,800 to $ 1,910")
     old = extract_management_guidance(_load("AMT_2026-03-31.html"), max_chars=4000)
     assert out.startswith(old[:-1].rstrip())
 
@@ -105,9 +107,13 @@ def test_amt_2026_q1_completes_capex_table():
 def test_clx_2026_q3_completes_adjusted_eps_table():
     out = extract_management_guidance(_load("CLX_2026-03-31.html"))
     assert out is not None
-    assert len(out) == 6079
+    # Batch 233: 6079 -> 6075 as the note row fuses with its values.
+    assert len(out) == 6075
     assert not out.endswith("…")
-    assert out.endswith("$ 0.90 $ (0.90) $ (0.90)")
+    assert out.endswith(
+        "Note: Approximate impact from incremental shipments related to "
+        "ERP transition: $ 0.90 $ (0.90) $ (0.90)"
+    )
     old = extract_management_guidance(_load("CLX_2026-03-31.html"), max_chars=4000)
     assert out.startswith(old[:-1].rstrip())
 
@@ -125,11 +131,12 @@ def test_chd_2025_q3_completes_quote_and_footnote_pointer():
 
 
 def test_cci_2023_q3_longest_genuine_section_completes():
-    # Longest genuine section in the 1,699-exhibit cache: 7614 chars,
-    # ending at its natural close.
+    # Longest genuine section in the 1,699-exhibit cache: 7621 chars,
+    # ending at its natural close. Batch 233: 7614 -> 7621 as the
+    # split table rows fuse.
     out = extract_management_guidance(_load("CCI_2023-09-30.html"))
     assert out is not None
-    assert len(out) == 7614
+    assert len(out) == 7621
     assert not out.endswith("…")
     assert out.endswith(
         "Additional information is available in Crown Castle's quarterly "

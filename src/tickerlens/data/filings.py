@@ -4756,7 +4756,10 @@ def _is_def_second_sentence(ln: str, def_words: set[str]) -> bool:
 
 
 def _footnote_def_block_len(
-    lines: list[str], i: int, include_paren: bool = True
+    lines: list[str],
+    i: int,
+    include_paren: bool = True,
+    opens: object = None,
 ) -> int:
     """Length of the footnote-definition block starting at lines[i], or 0.
 
@@ -4766,8 +4769,15 @@ def _footnote_def_block_len(
     Capped at 60 lines: a real footnote block is far shorter, and the
     cap bounds any misfire to one block instead of the document.
     include_paren=False for the headline loop (see _opens_footnote_def).
+    Batch 233: opens is the opener predicate, defaulting to
+    _opens_footnote_def — the guidance clean step passes a relaxed
+    opener (see _guidance_footnote_opener) so AppLovin's glued-key and
+    unterminated-wrap footnotes drop there without touching the
+    highlights/lede paths, which keep the strict opener.
     """
-    if i >= len(lines) or not _opens_footnote_def(
+    if opens is None:
+        opens = _opens_footnote_def
+    if i >= len(lines) or not opens(
         lines[i], lines[i + 1] if i + 1 < len(lines) else "", include_paren
     ):
         return 0
@@ -4782,7 +4792,7 @@ def _footnote_def_block_len(
             # Definition finished — chain only onto another definition,
             # or onto its own anaphoric second sentence ("These losses
             # were $92 million ..." — batch 168).
-            if _opens_footnote_def(
+            if opens(
                 nxt,
                 lines[i + n + 1] if i + n + 1 < len(lines) else "",
                 include_paren,
@@ -9994,6 +10004,637 @@ _MAX_GUIDANCE_LINES = 30
 _GUIDANCE_BUDGET_LOOKAHEAD_LINES = 20
 
 
+# Batch 233: the collected guidance of a table-shaped section is a
+# flattened split table — a bare label line, then one or two
+# figure-only value lines — plus footnote furniture. AppLovin's
+# "Advertising Revenue" / "$1,030 $1,050" and DuPont's "Net sales" /
+# "~$3,025" / "$12,800 - $12,900" read as a parts list, and the long
+# non-GAAP footnotes after the rows ("2Includes repurchased shares
+# ...", "3 We have not provided the forward-looking GAAP equivalents
+# ...") ride along because their openers evade the shared footnote
+# skip: the key is glued to its word ("2Includes") or the first line
+# is an unterminated wrap ("3 We have not ..."), and
+# _is_bare_numbered_footnote requires termination. The batch-231 fill
+# gate blocked all 11 rows (table fraction >= 0.2). _clean_guidance_result
+# fuses each split row into one readable line ("Advertising Revenue:
+# $1,030 – $1,050", "Net sales: ~$3,025 / $12,800 - $12,900") and drops
+# the footnote-definition blocks, keeping the heading, the units line,
+# period sub-headings, prose and quotes. Anything that does not match
+# the clean shapes passes through untouched, so an ambiguous table
+# (Emerson's wrapped labels and line-split ranges, Autodesk's wrapped
+# header run, Delta's wordy "Greater than 10%" values) is served
+# exactly as before.
+_GUIDANCE_VALUE_WORDS = frozenset(["up", "down", "n/a", "to"])
+_GUIDANCE_VALUE_SCALE_WORDS = frozenset(
+    ["million", "millions", "billion", "billions", "thousand", "thousands", "percent"]
+)
+# Finite verbs / auxiliaries a table label never carries: the guard
+# that keeps a wrapped prose fragment ("Revenue grew" / "$5.10 billion
+# ...") from fusing as a label + value row. Participles that do occur
+# in real labels ("Adjusted", "used" in "Shares used in ...") are
+# deliberately absent. Batch 233: base and plural forms included —
+# Cigna's "The foregoing statements represent the Company's current
+# estimates of The Cigna Group's 2025" slipped past "represents"
+# (plural "represent") and got chopped into a "Group's: 2025" row.
+_GUIDANCE_LABEL_VERB_WORDS = frozenset(
+    [
+        "was", "were", "is", "are", "has", "have", "had", "grew", "grows",
+        "grow", "increased", "increases", "increase", "decrease",
+        "decreased", "decreases", "rose", "rises", "rise", "fell",
+        "falls", "fall", "declined", "declines", "decline", "expects",
+        "expect", "expected", "anticipates", "anticipate", "reported",
+        "reports", "report", "reflects", "reflect", "represents",
+        "represent", "includes", "include", "included", "drove",
+        "driven", "improved", "continued", "continue", "remains",
+        "remained", "remain", "came", "comes", "estimates", "estimate",
+        "forecast", "forecasts", "project", "projects", "assume",
+        "assumes", "believe", "believes", "guide", "guides",
+    ]
+)
+# A label never opens with a qualifier word: "at least $7,000" is a
+# value with its qualifier, not a label + value row (Cigna), and
+# neither is "No change" or "Up 5%".
+_GUIDANCE_LABEL_QUALIFIER_WORDS = frozenset(
+    [
+        "at", "approximately", "about", "up", "more", "less", "greater",
+        "over", "under", "around", "no", "not",
+    ]
+)
+# A bare month word is a date fragment, never a metric label.
+_GUIDANCE_MONTH_WORDS = frozenset(
+    [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november",
+        "december",
+    ]
+)
+# A bare-numbered footnote opener in the relaxed (guidance-local) form:
+# digit key + space + capital ("3 We have not provided ...", "1 Non-GAAP
+# measures ...") or the key glued to its word ("2Includes repurchased
+# ..."). The shared _is_bare_numbered_footnote requires termination,
+# which is exactly what a wrapped definition's first line lacks.
+_GUIDANCE_FOOTNOTE_OPENER_RE = re.compile(
+    r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))"
+)
+# One figure inside a guidance value line: optional ~, optional parens
+# (a negative), optional spaced "$", digits with PROPER thousands
+# grouping, optional decimal, optional spaced "%"/"B"/"M"/"K"/"x"
+# suffix. "15 %" and "$ 967" match; a bare year ("2025") matches too,
+# so callers must already know the line is a value line before counting
+# figures in it. Batch 233: the grouping is strict (",\d{3}") — a
+# comma-separated footnote key ("1,2", "2,5" — Cigna's "Pre-Tax 1,2")
+# is not a figure, and the loose "\d[\d,]*" read it as one, fusing
+# the keys as the row's values. The digit run is \d{1,4}, not
+# \d{1,3}: a bare 4-digit year must match as ONE figure, or the
+# year filter in _guidance_value_figures never fires ("2025" split
+# into "202" + "5") and a prose sentence chops at its year.
+_GUIDANCE_FIGURE_RE = re.compile(
+    r"~?\(?\$?\s*\d{1,4}(,\d{3})*(\.\d+)?\s*(%|B|M|K|x)?\)?"
+)
+_GUIDANCE_UNITS_RE = re.compile(
+    r"^\(?in (millions|billions|thousands)\b"
+    r"|^dollars? in (millions|billions|thousands)\b",
+    re.IGNORECASE,
+)
+
+
+def _guidance_footnote_opener(
+    ln: str, nxt: str = "", include_paren: bool = True
+) -> bool:
+    """Guidance-local footnote opener: the shared shapes, plus the two
+    AppLovin/Delta shapes the shared opener misses (see
+    _GUIDANCE_FOOTNOTE_OPENER_RE). Used only by the guidance clean step
+    (via _footnote_def_block_len's opens parameter) — the
+    highlights/lede paths keep the strict opener. The attested
+    population is footnote-only: a cache-wide survey of collected
+    guidance finds 18 digit+capital lines and every one opens a
+    footnote definition (AppLovin x5, Bristol Myers x3, Delta x8,
+    Emerson x1), and the clean step additionally requires a table to
+    have been seen before the relaxed opener fires, so a numbered
+    prose item ahead of any table can never match.
+    """
+    if _opens_footnote_def(ln, nxt, include_paren):
+        return True
+    return bool(_GUIDANCE_FOOTNOTE_OPENER_RE.match(ln))
+
+
+def _is_guidance_value_line(ln: str) -> bool:
+    """True for a bare figure-only value line of a split guidance-table
+    row ("$1,030 $1,050", "~$3,025", "$12,800 - $12,900", "63% 64%",
+    "15 % 17 %", "$ 967 $ 986", "($0.70) – ($0.10)", "2x - 3x",
+    "$12.1 billion - $12.3 billion"). Every token must be a figure, a
+    scale word, or a joiner — a wordy value ("Greater than 10%",
+    "10% average", "2x or less") is not one, so Delta's wordy rows
+    never fuse, and a prose continuation with trailing words
+    ("$5.10 billion, up 10% year over year") fails on its words. A
+    lone dash is not a value line (no figure), so a line-split range
+    continuation ("- $1.30") is only ever consumed as a merge onto the
+    previous value, never as a row of its own.
+    """
+    if not ln or ln[0] in "•●○◦▪■·\"“":
+        return False
+    toks = ln.split()
+    if not toks:
+        return False
+    # Batch 233: a lone 1-3 digit line is a page number ("1" after the
+    # AppLovin table), never a value — without this the fuser attaches
+    # it to the last row ("63% 64% / 1"). The same for a lone
+    # parenthesized key ("(2)"), which is a footnote key, not a value,
+    # and for a lone 4-digit line, which is a year ("2024" ahead of
+    # Emerson's table) — the \d{1,4} figure regex would otherwise read
+    # it as a value line, the pending header never forms, and no fused
+    # row in the table normalizes.
+    if len(toks) == 1 and (
+        re.fullmatch(r"\d{1,3}", toks[0])
+        or re.fullmatch(r"\(\d{1,3}\)", toks[0])
+        or re.fullmatch(r"\d{4}", toks[0])
+    ):
+        return False
+    for t in toks:
+        s = t.strip("(),")
+        if s in ("-", "–", "—", "~", "%", "$", ">", "<"):
+            continue
+        if s.lower() in _GUIDANCE_VALUE_WORDS:
+            continue
+        if s.lower() in _GUIDANCE_VALUE_SCALE_WORDS:
+            continue
+        if _GUIDANCE_FIGURE_RE.fullmatch(s):
+            continue
+        return False
+    return bool(re.search(r"\d", ln))
+
+
+def _guidance_value_figures(ln: str) -> list[str]:
+    """Figure spans of a value line, with inner spaces normalized
+    ("$ 967" -> "$967", "15 %" -> "15%"). A bare parenthesized key
+    ("(1)", "(2)") is a footnote key, never a figure — without this
+    filter Akamai's valueless "Revenue growth rates year-over-year*(2)"
+    splits as label + "(2)", and a "(1) $1.91 - $1.97" unit counts
+    three figures instead of two, blocking its range-join. A bare
+    four-digit number is a year, not a value, and is filtered for the
+    same reason (Cigna's "... Group's 2025" must never split on it)."""
+    out = []
+    for m in _GUIDANCE_FIGURE_RE.finditer(ln):
+        fig = m.group(0).replace(" ", "")
+        if re.fullmatch(r"\(\d{1,3}\)", fig):
+            continue
+        if re.fullmatch(r"\d{4}", fig):
+            continue
+        # Batch 233: a bare digit that is one half of a comma-separated
+        # footnote key ("1,2") is not a figure — the strict thousands
+        # grouping stops "1,2" matching as one figure, but the regex
+        # still matches its "1" and "2" separately, so the split
+        # guard above would see two figures and fuse the keys as
+        # the row's values ("Pre-Tax: 1,2").
+        start, end = m.span()
+        if (
+            end < len(ln)
+            and ln[end] == ","
+            and end + 1 < len(ln)
+            and ln[end + 1].isdigit()
+        ):
+            continue
+        if start > 1 and ln[start - 1] == "," and ln[start - 2].isdigit():
+            continue
+        out.append(fig)
+    return out
+
+
+def _is_guidance_table_label(ln: str) -> bool:
+    """True for a bare metric label of a split guidance-table row
+    ("Advertising Revenue", "Net sales", "Operating EBITDA(2)",
+    "CASM excluding net special items, fuel and profit sharing2").
+    Short, unterminated, digit-free once footnote keys are stripped,
+    and carrying no finite verb — a wrapped prose fragment ("Revenue
+    grew") fails on the verb, a fused row ("Total revenue $5.25
+    billion ...") fails on its figures, a period sub-heading ("Q3 FY
+    2024", "Full Year 2025E") fails on its digits, and a Low/High
+    column header fails explicitly. A trailing ":" is allowed (the
+    fuse strips it before joining).
+    """
+    if not ln or len(ln) > 90 or ln[0].isdigit():
+        return False
+    if ln[0] in "•●○◦▪■·\"“(":
+        return False
+    if ln.isupper():
+        return False
+    if _is_sentence_terminated(ln.rstrip().rstrip(":")):
+        return False
+    words = ln.split()
+    # Batch 233: the cap is 12 words — Akamai's "Shares used in
+    # non-GAAP per diluted share calculations * (in millions)" is 11,
+    # and a longer label is still a noun phrase (the verb guard, not
+    # the cap, is what keeps prose fragments out).
+    if not 1 <= len(words) <= 12:
+        return False
+    # Batch 233: a bare month word is a date fragment ("December 31,"),
+    # never a metric — Elevance's period column headers must stay
+    # as-is rather than fusing to "December: 31,".
+    if len(words) == 1 and words[0].strip("(),:;").lower() in _GUIDANCE_MONTH_WORDS:
+        return False
+    # Batch 233: a label carries an alphabetic word ("+$25" is a value,
+    # not a label + value) and never opens with a qualifier ("at least
+    # $7,000" is a qualified value, not a label + value).
+    if not any(ch.isalpha() for ch in ln):
+        return False
+    if words[0].strip("(),:;").lower() in _GUIDANCE_LABEL_QUALIFIER_WORDS:
+        return False
+    if ln.strip().lower() in ("low", "high", "low end", "high end"):
+        return False
+    if _is_guidance_period_label(ln):
+        return False
+    if any(
+        w.strip("(),:;").lower() in _GUIDANCE_LABEL_VERB_WORDS for w in words
+    ):
+        return False
+    s = re.sub(r"\([0-9a-z]\)", "", ln)
+    s = re.sub(r"\d+$", "", s)
+    s = s.replace("*", "")
+    return not re.search(r"\d", s)
+
+
+def _is_guidance_units_line(ln: str) -> bool:
+    """True for a table units declaration ("(In millions, except
+    percentages)", "Dollars in millions, unless noted") — context for
+    the figures that follow, kept as its own line and never treated as
+    a column header."""
+    return bool(_GUIDANCE_UNITS_RE.match(ln))
+
+
+def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
+    """Drop footnote-definition blocks inside collected guidance.
+
+    The shared opener (via _footnote_def_block_len) catches the
+    stragglers the in-loop skip missed; the relaxed opener additionally
+    catches AppLovin's glued-key and unterminated-wrap footnotes, but
+    only once a table value line has been seen — footnotes in guidance
+    tables always follow the rows. A block drops only when it terminates
+    within 10 lines, or when it runs to the end of the collected lines
+    (Delta's footnotes 1-4 end the section on an unterminated "4
+    Introduced at November 2024 Investor Day"); anything else is left
+    in place.
+    """
+    out: list[str] = []
+    i = 0
+    seen_table = False
+    while i < len(lines):
+        ln = lines[i]
+        # Batch 233: a fused table row ("Total Advertising Revenue
+        # $1,195 $1,215") is table evidence too — AppLovin 2025-03-31
+        # has no split value line, so the bare-value test alone never
+        # arms the relaxed opener and its footnotes survive. A
+        # terminated prose line never counts (the data-row predicate's
+        # own guard notwithstanding, check it here).
+        if not _is_sentence_terminated(ln) and (
+            _is_guidance_value_line(ln) or _is_lede_data_row(ln)
+        ):
+            seen_table = True
+        block = _footnote_def_block_len(lines, i)
+        if not block and seen_table:
+            block = _footnote_def_block_len(
+                lines, i, opens=_guidance_footnote_opener
+            )
+        if block and block <= 10:
+            last = lines[i + block - 1]
+            if _is_sentence_terminated(last) or i + block == len(lines):
+                i += block
+                continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+# One token of a guidance-table column header: a quarter, a year, a
+# Low/High marker, or a period word. A pending header line is
+# droppable (in the Low/High range-join case) only when every word is
+# one of these — "June 30, 2024 Year Ended" keeps its month, so it is
+# never dropped, only emitted as context.
+_GUIDANCE_HEADER_TOKEN_RE = re.compile(
+    r"^(low|high|end|full|years?|quarters?|first|second|third|fourth|"
+    r"fiscal|current|prior|updated|\(prior\)|\(updated\)|q[1-4]|"
+    r"fy\d{2,4}|\d{4}e?|[1-4]q['’]?\d{2}e?)$",
+    re.IGNORECASE,
+)
+
+
+def _is_guidance_header_line(ln: str) -> bool:
+    """True for a column-header / period-label line held in pending
+    ahead of a row ("1Q25", "Low", "High", "Full Year 2025E", "Three
+    Months Ended", "Q3 FY 2024", "FOURTH QUARTER 2024"). Every word
+    must be header vocabulary, or the line must be an all-caps period
+    label — so a fused content row ("Available seat miles +3.0% –
+    +5.0%") never lands in pending, where a later range-join could
+    drop it as a header.
+    """
+    words = ln.split()
+    if not 1 <= len(words) <= 10:
+        return False
+    if ln.isupper():
+        return True
+    if _is_guidance_period_label(ln):
+        return True
+    if _is_lede_period_header(ln) or _is_bare_period_fragment(ln):
+        return True
+    return all(
+        _GUIDANCE_HEADER_TOKEN_RE.match(w.strip(",.:;")) for w in words
+    )
+
+
+def _is_guidance_header_token_line(ln: str) -> bool:
+    """True when a pending header line is droppable in the Low/High
+    range-join case: it is a column header ("Low", "High", "Low End
+    High End") or a bare quarter token ("1Q25", "1Q'25E"). A period
+    sub-heading with real words ("Full Year 2024", "Full Year 2025E")
+    is never one — Centene drops its "Full Year 2024" line otherwise,
+    losing the table's period — and neither is a bare year ("2025").
+    Dropping is safe only because the section heading carries the
+    period and the dash carries the Low/High columns."""
+    words = ln.split()
+    if not words:
+        return False
+    if any(w.strip(",.:;").lower() in ("low", "high") for w in words):
+        return True
+    if len(words) == 1:
+        return bool(
+            re.fullmatch(
+                r"([1-4]q['’]?\d{2}e?|q[1-4]['’]?\d{2}e?|q[1-4])",
+                words[0].strip(",.:;"),
+                re.IGNORECASE,
+            )
+        )
+    return False
+
+
+def _move_label_qualifier(label: str, values: str) -> tuple[str, str]:
+    """Move a trailing qualifier off a fused label and onto its values
+    ("GAAP diluted EPS >" + "$5.94" -> "GAAP diluted EPS" + "> $5.94";
+    "... share At least" + "$37.20" -> "... share" + "At least $37.20")
+    — the qualifier belongs with the figure, not the metric, and
+    leaving it on the label reads as "EPS >: $5.94" or
+    "Tax impact ... Approximately: ($0.89)". Only "><~", a trailing
+    standalone dash token (the first column's missing-value marker),
+    a trailing "at least" / "up to" phrase, or a single trailing
+    qualifier word move."""
+    if label and label[-1] in "><~":
+        return label[:-1].rstrip(), f"{label[-1]} {values}"
+    words = label.split()
+    # A trailing standalone dash token is the first column's
+    # missing-value marker, not part of the metric ("Amortization of
+    # Acquisition-related Inventory Step-up ---" + "$0.38" -> "Step-up:
+    # --- $0.38", not "Step-up ---: $0.38").
+    if words and words[-1] in ("-", "--", "---", "–", "—"):
+        return " ".join(words[:-1]), f"{words[-1]} {values}"
+    if len(words) > 2 and " ".join(
+        w.lower().strip("(),:;") for w in words[-2:]
+    ) in ("at least", "up to"):
+        return " ".join(words[:-2]), f"{words[-2]} {words[-1]} {values}"
+    if (
+        len(words) > 1
+        and words[-1].lower().strip("(),:;")
+        in _GUIDANCE_LABEL_QUALIFIER_WORDS
+    ):
+        return " ".join(words[:-1]), f"{words[-1]} {values}"
+    return label, values
+
+
+# A units line with its Low/High column headers fused onto it
+# ("(In millions, except percentages) Low High" — AppLovin 2026):
+# split into the units line plus the header lines, so the headers
+# reach pending and the rows range-join like the other quarters.
+_GUIDANCE_UNITS_LOW_HIGH_RE = re.compile(
+    r"^(\([^)]*\)\s+)(Low\s+High|Low|High)\s*$", re.IGNORECASE
+)
+
+
+def _split_guidance_fused_row(ln: str) -> tuple[str, str] | None:
+    """Split an already-fused guidance-table row ("Revenue $1,320
+    $1,340", "Apps Revenue 325 335") into (label, values), or None.
+
+    The label is the leading text before the first figure and must
+    itself be table-label shaped (so a prose line with figures —
+    "Cisco estimates that GAAP EPS will be $0.51 ..." — fails on its
+    verb, and a fused range with a "+" prefix — American's "Available
+    seat miles +3.0% – +5.0%" — fails because "+5.0%" is not a figure
+    span, so the values tail is not figure-only).
+    """
+    m = _GUIDANCE_FIGURE_RE.search(ln)
+    if not m:
+        return None
+    label = ln[: m.start()].strip()
+    values = ln[m.start() :].strip()
+    if not label or not values:
+        return None
+    if not _is_guidance_table_label(label):
+        return None
+    if not _is_guidance_value_line(values):
+        return None
+    # Batch 233: the values tail must carry a real figure — a bare
+    # parenthesized key ("(2)") is not one, so a valueless label that
+    # merely carries a footnote key never splits ("Revenue growth rates
+    # year-over-year*(2)" stays whole; its values, when present, sit on
+    # the next line and fuse there).
+    if not _guidance_value_figures(values):
+        return None
+    return label, values
+
+
+def _clean_guidance_result(collected: list[str]) -> list[str]:
+    """Fuse split guidance-table rows and drop table chrome.
+
+    Walks the footnote-cleaned collected lines with a pending buffer
+    for the short non-prose lines ahead of a row (column headers,
+    period sub-headings). When a label line is followed by one or two
+    figure-only value lines, the row fuses to "Label: v1 / v2" — or
+    "Label: low – high" when the table's columns are exactly one
+    Low/High pair and the row carries exactly two figures in one value
+    unit. A value line starting with a range dash continues the
+    previous value ("$3.2B" + "- $3.3B" is one range, not two columns).
+    A label is refused when the previous line is itself a label (a
+    wrapped label — Emerson's "Underlying Sales" / "Growth") or when a
+    third value unit follows (a three-column table), and the pending
+    headers then flush unchanged. The Low/High state is carried across
+    the table's rows (AppLovin's first row drops the "1Q25 / Low /
+    High" headers, so later rows range-join from the carried flag),
+    and a header run without Low/High — or a prose line — resets it,
+    so a later table is judged on its own headers. A fused row ("Apps
+    Revenue 325 335") range-joins the same way when the flag is set.
+    Pending headers drop only the pure-token lines in the Low/High
+    case (the dash encodes them and the heading carries the period);
+    otherwise they emit as-is, so period sub-headings ("Q3 FY 2024",
+    "FY 2024", "FOURTH QUARTER 2024") survive as section structure.
+    Prose, quotes, bullets, units lines and unjoinable rows pass
+    through untouched, and a pure rule line ("____...") is dropped as
+    table chrome. The heading (collected[0]) is always kept.
+    """
+    if not collected:
+        return collected
+    lines = _clean_guidance_footnotes(collected[1:])
+    # Split a units line carrying its Low/High headers ("(In millions,
+    # except percentages) Low High") so the headers reach pending.
+    split_lines: list[str] = []
+    for ln in lines:
+        m = _GUIDANCE_UNITS_LOW_HIGH_RE.match(ln)
+        if m:
+            split_lines.append(m.group(1).strip())
+            split_lines.extend(m.group(2).split())
+        else:
+            split_lines.append(ln)
+    lines = split_lines
+    out: list[str] = [collected[0]]
+    pending: list[str] = []
+    range_join = False
+    seen_row = False
+    i = 0
+
+    def resolve_pending() -> None:
+        """Resolve the pending header run at a row: a Low/High pair
+        drops its pure-token lines and arms range-joining; any other
+        non-empty run emits as-is and disarms it; an empty run leaves
+        the carried state alone (same table continues)."""
+        nonlocal pending, range_join
+        if not pending:
+            return
+        low_high = sum(
+            len(re.findall(r"\b(low|high)\b", p, re.IGNORECASE))
+            for p in pending
+        )
+        if low_high == 2:
+            for p in pending:
+                if not _is_guidance_header_token_line(p):
+                    out.append(p)
+            range_join = True
+        else:
+            out.extend(pending)
+            range_join = False
+        pending = []
+
+    def range_join_units(units: list[str]) -> str | None:
+        """"low – high" for a single value unit carrying exactly two
+        figures and no range of its own, when the table is Low/High —
+        else None (the caller then joins with " / "). A leading
+        qualifier ("> $5.94" — moved off the label) is preserved in
+        front of the joined range."""
+        if not range_join or len(units) != 1:
+            return None
+        unit = units[0]
+        qual = ""
+        m = re.match(r"^([><~])\s+", unit)
+        if m:
+            qual = m.group(1) + " "
+            unit = unit[m.end() :]
+        figs = _guidance_value_figures(unit)
+        if len(figs) == 2 and not re.search(
+            r"\d\s*[-–—]\s*\$?\d|\bto\b", unit
+        ):
+            return f"{qual}{figs[0]} – {figs[1]}"
+        return None
+
+    while i < len(lines):
+        ln = lines[i]
+        if _GUIDANCE_RULE_LINE_RE.match(ln):
+            i += 1
+            continue
+        if _is_guidance_units_line(ln):
+            out.extend(pending)
+            pending = []
+            out.append(ln)
+            i += 1
+            continue
+        if _is_guidance_table_label(ln) and i + 1 < len(lines):
+            # Collect the value units: 1-2 value lines, with a
+            # dash-led line merging onto the previous unit.
+            units: list[str] = []
+            j = i + 1
+            while j < len(lines) and len(units) < 3:
+                v = lines[j]
+                if not _is_guidance_value_line(v):
+                    break
+                if units and v.lstrip().startswith(("-", "–", "—", "to")):
+                    units[-1] = units[-1] + " " + v.strip()
+                else:
+                    units.append(v.strip())
+                j += 1
+            if 1 <= len(units) <= 2:
+                # Refuse on a wrapped label: the previous original
+                # line is itself a label (Emerson's split label) —
+                # but a period sub-heading ("Year Ending") is a
+                # header line, not a wrapped label, so it never
+                # refuses (Akamai's "Revenue growth rates" row follows
+                # one).
+                prev = lines[i - 1] if i > 0 else ""
+                if not (
+                    _is_guidance_table_label(prev)
+                    and not _is_guidance_header_line(prev)
+                ):
+                    resolve_pending()
+                    label = ln.rstrip().rstrip(":")
+                    # A trailing qualifier belongs with the values —
+                    # moved before the range-join so it is not lost
+                    # when the join re-emits the figures.
+                    label, first = _move_label_qualifier(label, units[0])
+                    units = [first] + units[1:]
+                    joined = range_join_units(units)
+                    if joined is not None:
+                        out.append(f"{label}: {joined}")
+                    else:
+                        out.append(f"{label}: {' / '.join(units)}")
+                    seen_row = True
+                    i = j
+                    continue
+            # Not a fuseable row: fall through and emit as-is.
+        if (
+            _is_sentence_terminated(ln)
+            or ln[0] in "•●○◦▪■·\"“"
+            or _is_guidance_value_line(ln)
+        ):
+            # Prose, a quote, a bullet, or an orphan value line: the
+            # table (if any) is over — flush pending as-is. Only
+            # genuine prose (a terminated sentence, a quote, a bullet)
+            # disarms range-joining and clears the row state: an orphan
+            # value line is table residue (Akamai's "6 % 8 %" after a
+            # refused row), and clearing the flag on it would stop the
+            # very next row from range-joining.
+            out.extend(pending)
+            pending = []
+            if _is_sentence_terminated(ln) or ln[0] in "•●○◦▪■·\"“":
+                range_join = False
+                seen_row = False
+            out.append(ln)
+            i += 1
+            continue
+        split = _split_guidance_fused_row(ln)
+        if split is not None and (pending or range_join or seen_row):
+            label, values = split
+            resolve_pending()
+            label, values = _move_label_qualifier(
+                label.rstrip().rstrip(":"), values
+            )
+            joined = range_join_units([values])
+            if joined is not None:
+                out.append(f"{label}: {joined}")
+            else:
+                # A fused row in table context normalizes to the same
+                # "Label: values" shape as a split row (DuPont fuses
+                # its first row, so without this its "Net sales"
+                # line carries no colon while the rows below do).
+                out.append(f"{label}: {values}")
+            seen_row = True
+            i += 1
+            continue
+        if _is_guidance_header_line(ln):
+            # A column header or period sub-heading ahead of a row —
+            # hold it in pending until the next row resolves it.
+            pending.append(ln)
+            i += 1
+            continue
+        out.extend(pending)
+        pending = []
+        out.append(ln)
+        i += 1
+    out.extend(pending)
+    return out
+
+
 def extract_management_guidance(
     document_html: str, max_chars: int = 8000
 ) -> str | None:
@@ -10285,6 +10926,13 @@ def extract_management_guidance(
                 # lookahead extras never verified — drop them.
                 if over_budget:
                     del collected[budget_cut:]
+
+            # Batch 233: fuse split guidance-table rows and drop
+            # footnote furniture (see _clean_guidance_result) — the
+            # collector above is untouched; only the collected text
+            # is rewritten, so the budget/break logic still governs
+            # what is collected.
+            collected = _clean_guidance_result(collected)
 
             res = "\n\n".join(_join_fragmented_bullet_starts(collected))
             if len(res) >= 100:

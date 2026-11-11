@@ -104,12 +104,16 @@ def test_dal_guidance_keys_spaced_live():
     g = extract_management_guidance(_read("DAL_2024-12-31.html"))
     assert g is not None
     assert "Financial Guidance 1" in g
-    assert "1 Non-GAAP" in g
-    assert "3 Adjusted debt to EBITDAR" in g
-    assert "4 Introduced at November 2024 Investor Day" in g
-    assert "Financial Guidance1" not in g and "1Non-GAAP" not in g
-    # Batch 217's 922 chars + 8 spaces (footnote keys 1-4 and friends).
-    assert len(g) == 930
+    # Batch 233: the footnote definitions 1-4 drop (they are table
+    # furniture, not content), so the spaced keys are gone rather
+    # than spaced; the fused table rows carry the figures instead.
+    assert "1 Non-GAAP" not in g
+    assert "3 Adjusted debt to EBITDAR" not in g
+    assert "4 Introduced at November 2024 Investor Day" not in g
+    assert "Earnings Per Share: $0.70 - $1.00" in g
+    # Batch 217's 922 chars + 8 spaces (footnote keys 1-4 and friends)
+    # less the batch-233 footnote drops and row fusing: 668.
+    assert len(g) == 668
 
 
 def test_ci_guidance_heading_still_anchors_live():

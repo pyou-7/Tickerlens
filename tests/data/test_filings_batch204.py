@@ -169,12 +169,13 @@ def test_csco_runaway_section_still_stops_at_budget():
     # teaser in the highlights area and ran away through the results.
     # The teaser-anchor fix anchors on the real "Guidance" section,
     # which ends legitimately at the "Reconciliations of GAAP to
-    # Non-GAAP Measures" heading: 22 blocks, complete Q2 FY 2025
+    # Non-GAAP Measures" heading: 16 blocks, complete Q2 FY 2025
     # table, no dividend/repurchase/news-summary prose. The budget
     # backstop is still pinned by the SKYD runaway test below and the
-    # synthetic lookahead tests.
+    # synthetic lookahead tests. Batch 233: 22 -> 16 blocks as the
+    # split table rows fuse to "Label: values".
     g = _guidance("CSCO_2024-10-26.html")
-    assert len(g.split("\n\n")) == 22
+    assert len(g.split("\n\n")) == 16
     assert "Q2 FY 2025" in g
     assert "GAAP to non-GAAP Guidance" in g
     assert "Dividend" not in g
@@ -184,8 +185,9 @@ def test_csco_runaway_section_still_stops_at_budget():
 
 def test_skyd_runaway_section_still_stops_at_budget():
     # SKYD's fragmentary-table section runs 152 lines uncapped.
+    # Batch 233: 30 -> 26 blocks as the split rows fuse.
     g = _guidance("SKYD_2026-06-30.html")
-    assert len(g.split("\n\n")) == 30
+    assert len(g.split("\n\n")) == 26
 
 
 def test_lookahead_keeps_extras_when_section_ends_inside_window():

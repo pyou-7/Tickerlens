@@ -150,7 +150,10 @@ def test_dal_2025_09_30_narrative_tail_cut():
     assert "Total Revenue YoY" in g
     assert "Up 2% - 4%" in g
     assert "$1.60 - $1.90" in g
-    assert "2Adjusted debt to EBITDAR" in g
+    # Batch 233: the "2Adjusted debt to EBITDAR" footnote definition
+    # is dropped with the rest of Delta's footnotes, so the key is
+    # gone rather than present.
+    assert "2Adjusted debt to EBITDAR" not in g
 
 
 def test_dal_2025_12_31_narrative_tail_cut_keeps_cost_prose():

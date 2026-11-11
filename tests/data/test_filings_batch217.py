@@ -168,8 +168,11 @@ def test_dal_q4_2024_guidance_drops_wrapped_heading():
     # ..."), matching the stored row's older rendering; the wart
     # removal is the only content change (956 -> 930 = the two heading
     # fragments plus their joins, plus 8 footnote-key spaces).
-    assert len(g) == 930
-    assert g.endswith("4 Introduced at November 2024 Investor Day")
+    # Batch 233: 930 -> 668 as Delta's footnote definitions 1-4 drop
+    # and the split table rows fuse; the section now ends on the
+    # fused Earnings Per Share row.
+    assert len(g) == 668
+    assert g.endswith("Earnings Per Share: $0.70 - $1.00")
 
 
 def test_dal_q2_2025_guidance_unchanged():

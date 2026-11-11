@@ -139,8 +139,11 @@ def test_intro_quarter_serves_prior_current_table():
 
 def test_wrapped_figure_line_does_not_break_collection():
     lines = _guidance_lines("FSLR_2025-06-30.html")
-    assert "$520M" in lines
-    assert "Operating Income (4)" in lines
+    # Batch 233: the dash-led "- $520M" wrap now fuses onto the
+    # Operating Expenses row instead of standing alone, and the
+    # Operating Income row normalizes to "Label: values".
+    assert "Operating Expenses (3): $470M to $510M $480M to / $520M" in lines
+    assert "Operating Income (4): $1.45B to $2.00B $1.53B to $1.87B" in lines
     assert "Volume Sold (1)" in lines
     assert "15.5GW to 19.3GW 16.7GW to 19.3GW" in lines
 

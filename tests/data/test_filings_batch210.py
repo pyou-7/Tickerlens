@@ -211,7 +211,8 @@ def test_elv_guidance_summary_anchor_unchanged():
     assert not _is_toc_entry(lines, anchors[0][0])
     text = extract_management_guidance(_load("ELV_2023-12-31.html"))
     assert text is not None
-    assert len(text) == 359
+    # Batch 233: 359 -> 360 as the membership rows fuse.
+    assert len(text) == 360
 
 
 def test_spg_guidance_reconciliation_anchor_unchanged():
