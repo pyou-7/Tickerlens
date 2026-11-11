@@ -359,8 +359,11 @@ def test_clean_highlights_colon_cascade() -> None:
 
 
 def test_clean_highlights_colon_without_residue_kept() -> None:
-    # The colon rule only fires inside a residue cascade: a bare
-    # list intro with no residue popped above it stays put.
+    # Batch 226 pinned the opposite: a bare list intro with no
+    # residue popped above it stayed put. Batch 232 removes the
+    # cascade gate (a trailing colon line is dangling by
+    # construction — whatever it introduces is not served), so the
+    # intro now pops. The live pin lives in test_filings_batch232.
     body = (
         "Headline Goes Here And It Is Long Enough To Pass The Floor Check For This Test Body\n\n"
         "• First bullet with real content about the quarter and its results for investors.\n"
@@ -368,7 +371,7 @@ def test_clean_highlights_colon_without_residue_kept() -> None:
         "Net earnings includes:\n"
     )
     out = _clean_highlights_result(body)
-    assert out.endswith("Net earnings includes:")
+    assert not out.endswith("Net earnings includes:")
 
 
 def test_clean_highlights_floor_kept() -> None:

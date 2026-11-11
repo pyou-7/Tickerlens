@@ -9,11 +9,14 @@ repair under gate S; 18 NULL-guidance rows fill under gate G
 (Darden x8, Enphase x10 — real outlook prose).
 
 These pins document the sweep's decisions on real cached exhibits:
-the blocked tails and fragment that keep 6 + 1 rows stale, the
-table-dominated guidance that keeps AppLovin x7 / DuPont x4 /
-Skyworks x1 unfilled, and the added content that justifies the
-swaps that do happen. No code change in this batch — the gates live
-in scripts/batch231_repair.py; the pins anchor the extractor
+the table-dominated guidance that keeps AppLovin x7 / DuPont x4 /
+Skyworks x1 unfilled, the mid-sentence fragment that keeps Airbnb
+2024-12-31 stale, and the added content that justifies the swaps
+that do happen. The four blocked-tail pins (BRK.B x3, FAST, FDX,
+GILD) documented the live extraction ending on a dangling table
+intro; batch 232 trims those intros in the extractor, so the pins
+now assert the clean tails and the rows repair under its gate S2.
+No code change in this batch — the gates live in scripts/batch231_repair.py; the pins anchor the extractor
 behavior the gates rely on.
 """
 import os
@@ -87,34 +90,41 @@ def _guidance_body_table_frac(guidance: str) -> float:
     return sum(1 for x in body if _is_tableish(x)) / max(len(body), 1)
 
 
-# --- Blocked tails: live ends on a dangling table intro, so the swap
-# would ADD a residue tail line. These rows stay stale. ---
+# --- Formerly blocked tails: batch 232 trims the dangling table
+# intro in the extractor, so the live text is clean and these rows
+# are repairable under gate S2. ---
 
 
 def test_brkb_live_ends_on_dangling_table_intro():
     for key in ("BRK.B_2025-06-30", "BRK.B_2025-09-30", "BRK.B_2026-06-30"):
         lines = _lines(_live(key))
-        assert lines[-1] == "Net earnings includes:"
-        assert "Net earnings attributable to Berkshire shareholders" in lines
+        assert "Net earnings includes:" not in lines
+        assert "Net earnings attributable to Berkshire shareholders" not in lines
+        assert lines[-1].endswith("per share amounts).")
 
 
 def test_fast_live_ends_on_dangling_table_intro():
     lines = _lines(_live("FAST_2025-03-31"))
-    assert lines[-1].endswith("were as follows:")
+    assert "were as follows:" not in _live("FAST_2025-03-31")
+    assert "Selling, general, and administrative (SG&A) expenses" not in _live(
+        "FAST_2025-03-31"
+    )
+    assert lines[-1].endswith("declining sales with resellers.")
 
 
 def test_fdx_live_ends_on_dangling_table_intro():
     lines = _lines(_live("FDX_2026-05-31"))
-    assert lines[-1] == (
-        "This year’s and last year’s quarterly consolidated results "
-        "have been adjusted for:"
-    )
+    assert "have been adjusted for:" not in _live("FDX_2026-05-31")
+    assert lines[-1].startswith("MEMPHIS, Tenn.")
 
 
 def test_gild_live_last_bullet_is_cut_off():
     lines = _lines(_live("GILD_2026-06-30"))
-    assert lines[-1].startswith("• Total second quarter 2026 revenues")
-    assert lines[-1].endswith("primarily driven by:")
+    assert "primarily driven by:" not in _live("GILD_2026-06-30")
+    assert "Total second quarter 2026 revenues increased 10%" not in _live(
+        "GILD_2026-06-30"
+    )
+    assert "Daniel O’Day" in lines[-1]
 
 
 # --- Blocked fragment: live body opens mid-sentence. ---

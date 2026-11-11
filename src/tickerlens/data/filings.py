@@ -1685,6 +1685,14 @@ def _is_lede_data_row(ln: str) -> bool:
     # branches: a line with 2 $ figures always has 2 value figures
     # (a $ figure is never a year or a key).
     value_figures = len(figures)
+    # Batch 232: a spaced currency marker ("$ 490.0") is the value's
+    # currency, not a word — count a standalone "$" token as a figure
+    # for density. Fastenal's SG&A row reads 4 figures over 11 tokens
+    # (36%, under the 40% bar) and rides the lede; with the $ counted
+    # it reads 5/11 = 45% and is skipped as the data row it is. A "$"
+    # token is never a year or a footnote key, so the exclusions below
+    # still apply unchanged.
+    value_figures += sum(1 for t in tokens if t == "$")
     if tokens and _LEDE_YEAR_RE.fullmatch(tokens[0].rstrip(",")):
         value_figures -= 1
     key = tokens[-1].rstrip(",") if tokens else ""
@@ -3351,10 +3359,52 @@ def _truncate_trailing_fragment(ln: str) -> str | None:
                 and not re.search(r"[\d$%]", frag)
                 and frag_words[0] not in _TRAILING_IMPERATIVE_WORDS
             )
+            # Batch 232: a post-terminator fragment that is itself a
+            # dangling table/list intro (Fastenal's "The DSR change
+            # when compared to the same period in the prior year and
+            # the percent of sales in the period were as follows:") —
+            # truncate at the terminator instead of dropping the whole
+            # line, preserving the terminated prose before it. A pure
+            # intro line has no terminator, returns None here, and is
+            # popped by the dangling-intro rule instead.
+            or _is_trailing_dangling_intro(frag)
         )
         if not unfinished:
             return None
         return head.strip()
+    return None
+
+
+def _truncate_trailing_dangling_intro(ln: str) -> str | None:
+    """Truncate a line at its last sentence terminator when the text
+    after it is a dangling table/list intro (batch 232) — the tail
+    trim only sees the last line, but a freed lede budget can strand
+    the same shape mid-body (Fastenal's product paragraph ends "The
+    DSR change when compared to the same period in the prior year
+    and the percent of sales in the period were as follows:" ahead of
+    the end-market paragraph). Only the dangling-intro test applies
+    here: a comma/semicolon fragment mid-body continues on the next
+    line, so the general fragment truncate must never run mid-body.
+    A bullet-led line never qualifies (its fragment is the bullet's
+    own text), and a pure intro line has no terminator, so it
+    returns None and the tail rule pops it instead."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return None
+    matches = list(_TRAILING_FRAGMENT_TERMINATOR_RE.finditer(s))
+    if not matches:
+        return None
+    for m in reversed(matches):
+        before = s[: m.start()].rstrip()
+        prev_word = before.split()[-1].strip(",;:()").lower() if before.split() else ""
+        if len(prev_word) <= 1 or prev_word in _TRAILING_ABBREV_WORDS:
+            continue
+        head, frag = s[: m.end()], s[m.end() :].strip()
+        if not frag:
+            return None
+        if _is_trailing_dangling_intro(frag):
+            return head.strip()
+        return None
     return None
 
 
@@ -3388,6 +3438,46 @@ def _is_trailing_list_item_label(ln: str, prev: str) -> bool:
     if _has_trailing_verb(s):
         return False
     return True
+
+
+# Batch 232: the tail of a dangling table/list intro — the line ends
+# on an intro phrase whose items are absent from the served text
+# ("...were as follows:", "...have been adjusted for:",
+# "...primarily driven by:", "Net earnings includes:",
+# "consist of:", "set forth below:"). A trailing colon-ended line
+# is dangling by construction: whatever it introduces is not in the
+# result. The quote-verb veto keeps a quote intro ("...commented on
+# the results:") safe; a heading-shaped line never reaches here (the
+# heading-tail rules run first in the trim loop).
+_DANGLING_INTRO_TAIL_RE = re.compile(
+    r"\b(?:as follows|adjusted for|driven by|includes?|consist of|"
+    r"comprised of|composed of|set forth below|summarized below|"
+    r"described below|shown below|listed below|follows|below):\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_trailing_dangling_intro(ln: str) -> bool:
+    """True for a trailing line that only introduces content that is
+    not served: it ends with ":" and is either short (a bare list
+    intro — the batch-226 shape, now without the residue-cascade
+    gate: a short colon line at the very tail has nothing after it,
+    so the cascade gate only protected the defect) or ends on a
+    dangling-intro tail phrase (Fastenal's "were as follows:",
+    FedEx's "have been adjusted for:", Gilead's bullet "primarily
+    driven by:"). A bullet-led line qualifies on the same terms —
+    its sub-items are absent, so the bullet dangles. Guards: no
+    quote verb anywhere in the line (a quote intro is content, not
+    residue)."""
+    s = ln.strip()
+    if not s or not s.endswith(":"):
+        return False
+    if _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    body = re.sub(r"^[•\-\*▪■·○◦]\s*", "", s)
+    if len(body.split()) <= 6:
+        return True
+    return bool(_DANGLING_INTRO_TAIL_RE.search(body))
 
 
 def _is_lede_title_line(ln: str) -> bool:
@@ -3866,22 +3956,32 @@ def _clean_highlights_result(result: str) -> str:
             trimmed.pop()
             popped_residue = True
             continue
-        # Batch 226: a short colon-ended line left dangling by the
-        # residue pops above ("EPS ($):" once its GAAP/operating rows
-        # are gone, AEP; "Net earnings includes:" once its label is
-        # gone, Berkshire). The popped-residue gate is load-bearing:
-        # a colon-ended line in an untouched result is a quote intro
-        # or a live list intro, never popped. The quote-verb veto
-        # keeps "...commented on the results:" safe.
-        if (
-            popped_residue
-            and last.endswith(":")
-            and len(last.split()) <= 6
-            and not _LEDE_QUOTE_VERB_RE.search(last)
-        ):
+        # Batch 232: a trailing dangling table/list intro — the
+        # batch-226 rule only popped a short colon line inside a
+        # residue cascade, but a colon-ended line at the very tail
+        # is dangling by construction (whatever it introduces is not
+        # served), so the cascade gate only protected the defect:
+        # Berkshire's "Net earnings includes:" sat below its row
+        # label with nothing popped above it, and the long intros
+        # ("...were as follows:", "...have been adjusted for:",
+        # "...primarily driven by:") never matched the 6-word cap.
+        # The quote-verb veto keeps quote intros safe, and the
+        # cascade still runs: once the intro pops, the row-label
+        # predicate pops the line above it on the next iteration.
+        if _is_trailing_dangling_intro(last):
             trimmed.pop()
+            popped_residue = True
             continue
         break
+    # Batch 232: a dangling-intro fragment mid-body — the tail trim
+    # only sees the last line, but a freed lede budget can strand the
+    # same shape ahead of a later paragraph (Fastenal's product
+    # paragraph ends "The DSR change ... were as follows:" ahead of
+    # the end-market paragraph). Truncate any body line whose
+    # post-terminator fragment is a dangling intro; the general
+    # fragment truncate never runs here (a comma/semicolon fragment
+    # mid-body continues on the next line).
+    trimmed = [_truncate_trailing_dangling_intro(ln) or ln for ln in trimmed]
     candidate = "\n".join(lines[:head_end] + trimmed).strip()
     if len(candidate) < 200:
         return "\n".join(lines).strip()
