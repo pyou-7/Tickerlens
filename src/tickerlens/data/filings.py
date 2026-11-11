@@ -489,6 +489,72 @@ def _is_inline_bullet_start(ln: str) -> bool:
         return bool(ln[1:].strip())
     return False
 
+
+# A bullet whose first word(s) are orphaned on their own line (batch 230):
+# Dollar General's 2026 releases typeset each bullet as a table row
+# whose text cell wraps after the first word — "· Net" / "Sales
+# Increased 3.4% to $10.8 Billion" — and the flattener preserves the
+# break, so the served highlights read as a one-word bullet plus a
+# stray line. The shape is narrow by construction: the marker plus
+# one or two bare alphabetic words, no punctuation at all — a label
+# line ("• Same-restaurant sales:", "• Fiscal 2025:", "• Media:
+# media@danaher.com") always carries punctuation and never matches,
+# and a two-word fragment ("· Year-to-Date", "· Fourth") is the same
+# wrap with a hyphenated or two-word opener. A digit, figure, or
+# punctuation mark in the fragment means the line is already a
+# complete item or a label, not an orphaned opener.
+_FRAGMENTED_BULLET_RE = re.compile(
+    r"^(?:[•●–—]\s?|-\s|l\s|[▪■·○]\s?)"
+    r"([A-Za-z][A-Za-z\-']*(?:\s+[A-Za-z][A-Za-z\-']*)?)\s*$"
+)
+
+
+def _join_fragmented_bullet_starts(lines: list[str]) -> list[str]:
+    """Join a fragmented bullet opener with its continuation line.
+
+    A line matching _FRAGMENTED_BULLET_RE ("· Net", "· Same-Store",
+    "· The") is the first word(s) of a bullet whose remainder sits on
+    the next line; join the two with a space so the bullet reads as
+    one item ("· Net Sales Increased 3.4% to $10.8 Billion"). The
+    continuation must be a plain line — not another bullet (including
+    a "◦" sub-bullet: Equifax's "• Revenues" heads a sub-bullet list
+    whose "◦ $2.13 billion ..." line is its own item, and Carnival's
+    "• Pricing" is followed by another "•" bullet), not blank, not a
+    heading (all-caps), not a dateline, not admin/boilerplate, not a
+    footnote-definition or table-units line. A bullet that wraps after
+    a full clause is untouched — only the orphaned opener joins, so a
+    wrapped bullet keeps its normal second line exactly as before.
+    Applied post-collection (winning section, lede list), never
+    pre-selection, so qualification and density competition are
+    untouched. Batch 230.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        ln = lines[i]
+        nxt = lines[i + 1] if i + 1 < n else ""
+        if (
+            _FRAGMENTED_BULLET_RE.match(ln)
+            and nxt
+            and not _is_inline_bullet_start(nxt)
+            and nxt[:1] != "◦"
+            and not _ADMIN_LINE_RE.match(nxt)
+            and not _BOILERPLATE_RE.match(nxt)
+            and not (nxt.isupper() and len(nxt) <= 80)
+            and not _DATELINE_LEAD_RE.match(nxt)
+            and not _DATED_DATELINE_LEAD_RE.match(nxt)
+            and not _is_section_footnote_line(nxt)
+            and not _TABLE_UNITS_RE.match(nxt)
+            and not _TABLE_WORD_UNITS_RE.match(nxt)
+        ):
+            out.append(f"{ln.rstrip()} {nxt.strip()}")
+            i += 2
+            continue
+        out.append(ln)
+        i += 1
+    return out
+
 # A units parenthetical in words, anchored at line start (batch 143):
 # "(In millions, except earnings per share)" (FedEx), "(in thousands,
 # except per share data)" (AutoZone), "(In billions)" (Elevance). The
@@ -8598,6 +8664,10 @@ def extract_press_release_highlights(
         # allowance still strands the lede mid-sentence — drop the
         # dangling tail back to the last complete sentence instead.
         lede = _trim_unfinished_tail(lede)
+        # Batch 230: join fragmented bullet openers the same way as
+        # the section path — a lede-served bullet list wraps the same
+        # way ("· Net" / "Sales Increased ...").
+        lede = _join_fragmented_bullet_starts(lede)
         body = "\n\n".join(lede)
 
     # A trailing comma means the headline's continuation was too long to join
@@ -9319,6 +9389,11 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     # slot"); post-selection, so the financial-density competition is
     # untouched (batch 177). Applies to whichever candidate won —
     # a leading-bullet block's trailing continuation is the same shape.
+    # Batch 230: join fragmented bullet openers ("· Net" / "Sales
+    # Increased ...") the same way — post-selection, so qualification
+    # and the density competition see the unjoined lines exactly as
+    # before.
+    best = _join_fragmented_bullet_starts(best)
     return _trim_unfinished_tail(best)
 
 
@@ -10111,7 +10186,7 @@ def extract_management_guidance(
                 if over_budget:
                     del collected[budget_cut:]
 
-            res = "\n\n".join(collected)
+            res = "\n\n".join(_join_fragmented_bullet_starts(collected))
             if len(res) >= 100:
                 if len(res) > max_chars:
                     res = res[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
