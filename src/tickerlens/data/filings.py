@@ -4161,6 +4161,36 @@ def _is_paren_prose_continuation(ln: str) -> bool:
         return True
     return False
 
+
+def _is_labeled_value_line(ln: str) -> bool:
+    """True when a line opens with a parenthesized all-caps abbreviation
+    label followed immediately by a value figure — "(ETR) ~23% ...".
+
+    Batch 238: FedEx's guidance table splits its Effective Tax Rate row
+    as a label line plus an "(ETR) ~23% ..." value line, and
+    _LEDE_FOOTNOTE_RE matches the "(ETR)" marker, so _opens_footnote_def
+    treats the row as a footnote definition and both the guidance
+    collector and _clean_guidance_footnotes drop it, losing the ~23%
+    ETR figure (batch 237's repair gate already refused to credit such
+    a line as chrome; this moves the guard into the extractor, with the
+    label narrowed to an all-caps abbreviation). A genuine footnote
+    definition opens with a numeric key ("(1) ...") or a single-letter
+    key ("(a) ...") and prose, never with a bare value right after an
+    abbreviation label — so the label must be 2+ all-caps letters and
+    the next token must be value-shaped (starts with $ or (, "~$"/"≈$",
+    or ends with %). Mixed-case labels ("(Unaudited)", "(Loss)") never
+    fire, so table-header residue keeps dropping as before.
+    """
+    m = re.match(r"^\([A-Z]{2,}\)\s*(\S+)", ln.strip())
+    if not m:
+        return False
+    tok = m.group(1)
+    return (
+        tok[0] in "$("
+        or tok.startswith(("~$", "≈$"))
+        or tok.endswith("%")
+    )
+
 # An investor-conference-call notice ("Today, beginning at 3:30 p.m.
 # Central Time ... Emerson management will discuss the second quarter
 # results during an investor conference call. Participants can access a
@@ -4616,6 +4646,8 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
     _PRETAX_ADJUSTMENT_NOTE_RE) opens a footnote-definition block
     too — the block skip consumes its wrapped continuations and
     chains onto the following segment sentences.
+    Batch 238: a labeled value ("(ETR) ~23% ...") is not a footnote
+    definition either — see _is_labeled_value_line.
     """
     if (
         _FOOTNOTE_DEF_RE.match(ln)
@@ -4625,6 +4657,7 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
             include_paren
             and _LEDE_FOOTNOTE_RE.match(ln)
             and not _is_paren_prose_continuation(ln)
+            and not _is_labeled_value_line(ln)
         )
         or _FOOTNOTE_BRACKET_RE.match(ln)
         or _FOOTNOTE_TERM_VERB_RE.match(ln)
