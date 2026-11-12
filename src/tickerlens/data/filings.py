@@ -10115,6 +10115,22 @@ _GUIDANCE_MONTH_WORDS = frozenset(
 _GUIDANCE_FOOTNOTE_OPENER_RE = re.compile(
     r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))"
 )
+# A letter-dash footnote key ("(a – Future dividends and increases to
+# the share buyback authorization ...", "(b – FCF* conversion: ...") —
+# GE Aerospace keys its table footnotes with a parenthesized letter
+# plus a dash instead of "(a) ...". The shared _LEDE_FOOTNOTE_RE needs
+# the closing paren right after the key, so this shape never opens a
+# block anywhere, and the two definitions ride the collected guidance
+# to the end of the section. Single letter only: a multi-letter
+# parenthesized label is a metric label (batch 238's "(ETR) ~23%"
+# labeled value), never a footnote key — and the dash after the key is
+# what separates it from a paren prose continuation (batch 176's
+# "(MRC) protocol ..." carries no dash). The dash may be a hyphen, en
+# dash or em dash, and the definition may start on the next line, so
+# the line may end right after it.
+_GUIDANCE_LETTER_DASH_FOOTNOTE_RE = re.compile(
+    r"^\([a-zA-Z]\s*[–—-](?:\s+\S|\s*$)"
+)
 # One figure inside a guidance value line: optional ~, optional parens
 # (a negative), optional spaced "$", digits with PROPER thousands
 # grouping, optional decimal, optional spaced "%"/"B"/"M"/"K"/"x"
@@ -10140,10 +10156,11 @@ _GUIDANCE_UNITS_RE = re.compile(
 def _guidance_footnote_opener(
     ln: str, nxt: str = "", include_paren: bool = True
 ) -> bool:
-    """Guidance-local footnote opener: the shared shapes, plus the two
+    """Guidance-local footnote opener: the shared shapes, plus the
     AppLovin/Delta shapes the shared opener misses (see
-    _GUIDANCE_FOOTNOTE_OPENER_RE). Used only by the guidance clean step
-    (via _footnote_def_block_len's opens parameter) — the
+    _GUIDANCE_FOOTNOTE_OPENER_RE) and the letter-dash key (see
+    _GUIDANCE_LETTER_DASH_FOOTNOTE_RE). Used only by the guidance clean
+    step (via _footnote_def_block_len's opens parameter) — the
     highlights/lede paths keep the strict opener. The attested
     population is footnote-only: a cache-wide survey of collected
     guidance finds 18 digit+capital lines and every one opens a
@@ -10153,6 +10170,8 @@ def _guidance_footnote_opener(
     prose item ahead of any table can never match.
     """
     if _opens_footnote_def(ln, nxt, include_paren):
+        return True
+    if _GUIDANCE_LETTER_DASH_FOOTNOTE_RE.match(ln):
         return True
     return bool(_GUIDANCE_FOOTNOTE_OPENER_RE.match(ln))
 
@@ -10690,9 +10709,15 @@ def _is_wrapped_label_fragment(prev: str, cur: str) -> bool:
     a header line is a column header, a marked prev line is itself a
     row label (GE's "Operating Profit*", "Free cash flow*"), and a
     current label carrying its own slash phrase ("U.S. Dollar / Pound
-    Sterling"), more than two words, or a footnote marker ("assets 3",
+    Sterling"), more than four words, or a footnote marker ("assets 3",
     "International pass-through revenue(5)", "FCF* Conversion-b)") is
-    a complete metric — none of those is a wrapped fragment."""
+    a complete metric — none of those is a wrapped fragment. Batch 240:
+    the cap was two words, but a wrap point is arbitrary — the label
+    wraps where the cell width falls, so Emerson's "Acquisition /
+    Divestiture" / "Fees and Related Costs" continuation is four words
+    and is the same fragment as a one-word one. The other guards (prev
+    at most three words, no marker on either side, no slash in cur)
+    still keep complete metrics out, and the blast bounds the change."""
     if not _is_guidance_table_label(prev):
         return False
     if _is_guidance_header_line(prev):
@@ -10703,7 +10728,7 @@ def _is_wrapped_label_fragment(prev: str, cur: str) -> bool:
         return False
     if len(prev.split()) > 3:
         return False
-    if len(cur.split()) > 2:
+    if len(cur.split()) > 4:
         return False
     if "/" in cur:
         return False

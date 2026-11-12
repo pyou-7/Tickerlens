@@ -124,5 +124,8 @@ def test_ge_2025_09_30_guidance_stops_at_segment_results():
     assert "The following discussions and variance explanations" not in text
     assert "Segment guidance included below." in text
     assert "Adjusted EPS* $4.60 $5.60 - $5.80 $6.00 - $6.20" in text
-    assert text.rstrip().endswith("(a \u2013 FCF* conversion: FCF* / adjusted net income*")
-    assert len(text.split("\n")) == 55
+    # Batch 240: the trailing "(a – FCF* conversion ..." footnote
+    # definition now drops (letter-dash key), so the text ends on the
+    # "*" legend line instead — 53 lines, was 55.
+    assert text.rstrip().endswith("* Non-GAAP Financial Measure")
+    assert len(text.split("\n")) == 53

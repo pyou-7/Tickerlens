@@ -179,8 +179,13 @@ def test_emr_wrapped_labels_join():
     assert "Underlying Sales Growth: 2% - 3% / 3% - 5%" in g
     assert "Restructuring / Related Costs: ~$0.04 / ~$0.16" in g
     assert "Adjusted Earnings Per Share: $1.25 - $1.30 / $5.85 - $6.05" in g
-    # The four-word tail ("Fees and Related Costs") stays unfused.
-    assert "Acquisition / Divestiture" in g
+    # Batch 240: the four-word tail ("Fees and Related Costs") now
+    # joins — the wrapped-label cap went from two words to four, so
+    # the row fuses instead of staying split.
+    assert (
+        "Acquisition / Divestiture Fees and Related Costs: ~$0.01 / ~$0.04"
+        in g
+    )
 
 
 def test_dal_footnotes_drop_before_prose():
@@ -284,11 +289,13 @@ def test_wrapped_fragment_narrowness():
         _is_wrapped_label_fragment("Free cash flow*", "FCF* Conversion-b)")
         is False
     )
+    # Batch 240: the four-word continuation now joins — the cap went
+    # from two words to four (a wrap point is arbitrary).
     assert (
         _is_wrapped_label_fragment(
             "Acquisition / Divestiture", "Fees and Related Costs"
         )
-        is False
+        is True
     )
     assert (
         _is_wrapped_label_fragment(
