@@ -53,10 +53,15 @@ sys.path.insert(0, "src")
 from tickerlens.data.filings import (
     _GUIDANCE_FIGURE_RE,
     _GUIDANCE_RULE_LINE_RE,
+    _carries_footnote_marker,
     _guidance_footnote_opener,
+    _is_guidance_header_line,
+    _is_guidance_period_label,
     _is_guidance_prior_updated_header,
     _is_guidance_table_label,
+    _is_guidance_units_line,
     _is_guidance_value_line,
+    _is_wrapped_label_fragment,
 )
 
 CACHE = "/home/hatch/workspace/goals/tickerlens-app-build/hidden_files/blast_html"
@@ -83,12 +88,101 @@ def _residue(lines: list[str]) -> list[str]:
     for i, ln in enumerate(lines):
         if _GUIDANCE_RULE_LINE_RE.match(ln):
             problems.append(f"rule line: {ln!r}")
-        if _guidance_footnote_opener(ln):
+        if _guidance_footnote_opener(ln) and not _is_audit_status_table_label(
+            lines, i
+        ):
             problems.append(f"footnote opener: {ln!r}")
         if _is_guidance_table_label(ln) and i + 1 < len(lines):
             if _is_guidance_value_line(lines[i + 1]):
+                if _is_interleaved_label_refusal(lines, i):
+                    continue
+                if _value_unit_run(lines, i + 1) >= 5:
+                    continue
                 problems.append(f"unfused split row: {ln!r} / {lines[i + 1]!r}")
     return problems
+
+
+# Batch 240: a bare audit-status line ("(Unaudited)" / "(Audited)") is
+# a reconciliation-table header label, not a footnote definition —
+# Estée Lauder and Elevance head their reconciliation tables with it
+# ("Reconciliation between GAAP and Non-GAAP - ..." / "Financial
+# Guidance Summary" / "(Unaudited)" / period header). The clean step
+# already keeps it (its block never drops: the next line is a table
+# line, not a plausible definition continuation), so the probe must
+# not flag it either. The next-line table-shape test is the guard: a
+# real footnote definition opening with a bare "(Unaudited)" would
+# continue with prose, never with a header / period / label / value
+# line.
+_AUDIT_STATUS_RE = re.compile(r"^\((Unaudited|Audited)\)$")
+
+
+def _is_audit_status_table_label(lines: list[str], i: int) -> bool:
+    """True when lines[i] is a bare audit-status label inside a table:
+    exactly "(Unaudited)" or "(Audited)", and the next line is
+    table-shaped (a header, period label, table label, value line or
+    units line)."""
+    if not _AUDIT_STATUS_RE.match(lines[i].strip()):
+        return False
+    if i + 1 >= len(lines):
+        return False
+    nxt = lines[i + 1]
+    return (
+        _is_guidance_header_line(nxt)
+        or _is_guidance_period_label(nxt)
+        or _is_guidance_table_label(nxt)
+        or _is_guidance_value_line(nxt)
+        or _is_guidance_units_line(nxt)
+    )
+
+
+def _is_interleaved_label_refusal(lines: list[str], i: int) -> bool:
+    """True when the label at lines[i] is the second of two interleaved
+    row labels whose values alternate in the flattened text — GE
+    Aerospace's "Free cash flow*" / "FCF* Conversion-b)": the fuser
+    deliberately refuses the fuse (a short marked previous label is
+    itself a row label whose values have not been served — fusing would
+    misattribute its values to this row), so the unfused shape is the
+    faithful representation, not residue. Mirrors the fuser's refuse
+    guard in _clean_guidance_result exactly: the previous line is a
+    table label, not a header line, at most three words, and carries a
+    footnote marker, and it is not a wrapped-label fragment of this
+    line."""
+    if i == 0:
+        return False
+    prev = lines[i - 1]
+    return (
+        not _is_wrapped_label_fragment(prev, lines[i])
+        and bool(prev)
+        and _is_guidance_table_label(prev)
+        and not _is_guidance_header_line(prev)
+        and len(prev.split()) <= 3
+        and _carries_footnote_marker(prev)
+    )
+
+
+def _value_unit_run(lines: list[str], i: int) -> int:
+    """Number of value units in the consecutive value-line run starting
+    at lines[i], counting the way the fuser does: a dash-led line
+    continues the previous unit instead of starting a new one, and a
+    lone closing-paren continuation (")%") rides its unit. The fuser
+    refuses a row with five or more units (an ambiguous table), so a
+    run of 5+ is unfusable by design — SKYD's "Direct-to-Consumer"
+    row carries six — and the probe must not flag it as an unfused
+    split row."""
+    units = 0
+    j = i
+    while j < len(lines) and _is_guidance_value_line(lines[j]):
+        v = lines[j]
+        if units and v.lstrip().startswith(("-", "–", "—", "to")):
+            j += 1
+        else:
+            units += 1
+            j += 1
+        while j < len(lines) and re.fullmatch(
+            r"\)\s*[%BKMx]?", lines[j].strip()
+        ):
+            j += 1
+    return units
 
 
 def _norm_words(text: str) -> str:
