@@ -94,6 +94,22 @@ DRY = os.environ.get("DRY_RUN") == "1"
 
 
 def norm(s: str) -> str:
+    # Batch 241: canonicalize flattening spacing before comparing, so
+    # the sweep compares content, not seed-era formatting. The legacy
+    # rule only covered "•" — seed-era rows also carry "◦"/"▪"/"■"/"●"/"–"
+    # bullets without the space the current extractor emits ("◦New AMD
+    # ..." vs "◦ New AMD ...", 105 rows), trademark spacing ("Apple ®"
+    # vs "Apple®"), and a footnote key spaced off its comma or period
+    # ("$1.64, 1 up" vs "$1.64,1 up"; "basis. 1" vs "basis.1"). Each
+    # rule only removes spacing; the digit / word it touches is
+    # preserved, so two lines that differ in content still differ
+    # after norm (the footnote-key rule only fires on a single digit
+    # followed by space or end-of-line, so a year or a decimal never
+    # collapses). The bullet rule is line-start-anchored; the legacy
+    # mid-line "•" rule stays for flattened bullet runs.
+    s = re.sub(r"(?m)^(\s*[•◦▪■●–—‣·○◆▸►])(?!\s)", r"\1 ", s)
+    s = re.sub(r"\s+([®™©])", r"\1", s)
+    s = re.sub(r"([,.])\s+(\d)(?=\s|$)", r"\1\2", s)
     s = re.sub(r"•(?!\s)", "• ", s)
     lines = [ln.rstrip() for ln in s.split("\n")]
     out: list[str] = []
