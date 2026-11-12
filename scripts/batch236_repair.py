@@ -92,13 +92,31 @@ def _residue(lines: list[str]) -> list[str]:
 
 
 def _norm_words(text: str) -> str:
+    # Batch 237: split a digit run glued to a word ("globe1:" -> "globe 1")
+    # so a fused line that glues a footnote key onto its last word
+    # normalizes like the spaced stored form ("globe 1 :") — Domino's
+    # "The Company now expects the following ... globe 1 :" vs the fused
+    # "globe1:" otherwise reads as an unexplained added line.
+    text = re.sub(r"([A-Za-z])(\d)", r"\1 \2", text)
     return re.sub(r"[^0-9a-z%]+", " ", text.lower()).strip()
 
 
 def _is_def_continuation(ln: str, prev: str) -> bool:
     """True when ln continues a footnote definition whose previous line
     ends mid-sentence: it starts lowercase, the previous line carries no
-    terminal punctuation, and ln is not a table row."""
+    terminal punctuation, and ln is not a table row.
+
+    Batch 237: the table-label guard is gone for lowercase lines. A
+    table label is a capitalized metric noun phrase; a line starting
+    lowercase is prose, never a label — but the label predicate's
+    digit-free noun-phrase test false-positives on lowercase
+    continuations ("for historical comparison figures", "impact of
+    the CrowdStrike-caused outage in 2024" both read as labels), which
+    left Delta's two footnote-def continuations unexplained and its
+    2024-12-31 row gate-B-blocked. The value-line guard stays: a value
+    line after an opener is a split row's value, not a def continuation.
+    Swallowing a label by mistake is still bounded — its value line
+    would fail the value-line guard and block the row."""
     s = ln.strip()
     if not s or not s[0].islower():
         return False
@@ -106,9 +124,31 @@ def _is_def_continuation(ln: str, prev: str) -> bool:
         return False
     if _GUIDANCE_RULE_LINE_RE.match(ln):
         return False
-    if _is_guidance_table_label(ln) or _is_guidance_value_line(ln):
+    if _is_guidance_value_line(ln):
         return False
     return True
+
+
+def _is_labeled_value_line(ln: str) -> bool:
+    """True when a line opens with a non-numeric parenthesized label
+    followed immediately by a value figure — "(ETR) ~23% ...".
+    Batch 237: FedEx's "(ETR) ~23% Prior to CY 2026 additional MTM
+    adjustments ..." guidance row matches the footnote opener (it
+    starts with a parenthesized token) and the live extraction drops
+    it, losing the ~23% ETR figure — so the gate must not credit it
+    as footnote chrome either, or the row would re-sync and the
+    figure would vanish from the stored row too. A genuine footnote
+    definition opens with a numeric key and prose, never with a bare
+    value right after its key."""
+    m = re.match(r"^\([A-Za-z][^)]*\)\s*(\S+)", ln.strip())
+    if not m:
+        return False
+    tok = m.group(1)
+    return (
+        tok[0] in "$("
+        or tok.startswith(("~$", "≈$"))
+        or tok.endswith("%")
+    )
 
 
 def _chrome_flags(s_lines: list[str]) -> list[bool]:
@@ -118,18 +158,22 @@ def _chrome_flags(s_lines: list[str]) -> list[bool]:
     month line, a bare-number footnote key, the definition line right
     after a bare-number key, or a wrapped def-continuation line (a
     lowercase continuation of a footnote-def line that ends
-    mid-sentence)."""
+    mid-sentence). Batch 237: a press-release header line (title /
+    dateline / page triple) is chrome too."""
     flags: list[bool] = []
+    header_idx = _press_release_header_indices(s_lines)
     prev = ""
     prev_is_def = False
     prev_is_bare_key = False
-    for ln in s_lines:
+    for idx, ln in enumerate(s_lines):
         s = ln.strip()
         chrome = False
         is_def = False
-        if _GUIDANCE_RULE_LINE_RE.match(ln):
+        if idx in header_idx:
             chrome = True
-        elif _guidance_footnote_opener(ln):
+        elif _GUIDANCE_RULE_LINE_RE.match(ln):
+            chrome = True
+        elif _guidance_footnote_opener(ln) and not _is_labeled_value_line(ln):
             chrome = True
             is_def = True
         elif _LOW_HIGH_ONLY_RE.match(s):
@@ -168,6 +212,131 @@ def _is_tail_truncation(ln: str, is_last: bool) -> bool:
     return True
 
 
+# Batch 237: press-release header lines. The stored guidance text of
+# some rows ends (or, for AAL 2026-06-30, is interrupted) by the release
+# header the collector picked up — a title line, a dateline, and a page
+# line, always in that order and always consecutive:
+#   "American Airlines Reports Fourth-Quarter and Full-Year 2024 Financial Results"
+#   "Jan. 23, 2025"
+#   "Page 3"
+# The triple is tight enough to recognize on shape alone: a title must
+# name a quarterly report and financial results, the dateline must be a
+# bare month-day-year line, the page line a bare "Page N".
+_PRESS_RELEASE_TITLE_RE = re.compile(
+    r"\breports\b.{0,60}\bfinancial results\b", re.I
+)
+_PRESS_RELEASE_DATELINE_RE = re.compile(
+    r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+\d{4}$"
+)
+_PRESS_RELEASE_PAGE_RE = re.compile(r"^Page\s+\d{1,3}$")
+
+
+def _press_release_header_indices(s_lines: list[str]) -> set[int]:
+    """Indices in a [title, dateline, page] press-release header run."""
+    out: set[int] = set()
+    for i in range(len(s_lines) - 2):
+        title, dateline, page = (
+            s_lines[i].strip(),
+            s_lines[i + 1].strip(),
+            s_lines[i + 2].strip(),
+        )
+        if "$" in title or "%" in title:
+            continue
+        if not _PRESS_RELEASE_TITLE_RE.search(title):
+            continue
+        if not _PRESS_RELEASE_DATELINE_RE.match(dateline):
+            continue
+        if not _PRESS_RELEASE_PAGE_RE.match(page):
+            continue
+        out.update((i, i + 1, i + 2))
+    return out
+
+
+# Batch 237: tail-furniture openers. The stored guidance text of some
+# rows ends in press-release furniture — a webcast notice, a company
+# description, a safe-harbor, a Regulation G definitions section, a
+# product-highlights section, a corporate-news section. The tail block
+# is recognized by its opener: either a boilerplate marker phrase or a
+# short heading (1-8 words, no digits, no terminal punctuation) that
+# carries none of the guidance words — so a tail starting "Fiscal 2026
+# Outlook" or "Outlook" can never qualify.
+_TAIL_FURNITURE_MARKERS = (
+    "webcast",
+    "conference call",
+    "forward-looking",
+    "founded in",
+    "regulation g",
+    "investor day",
+    "replay",
+    "pre-recorded",
+    "remarks",
+    "for more information",
+    "please visit",
+    "to learn more",
+    "additional information",
+    "investor relations website",
+)
+_TAIL_HEADING_GUIDANCE_WORDS = frozenset(
+    "outlook guidance forecast expect target estimate projected update "
+    "results earnings revenue sales margin eps income cash flow".split()
+)
+
+
+def _is_tail_furniture_opener(ln: str) -> bool:
+    """True when a line opens a press-release furniture tail block."""
+    s = ln.strip()
+    low = s.lower()
+    if any(m in low for m in _TAIL_FURNITURE_MARKERS):
+        return True
+    words = s.split()
+    if not 1 <= len(words) <= 8:
+        return False
+    if re.search(r"\d", s):
+        return False
+    if s[-1] in ".!?…":
+        return False
+    if any(
+        w.strip("(),:;").lower() in _TAIL_HEADING_GUIDANCE_WORDS for w in words
+    ):
+        return False
+    return True
+
+
+def _tail_furniture_indices(
+    s_lines: list[str], n_lines: list[str], new_text: str
+) -> set[int]:
+    """Indices of the trailing removed run that are press-release
+    furniture: the run starts after the last kept line, its opener is a
+    furniture marker or a short non-guidance heading, and every line
+    from the opener to the end carries no $ or % figure and is not a
+    value line — so no guidance figure or table row can hide in it.
+    Returns the empty set when any of that fails (conservative: one
+    $/%/value line anywhere after the opener voids the whole tail), or
+    when the new text carries no figures at all."""
+    removed = _removed_indices(s_lines, n_lines)
+    if not removed:
+        return set()
+    kept = [i for i in range(len(s_lines)) if i not in removed]
+    tail_start = max(kept) + 1 if kept else 0
+    if tail_start >= len(s_lines):
+        return set()
+    if not _figures(new_text):
+        return set()
+    run = list(range(tail_start, len(s_lines)))
+    opener = None
+    for i in run:
+        if _is_tail_furniture_opener(s_lines[i]):
+            opener = i
+            break
+    if opener is None:
+        return set()
+    for i in range(opener, len(s_lines)):
+        ln = s_lines[i]
+        if "$" in ln or "%" in ln or _is_guidance_value_line(ln):
+            return set()
+    return set(range(opener, len(s_lines)))
+
+
 def _diff_explainable(stored: str, new: str) -> list[str]:
     """Return a list of unexplained diff hunks (empty = explainable).
     Uses difflib opcodes on non-blank lines: a removed line must be
@@ -176,6 +345,7 @@ def _diff_explainable(stored: str, new: str) -> list[str]:
     s_lines = [ln for ln in stored.splitlines() if ln.strip()]
     n_lines = [ln for ln in new.splitlines() if ln.strip()]
     flags = _chrome_flags(s_lines)
+    tail_idx = _tail_furniture_indices(s_lines, n_lines, new)
     sm = difflib.SequenceMatcher(a=s_lines, b=n_lines, autojunk=False)
     problems: list[str] = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -187,6 +357,8 @@ def _diff_explainable(stored: str, new: str) -> list[str]:
         for k, ln in enumerate(removed):
             idx = i1 + k
             if flags[idx]:
+                continue
+            if idx in tail_idx:
                 continue
             if _is_tail_truncation(ln, idx == len(s_lines) - 1):
                 continue
