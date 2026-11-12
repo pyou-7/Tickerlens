@@ -230,4 +230,12 @@ def test_spg_guidance_reconciliation_anchor_unchanged():
     assert not _is_toc_entry(lines, recon[0])
     text = extract_management_guidance(_load("SPG_2025-06-30.html"))
     assert text is not None
-    assert len(text) == 528
+    # Batch 239: 528 -> 527 as the split-currency fix fuses the table
+    # rows ("$" / "6.63" -> "$6.63") and the wrapped Low/High End
+    # headers drop whole; the anchor behavior above is unchanged.
+    assert len(text) == 527
+    assert (
+        "Estimated net income attributable to common stockholders per diluted share: $6.63 / $6.83"
+        in text
+    )
+    assert "Estimated Real Estate FFO per diluted share: $12.45 / $12.65" in text

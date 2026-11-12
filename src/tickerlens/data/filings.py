@@ -10516,6 +10516,13 @@ def _is_guidance_header_token_line(ln: str) -> bool:
         return False
     if any(w.strip(",.:;").lower() in ("low", "high") for w in words):
         return True
+    # Batch 239: a lone "End" is the second half of a wrapped "Low
+    # End" / "High End" column header (Simon's tables split each
+    # header across two lines) — in the Low/High range-join case the
+    # dash encodes the columns, so it drops with Low/High. A bare
+    # year or period sub-heading still never drops.
+    if len(words) == 1 and words[0].strip(",.:;").lower() == "end":
+        return True
     if len(words) == 1:
         return bool(
             re.fullmatch(
@@ -10705,6 +10712,70 @@ def _is_wrapped_label_fragment(prev: str, cur: str) -> bool:
     return True
 
 
+def _is_split_table_value(ln: str, prev: str) -> bool:
+    """True when a bare-decimal line is a split table value, not the
+    exhibit-version fragment _ADMIN_LINE_RE thinks it is.
+
+    Batch 239: SPG's guidance tables put the currency symbol and the
+    amount in separate cells ("$" / "6.67"), so the flattened text
+    carries a lone "$" line followed by a bare-decimal line — and the
+    guidance collector's admin skip drops the number as a "99.1"
+    version fragment, losing the table's values (net income
+    $6.67-$6.92, FFO $12.40-$12.65 per share). A version fragment
+    never follows a lone "$" cell or a guidance-table label inside a
+    guidance section, so those predecessors prove the number is a
+    value. The label predecessor is restricted to non-all-caps
+    labels, so an "EXHIBIT" / "99.1" header pair can never fire it.
+    Deliberately NOT a value-line predecessor: Elevance's membership
+    table chains bare decimals after plain value lines ("1,025" /
+    "29.9" / "2.6" — change-% values), and keeping those spends the
+    30-line collection budget and drops the table's tail ("Commercial
+    Risk-Based: 4,781 / 4,777" loses its second value). A bare
+    decimal after a plain value line stays dropped, as before.
+    """
+    if not re.fullmatch(r"\d+\.\d+", ln.strip()):
+        return False
+    p = prev.strip()
+    if p == "$":
+        return True
+    return bool(p) and not p.isupper() and _is_guidance_table_label(p)
+
+
+_SPLIT_CURRENCY_NUMBER_RE = re.compile(r"^\(?\d[\d,]*(?:\.\d+)?\)?$")
+
+
+def _merge_split_currency_values(lines: list[str]) -> list[str]:
+    """Merge a lone "$" cell line with the following bare-number cell
+    ("$" / "6.67" -> "$6.67").
+
+    Batch 239: SPG's guidance tables split currency and amount into
+    separate cells, so the flattened text carries a bare "$" line
+    followed by a bare-number line. The "$" alone is not a value line
+    (no digit) and the number alone fuses to nothing, so the row
+    never forms and the table renders as bare "$" placeholders. The
+    merge only fires when the next line is a decimal or
+    thousands-grouped number — never a bare year or page number — or
+    a parenthesized negative, so a "$" line above an unrelated
+    number can never merge.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (
+            ln.strip() == "$"
+            and _SPLIT_CURRENCY_NUMBER_RE.match(nxt.strip())
+            and ("." in nxt or "," in nxt)
+        ):
+            out.append("$" + nxt.strip())
+            i += 2
+            continue
+        out.append(ln)
+        i += 1
+    return out
+
+
 def _clean_guidance_result(collected: list[str]) -> list[str]:
     """Fuse split guidance-table rows and drop table chrome.
 
@@ -10752,6 +10823,9 @@ def _clean_guidance_result(collected: list[str]) -> list[str]:
         else:
             split_lines.append(ln)
     lines = split_lines
+    # Batch 239: merge split currency/amount cells ("$" / "6.67")
+    # before the fuse loop, so the row forms with real values.
+    lines = _merge_split_currency_values(lines)
     out: list[str] = [collected[0]]
     pending: list[str] = []
     range_join = False
@@ -11010,7 +11084,12 @@ def extract_management_guidance(
             budget_cut = 0
             while j < len(lines):
                 follow = lines[j]
-                if _ADMIN_LINE_RE.match(follow) or _MORE_MARKER_RE.match(follow):
+                if (
+                    _ADMIN_LINE_RE.match(follow)
+                    and not _is_split_table_value(
+                        follow, collected[-1] if collected else ""
+                    )
+                ) or _MORE_MARKER_RE.match(follow):
                     # Batch 193: "-more-" is a page-continuation
                     # marker, never content — skip it like the admin
                     # lines (8 collected guidance texts carry one).
