@@ -423,6 +423,31 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 _HIGHLIGHTS_SECTION_ANCHOR_RE = re.compile(
     r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
 )
+# Batch 244: scope words on a Highlights-section anchor. A Q4 release
+# often carries two financial Highlights sections — the quarter's and
+# the full year's (AGNC: "FOURTH QUARTER 2024 FINANCIAL HIGHLIGHTS"
+# then "2024 FULL YEAR HIGHLIGHTS"). The density ranking alone picks
+# the full-year section (more figure lines), but the row is a quarter,
+# so the quarter's figures are the right ones. A combined heading
+# ("FOURTH QUARTER AND FULL YEAR 2024 HIGHLIGHTS") names a quarter,
+# so the quarter word wins over the full-year word.
+_QUARTER_SCOPE_RE = re.compile(
+    r"\b(first|second|third|fourth)\s+quarter\b|\bQ[1-4]\b", re.IGNORECASE
+)
+_FULL_YEAR_SCOPE_RE = re.compile(
+    r"\b(full|fiscal)[\s\-]?year\b|\bFY\s*\d{4}\b", re.IGNORECASE
+)
+
+
+def _highlights_section_scope(anchor: str) -> str:
+    """\"quarter\" / \"fullyear\" / \"other\" for a Highlights-section anchor."""
+    if _QUARTER_SCOPE_RE.search(anchor):
+        return "quarter"
+    if _FULL_YEAR_SCOPE_RE.search(anchor):
+        return "fullyear"
+    return "other"
+
+
 # "Selected Revenue Highlights" product table, Waste Management's "HIGHLIGHTS
 # FOR the fourth quarter" EBITDA table): units parentheticals ("(Dollars in
 # millions)"), "% Change" column headers, or data rows dense with $ and %.
@@ -9201,15 +9226,20 @@ def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
     return False
 
 
-def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
-    """Return the content lines of every explicit "Highlights" section.
+def _extract_highlights_sections_anchored(
+    lines: list[str],
+) -> list[tuple[str, list[str]]]:
+    """Return (anchor, content lines) for every explicit "Highlights" section.
 
     Previously only the first match was returned; Halliburton's releases
     pair leading financial bullets with a later business "Highlights"
     section, so all candidates are collected and ranked by financial
-    density by the caller (batch 102).
+    density by the caller (batch 102). Batch 244: the anchor rides
+    along so the caller can prefer a quarter-scoped section over a
+    full-year one (AGNC) — the content is byte-identical to what
+    _extract_highlights_sections returns.
     """
-    sections: list[list[str]] = []
+    sections: list[tuple[str, list[str]]] = []
     for i, ln in enumerate(lines):
         if not _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln) or len(ln) > 120:
             continue
@@ -9489,10 +9519,15 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 j += 1
             collected = kept
             if collected:
-                sections.append(collected)
+                sections.append((ln, collected))
             continue
         break  # heading found but section too thin — don't try later headings
     return sections
+
+
+def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
+    """Return the content lines of every explicit "Highlights" section."""
+    return [content for _, content in _extract_highlights_sections_anchored(lines)]
 
 
 def _extract_highlights_section(lines: list[str]) -> list[str] | None:
@@ -9503,12 +9538,23 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     with reported financial figures wins (earlier wins ties). When nothing
     is financial, the earliest candidate is kept — the pre-batch-102
     behavior.
+
+    Scope priority (batch 244): a full-year-scoped section never wins
+    over a quarter-scoped section that financially qualifies. A Q4
+    release often carries both ("FOURTH QUARTER 2024 FINANCIAL
+    HIGHLIGHTS" and "2024 FULL YEAR HIGHLIGHTS", AGNC); the full-year
+    section has more figure lines, so density alone picks it — but the
+    row is a quarter, so the quarter's figures are the right ones. The
+    scope rule only fires when a quarter-scoped candidate qualifies
+    financially, so a release whose only financial section is the
+    full-year one is untouched, and the leading-bullet block (no
+    anchor) neither triggers nor is dropped by it.
     """
-    candidates: list[list[str]] = []
+    candidates: list[tuple[str | None, list[str]]] = []
     leading = _leading_bullet_block(lines)
     if leading is not None:
-        candidates.append(leading)
-    candidates.extend(_extract_highlights_sections(lines))
+        candidates.append((None, leading))
+    candidates.extend(_extract_highlights_sections_anchored(lines))
     if not candidates:
         return None
 
@@ -9520,9 +9566,20 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         # score 0 and only wins when nothing financial exists.
         return (1, count) if (count >= 2 and density >= 0.4) else (0, 0)
 
-    best = max(candidates, key=_score)
+    if any(
+        anchor is not None
+        and _highlights_section_scope(anchor) == "quarter"
+        and _score(content)[0] == 1
+        for anchor, content in candidates
+    ):
+        candidates = [
+            (anchor, content)
+            for anchor, content in candidates
+            if anchor is None or _highlights_section_scope(anchor) != "fullyear"
+        ]
+    best = max((content for _, content in candidates), key=_score)
     if _score(best)[0] <= 0:
-        best = candidates[0]
+        best = candidates[0][1]
     # Batch 177: drop colon-ended list-intro / section headings and
     # summary-table column-header lines from the WINNING section only.
     # The drop must happen after selection, not in the per-section

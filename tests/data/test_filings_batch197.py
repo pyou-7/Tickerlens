@@ -105,12 +105,22 @@ def test_cart_2024_q3_financial_highlights_served():
     assert "Dear Shareholders" not in out  # salutation is never content
 
 
-def test_cart_2024_q4_full_year_and_quarter_bullets_served():
+def test_cart_2024_q4_quarter_bullets_served_not_full_year():
+    # Batch 244 supersedes the batch-197 pin: the row is a quarter,
+    # so the quarter's Highlights section wins over the full-year one
+    # (quarter-scope beats full-year scope when it financially
+    # qualifies). Batch 197 pinned the old 12-line window, which
+    # straddled the FY/Q4 boundary and served the FY figures
+    # ($33,461M GTV, $885M EBITDA) on a quarterly row; the quarter's
+    # own figures ($8,645M GTV, $252M EBITDA) are the right ones.
     out = _live("CART_2024-12-31")
     assert out is not None
-    assert "GTV of $33,461 million, up 10% year-over-year" in out  # FY24
     assert "GTV of $8,645 million, up 10% year-over-year" in out  # Q4
-    assert "Adjusted EBITDA of $885 million, up 38% year-over-year" in out
+    assert "Orders of 77.5 million, up 11% year-over-year" in out  # Q4
+    assert "Adjusted EBITDA of $252 million, up 27% year-over-year" in out  # Q4
+    assert "GTV of $33,461 million, up 10% year-over-year" not in out  # FY24
+    assert "Adjusted EBITDA of $885 million, up 38% year-over-year" not in out  # FY24
+    assert "Dear Shareholders" not in out  # salutation is never content
 
 
 def test_cart_2025_q2_bullets_served():
