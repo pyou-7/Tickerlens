@@ -9000,6 +9000,111 @@ def _current_leading_item_text(bullets: list[str]) -> str:
     return "\n".join(bullets[start:])
 
 
+_QUOTE_VERB_RE = re.compile(
+    r"\b(said|added|commented|noted|stated|remarked|observed|continued)\b",
+    re.IGNORECASE,
+)
+
+# A dated dateline sentence lead whose dashes are glued, not spaced
+# ("WILMINGTON, Mass.--November 26, 2024--Analog Devices, Inc. ..."
+# / "SAN FRANCISCO, MAY 22, 2025-- Autodesk, Inc. ..."). The
+# extractor's dateline regexes need a spaced dash (_DATELINE_LEAD_RE)
+# or a title-case bare month (_DATED_DATELINE_LEAD_RE), so neither
+# form matches them -- and widening those regexes is wrong: the
+# leading-bullet block breaks on a dated dateline mid-block, so a
+# glued dateline that matched would drop out of the block instead of
+# riding in as a continuation (Autodesk's dateline is live today only
+# because the regexes miss it). This narrow variant is used only by
+# the batch-246 quote pull-in, where the line is already collected
+# and only needs identifying. The month alternation covers title-case
+# and all-caps (Autodesk's MAY); the optional state segment covers
+# ADI's "Mass.--" before the month.
+_MONTHS_TITLE = (
+    "January|February|March|April|May|June|July|August|September|"
+    "October|November|December"
+)
+_MONTHS_ALLCAPS = (
+    "JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|"
+    "OCTOBER|NOVEMBER|DECEMBER"
+)
+_GLUED_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+"
+    r"(?:[A-Za-z .]+?\s*[\u2013\u2014-]{1,2}\s*)?"
+    r"(?:" + _MONTHS_TITLE + "|" + _MONTHS_ALLCAPS + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+# A dated dateline sentence lead with a two-comma city/state/date
+# ("SECAUCUS, N.J., October 22, 2024 - Quest Diagnostics ..."). The
+# same shape batch 241's probe-side _DATED_DATELINE_TWO_COMMA_RE
+# covers for the S3 dateline residue; the extractor's own
+# _DATED_DATELINE_LEAD_RE needs the month right after the first
+# comma, so this form matches nothing in the extractor. Used only
+# by the quote pull-in, like the glued and parenthesized forms.
+_TWO_COMMA_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+[A-Za-z .'\-]*,\s+"
+    r"(?:" + _MONTHS_TITLE + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+
+# A dated dateline sentence lead with a parenthesized date ("Goleta,
+# California (October 24, 2024) -- Deckers Brands ... today announced
+# ..."). Same standing as the glued form above: no existing dateline
+# predicate matches it, and it is used only by the quote pull-in.
+_PAREN_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+[A-Za-z .\-]*?\s*\(\s*"
+    r"(?:" + _MONTHS_TITLE + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*\)\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+
+def _is_quote_pull_dateline(ln: str) -> bool:
+    """True when ln is a dateline sentence that opens the body prose.
+
+    The extractor's own dateline predicates plus the glued-dash and
+    parenthesized-date forms above. Used only to anchor the batch-246
+    quote pull-in: the dateline is the line that closes the leading
+    bullet item, and the executive quote follows it immediately.
+    """
+    return bool(
+        _DATELINE_LEAD_RE.match(ln)
+        or _DATED_DATELINE_LEAD_RE.match(ln)
+        or _GLUED_DATED_DATELINE_LEAD_RE.match(ln)
+        or _PAREN_DATED_DATELINE_LEAD_RE.match(ln)
+        or _TWO_COMMA_DATED_DATELINE_LEAD_RE.match(ln)
+    )
+
+
+def _is_executive_quote_line(ln: str) -> bool:
+    """True when ln is (one line of) an executive quote.
+
+    Two shapes, both seen in the seed rows: quote-first (``“...,”
+    said Vincent Roche, CEO and Chair. “...”``) and attribution-first
+    (``CFO Richard Puccio added, “Second quarter bookings ...``). A
+    quote mark must open within the first 140 chars and close after
+    it, and the attribution-first form needs a quote verb in the
+    prefix. The 140-char bound is the Ford guard: a flattened
+    page-image mega-line carries quoted terms (``“adjusted”``) and
+    verbs (``continued``) deep inside it, but it never opens with a
+    quote and its first quote mark sits past the bound — so it never
+    qualifies. A wrapped quote whose opener never closes on its own
+    line does not qualify either; the pull-in only takes complete
+    quote lines.
+    """
+    s = ln.strip()
+    if not s:
+        return False
+    if s[0] in ("“", '"'):
+        return bool(re.search(r'[”"]', s[1:]))
+    m = re.search(r'[“"]', s)
+    if m is None or m.start() > 140:
+        return False
+    if not _QUOTE_VERB_RE.search(s[: m.start()]):
+        return False
+    return bool(re.search(r'[”"]', s[m.start() + 1 :]))
+
+
 def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     """Consecutive bullet lines immediately after the headline.
 
@@ -9159,6 +9264,27 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # so an unclosed quote cannot run away.
                 and not _item_has_open_quote(_current_leading_item_text(bullets))
             ):
+                # Batch 246: the dateline closes the item, and the
+                # executive quote follows it immediately (ADI, Deckers,
+                # Autodesk: the seed rows carry the quote, the block
+                # stopped at the dateline). Pull the quote run —
+                # consecutive executive-quote lines, at most 3 — then
+                # end the block: the results table follows the quote.
+                # The dateline test is what keeps this narrow: a
+                # terminated prose continuation that is not a dateline
+                # never pulls a quote behind it, and a quote that is
+                # not immediately after the dateline is never reached.
+                if _is_quote_pull_dateline(ln) and _is_executive_quote_line(nxt):
+                    j = idx + 1
+                    pulled = 0
+                    while (
+                        j < n
+                        and pulled < 3
+                        and _is_executive_quote_line(lines[j])
+                    ):
+                        bullets.append(lines[j])
+                        pulled += 1
+                        j += 1
                 break  # item closed and prose follows (dateline)
         else:
             break  # first line isn't a bullet — no leading block
