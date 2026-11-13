@@ -122,6 +122,18 @@ def norm(s: str) -> str:
     # non-space character is preserved, two lines that differ in
     # content still differ after norm ("sales 1" vs "sales 2" stays
     # different).
+    # Batch 247: canonicalize spacing around a double hyphen, but
+    # ONLY when a 4-digit year precedes it ("SAN FRANCISCO, MAY 22,
+    # 2025 -- Autodesk ..." vs the live "2025-- Autodesk ...", ADSK
+    # x6). The seed-era extractor spaced the dateline dash; the
+    # current one emits it glued. The year anchor is load-bearing:
+    # a general " -- " collapse would erase the "Label -- prose"
+    # marker the batch-244 S5 narrative classifier keys on
+    # (_LABEL_DASH_RE), and the full-suite run caught exactly that
+    # (two batch-244 tests failed on the general form). A label-dash
+    # line carries no digits before its dash, so the year anchor can
+    # never touch one; every non-space character is preserved, so two
+    # lines that differ in content still differ after norm.
     s = re.sub(r"(?m)^(\s*[•◦▪■●–—‣·○◆▸►])(?!\s)", r"\1 ", s)
     s = re.sub(r"\s+([®™©])", r"\1", s)
     s = re.sub(r"([,.])\s+(\d)(?=\s|$)", r"\1\2", s)
@@ -130,6 +142,7 @@ def norm(s: str) -> str:
     out: list[str] = []
     for ln in lines:
         ln = re.sub(r" +([,.])", r"\1", ln)
+        ln = re.sub(r"(\b\d{4}) --(?= |$)", r"\1--", ln)
         ln = re.sub(r"(\d) +(st|nd|rd|th)\b", r"\1\2", ln)
         ln = re.sub(r"([A-Za-z%]) +(\d)(?= |$)", r"\1\2", ln)
         if ln == "" and out and out[-1] == "":
