@@ -5493,10 +5493,23 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
             # stopped at the name line and the headline loop then picked
             # it as the headline. Skipping admin lines when gathering the
             # following lines finds the phone within two non-admin lines.
+            # Batch 243: a line that itself carries contact evidence is
+            # never skipped as admin — a bare "Telephone: (617) 375-7500"
+            # line matches _ADMIN_LINE_RE (the telephone alternative), so
+            # the old gather jumped over the only phone after American
+            # Tower's role line ("Senior Vice President, Investor
+            # Relations and FP&A"), the lookahead found no evidence, the
+            # block ended at the role line, and the role line became the
+            # headline of every AMT quarter. Phone/contact evidence
+            # counts as a following line wherever it sits.
             following: list[str] = []
             k = j + 1
             while k < len(lines) and len(following) < 2:
-                if not _ADMIN_LINE_RE.match(lines[k]):
+                if (
+                    not _ADMIN_LINE_RE.match(lines[k])
+                    or _PHONE_RE.search(lines[k])
+                    or _CONTACT_LINE_RE.search(lines[k])
+                ):
                     following.append(lines[k])
                 k += 1
             if not any(
