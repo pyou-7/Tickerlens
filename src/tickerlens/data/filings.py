@@ -431,11 +431,23 @@ _HIGHLIGHTS_SECTION_ANCHOR_RE = re.compile(
 # so the quarter's figures are the right ones. A combined heading
 # ("FOURTH QUARTER AND FULL YEAR 2024 HIGHLIGHTS") names a quarter,
 # so the quarter word wins over the full-year word.
+# Batch 245: Autodesk heads its annual section with a bare "Fiscal
+# YYYY" ("Fiscal 2025 Financial Highlights") — no "year" word, no
+# "FY" prefix — so the batch-244 regex missed it, scope read "other",
+# and the full-year section (denser) won over the quarter section on
+# all 7 ADSK rows. A bare "Fiscal YYYY" on a Highlights heading is
+# the annual section: a quarter section always names its quarter
+# ("Fourth Quarter Fiscal 2025 ..."), and the quarter check runs
+# first, so a "Fiscal YYYY ... Quarter" heading still reads quarter.
+# The scope rule still only fires when a quarter candidate qualifies,
+# so a release whose only financial section is headed "Fiscal YYYY"
+# is untouched.
 _QUARTER_SCOPE_RE = re.compile(
     r"\b(first|second|third|fourth)\s+quarter\b|\bQ[1-4]\b", re.IGNORECASE
 )
 _FULL_YEAR_SCOPE_RE = re.compile(
-    r"\b(full|fiscal)[\s\-]?year\b|\bFY\s*\d{4}\b", re.IGNORECASE
+    r"\b(full|fiscal)[\s\-]?year\b|\bFY\s*\d{4}\b|\bfiscal\s+\d{4}\b",
+    re.IGNORECASE,
 )
 
 
