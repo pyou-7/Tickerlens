@@ -107,6 +107,21 @@ def norm(s: str) -> str:
     # followed by space or end-of-line, so a year or a decimal never
     # collapses). The bullet rule is line-start-anchored; the legacy
     # mid-line "•" rule stays for flattened bullet runs.
+    # Batch 242: three more spacing-only classes, all applied
+    # per-line (literal spaces, never "\s", so a rule can never join
+    # two lines): a space before a comma or period ("The Perfect
+    # Couple , Nobody" vs "The Perfect Couple, Nobody", Netflix);
+    # a spaced ordinal ("3 rd Quarter" vs "3rd Quarter", Booking);
+    # a footnote key spaced off a word ("same-restaurant sales 1
+    # increase" vs "sales1 increase"; "Consolidated Darden 1" vs
+    # "Darden1", Darden) or off a percent sign ("an increase of
+    # 12.5% 3" vs "12.5%3", Darden). The footnote-key rule needs a
+    # LETTER or "%" before the space and a single digit after it
+    # (followed by space or end-of-line), so "Q3 2024", "year 2024",
+    # "up 10 percent" and "2024 1" never collapse — and because every
+    # non-space character is preserved, two lines that differ in
+    # content still differ after norm ("sales 1" vs "sales 2" stays
+    # different).
     s = re.sub(r"(?m)^(\s*[•◦▪■●–—‣·○◆▸►])(?!\s)", r"\1 ", s)
     s = re.sub(r"\s+([®™©])", r"\1", s)
     s = re.sub(r"([,.])\s+(\d)(?=\s|$)", r"\1\2", s)
@@ -114,6 +129,9 @@ def norm(s: str) -> str:
     lines = [ln.rstrip() for ln in s.split("\n")]
     out: list[str] = []
     for ln in lines:
+        ln = re.sub(r" +([,.])", r"\1", ln)
+        ln = re.sub(r"(\d) +(st|nd|rd|th)\b", r"\1\2", ln)
+        ln = re.sub(r"([A-Za-z%]) +(\d)(?= |$)", r"\1\2", ln)
         if ln == "" and out and out[-1] == "":
             continue
         out.append(ln)
