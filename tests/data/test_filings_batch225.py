@@ -134,13 +134,23 @@ def test_well_capital_activity_heading_dropped() -> None:
 
 
 def test_dlr_toc_only_result_unchanged_by_floor() -> None:
-    # DLR's live extraction is a 220-char table-of-contents result whose
-    # whole body is headings; dropping them would leave <200 chars, so
-    # the batch-153 floor keeps the wart — the fix must not change it.
+    # Batch 253: this test pinned the DLR wart — live extraction was a
+    # 220-char table-of-contents result whose whole body is headings,
+    # kept by the batch-153 floor. The batch-253 ◾ fix removes the
+    # wart at its root: the "Highlights" section is no longer rejected
+    # as a financial table, so live serves the real bullets and the
+    # TOC entries are gone. The "Table of Contents" first line stays
+    # — it is the picked headline, a separate wart the stored rows
+    # already carry (see the batch-253 DECISIONS entry).
     hl = extract_press_release_highlights(_read("DLR_2026-03-31.html"))
     assert hl is not None
-    assert "Adjusted Funds From Operations" in hl
-    assert "Table of Contents" in hl
+    assert hl.split("\n\n")[0] == "Table of Contents"
+    assert "Reported net income available to common stockholders of $0.46" in hl
+    assert "Signed total bookings during 1Q26" in hl
+    assert "Raised 2026 Core FFO per share outlook to $8.00 - $8.10" in hl
+    assert "total revenues of $1.6 billion" in hl
+    assert "Adjusted Funds From Operations" not in hl
+    assert "Key Quarterly Financial Data" not in hl
 
 
 # --- unit pins: each new shape ------------------------------------------

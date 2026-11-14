@@ -505,7 +505,17 @@ _TABLE_UNITS_RE = re.compile(
 # (no English word is a lone "l"), so "l " is a bullet lead. The space
 # stays required: a line starting with the letter "l" glued to a word
 # ("lower revenue ...") is prose, not a bullet.
-_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s|l\s)")
+# Batch 253: the black-square bullet "◾" (U+25FE) — Digital Realty
+# renders its Highlights bullets with it, and it was missing from the
+# glyph class. Two $+%-carrying ◾ bullets plus the two $+%-carrying
+# "Financial Results" narrative lines tripped the data_rows >= 4
+# threshold in _looks_like_financial_table, so the genuine 7-bullet
+# "Highlights" section was rejected as a financial table and the lede
+# fallback served the supplement TOC instead (DLR 2026-03-31: live
+# 220 chars of TOC junk vs 1638 stored). The batch-154 defect class,
+# a new glyph: the bullet guard must see the same markers the
+# exhibits use, or figure-dense bullet lists read as tables.
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾]\s?|-\s|l\s)")
 
 
 def _is_inline_bullet_start(ln: str) -> bool:
