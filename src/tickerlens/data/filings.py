@@ -9367,7 +9367,8 @@ def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
 def _extract_highlights_sections_anchored(
     lines: list[str],
 ) -> list[tuple[str, list[str]]]:
-    """Return (anchor, content lines) for every explicit "Highlights" section.
+    """Return (anchor, content lines, anchor index) for every explicit
+    "Highlights" section.
 
     Previously only the first match was returned; Halliburton's releases
     pair leading financial bullets with a later business "Highlights"
@@ -9375,7 +9376,9 @@ def _extract_highlights_sections_anchored(
     density by the caller (batch 102). Batch 244: the anchor rides
     along so the caller can prefer a quarter-scoped section over a
     full-year one (AGNC) — the content is byte-identical to what
-    _extract_highlights_sections returns.
+    _extract_highlights_sections returns. Batch 249: the anchor index
+    rides along too, so the caller can prepend the executive-quote run
+    that sits immediately before the winning heading (Palantir).
     """
     sections: list[tuple[str, list[str]]] = []
     for i, ln in enumerate(lines):
@@ -9657,7 +9660,7 @@ def _extract_highlights_sections_anchored(
                 j += 1
             collected = kept
             if collected:
-                sections.append((ln, collected))
+                sections.append((ln, collected, i))
             continue
         break  # heading found but section too thin — don't try later headings
     return sections
@@ -9665,7 +9668,53 @@ def _extract_highlights_sections_anchored(
 
 def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
     """Return the content lines of every explicit "Highlights" section."""
-    return [content for _, content in _extract_highlights_sections_anchored(lines)]
+    return [content for _, content, _ in _extract_highlights_sections_anchored(lines)]
+
+
+def _prepend_pre_section_quote(
+    lines: list[str], anchor_idx: int | None, content: list[str]
+) -> list[str]:
+    """Prepend the executive-quote run immediately before a Highlights
+    section heading (batch 249).
+
+    Palantir's releases put the CEO's quote between the dateline and
+    the "Q# YYYY Highlights" heading, so the section path wins and
+    the quote is never collected — the batch-246 pull-in only fires
+    inside the leading-bullet block, which these releases never open.
+    The quote is the release's own summary of the quarter and the
+    seed rows carry it, so the section serves it too: the consecutive
+    executive-quote lines (at most 3, the batch-246 cap) directly
+    before the heading, in document order.
+
+    The dateline anchor is what keeps this narrow, exactly as in
+    batch 246: the line before the quote run must be a dateline
+    sentence. A quote preceded by a bullet (Amazon's Jassy quote
+    inside a bullet), a footnote line (Chevron's reconciliation
+    pointer), an attribution line (Equinix's "Charles Meyers, CEO
+    and President, Equinix:"), or an undated dateline (Biogen,
+    Datadog) is a different shape and stays out. A headed section
+    is the only winner this applies to — the leading-bullet block
+    (anchor None) already pulls its quotes via batch 246.
+    """
+    if anchor_idx is None or anchor_idx <= 0:
+        return content
+    # Walk back over the whole consecutive quote run, then take the
+    # first three in document order — the batch-246 cap. Capping the
+    # backwards walk instead would keep the LAST three (the ones
+    # nearest the heading) and strand the dateline check on the
+    # uncollected fourth quote line, so a four-line run would prepend
+    # nothing at all.
+    j = anchor_idx - 1
+    run: list[str] = []
+    while j >= 0 and _is_executive_quote_line(lines[j]):
+        run.append(lines[j])
+        j -= 1
+    if not run:
+        return content
+    if j < 0 or not _is_quote_pull_dateline(lines[j]):
+        return content
+    run.reverse()
+    return run[:3] + content
 
 
 def _extract_highlights_section(lines: list[str]) -> list[str] | None:
@@ -9688,10 +9737,10 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     full-year one is untouched, and the leading-bullet block (no
     anchor) neither triggers nor is dropped by it.
     """
-    candidates: list[tuple[str | None, list[str]]] = []
+    candidates: list[tuple[str | None, list[str], int | None]] = []
     leading = _leading_bullet_block(lines)
     if leading is not None:
-        candidates.append((None, leading))
+        candidates.append((None, leading, None))
     candidates.extend(_extract_highlights_sections_anchored(lines))
     if not candidates:
         return None
@@ -9708,16 +9757,17 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         anchor is not None
         and _highlights_section_scope(anchor) == "quarter"
         and _score(content)[0] == 1
-        for anchor, content in candidates
+        for anchor, content, _ in candidates
     ):
         candidates = [
-            (anchor, content)
-            for anchor, content in candidates
+            (anchor, content, idx)
+            for anchor, content, idx in candidates
             if anchor is None or _highlights_section_scope(anchor) != "fullyear"
         ]
-    best = max((content for _, content in candidates), key=_score)
-    if _score(best)[0] <= 0:
-        best = candidates[0][1]
+    best_pair = max(candidates, key=lambda c: _score(c[1]))
+    if _score(best_pair[1])[0] <= 0:
+        best_pair = candidates[0]
+    best_anchor, best, best_idx = best_pair
     # Batch 177: drop colon-ended list-intro / section headings and
     # summary-table column-header lines from the WINNING section only.
     # The drop must happen after selection, not in the per-section
@@ -9745,7 +9795,15 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     # and the density competition see the unjoined lines exactly as
     # before.
     best = _join_fragmented_bullet_starts(best)
-    return _trim_unfinished_tail(best)
+    best = _trim_unfinished_tail(best)
+    # Batch 249: a headed section's executive quote, when it sits
+    # between the dateline and the heading (Palantir), is prepended
+    # after the post-selection drops/trim, so the competition and
+    # the trim judge the section alone. The leading-bullet block
+    # (anchor None) never reaches this — its quotes come via batch 246.
+    if best_anchor is not None:
+        best = _prepend_pre_section_quote(lines, best_idx, best)
+    return best
 
 
 # --- Shareholder-letter extraction mode (batch 94) ---------------------------

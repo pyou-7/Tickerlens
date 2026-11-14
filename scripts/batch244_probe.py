@@ -78,7 +78,7 @@ def main() -> int:
         lines = _split_bullet_runs(lines)
         secs = _extract_highlights_sections_anchored(lines)
         anchors = [
-            f"{_highlights_section_scope(a)}:{a[:48]}" for a, _ in secs
+            f"{_highlights_section_scope(a)}:{a[:48]}" for a, _, _ in secs
         ]
         print(f"  {key}: verify={verify_fy_stored(html, stored, live)}")
         print(f"    anchors: {anchors}")
