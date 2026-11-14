@@ -117,11 +117,15 @@ def test_gate_s9_passes_full_year_results_variant() -> None:
 
 
 def test_gate_s9_refuses_lost_subheadline() -> None:
-    # The other three CHD rows: live also drops a genuine
-    # sub-headline ("ANNOUNCES 4% DIVIDEND INCREASE") — a swap would
-    # lose real news, so the gate refuses even though the headings
-    # match. The doc carries the sub-headline between the subheads
-    # and the headings, exactly as the real exhibit does.
+    # A stored sub-headline live still drops blocks the swap — a swap
+    # would lose real news, so the gate refuses even though the
+    # headings match. The doc carries the sub-headline between the
+    # subheads and the headings, exactly as the real exhibit does.
+    # Batch 252: the case used to ride on "ANNOUNCES 4% DIVIDEND
+    # INCREASE" — the extractor now serves that line, so the refusal
+    # rides on "AFFIRMS LONG-TERM TARGETS", a 4-word verb line live
+    # still drops by design (it reads as a heading, and sparing it
+    # would starve a real bullet under the 6-line budget).
     html = _contact_release_html(
         "Church & Dwight Co., Inc.",
         "News Release",
@@ -129,19 +133,19 @@ def test_gate_s9_refuses_lost_subheadline() -> None:
         "Rick Dierker",
         _HEADLINE,
         *_SUBHEADS,
-        "ANNOUNCES 4% DIVIDEND INCREASE",
+        "AFFIRMS LONG-TERM TARGETS",
         *_HEADINGS,
         *_BULLETS,
         _DATELINE,
     )
     live = extract_press_release_highlights(html)
     assert live is not None
-    assert "ANNOUNCES 4% DIVIDEND INCREASE" not in live
+    assert "AFFIRMS LONG-TERM TARGETS" not in live
     stored = "\n\n".join(
         [
             _HEADLINE,
             *_SUBHEADS,
-            "ANNOUNCES 4% DIVIDEND INCREASE",
+            "AFFIRMS LONG-TERM TARGETS",
             *_HEADINGS,
             *_BULLETS[:2],
         ]

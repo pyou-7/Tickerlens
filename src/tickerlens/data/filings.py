@@ -1058,7 +1058,7 @@ _LEDE_HEADLINE_VERB_RE = re.compile(
     r"GUIDES?|RESETTING|"
     r"RESETS?|GROWS?|INCREASES?|DECREASES?|BEATS?|TOPS?|MISSES?|"
     r"LIFTS?|CUTS?|EXPANDS?|LAUNCHES?|INTRODUCES?|UNVEILS?|"
-    r"RETIRE|ASSUME|COMPLETES?)\b",
+    r"RETIRE|ASSUME|COMPLETES?|COMPLETED)\b",
     re.IGNORECASE,
 )
 
@@ -1078,6 +1078,22 @@ def _is_lede_heading_fragment(ln: str) -> bool:
     release's sub-headline ("Q2 ORGANIC SALES AND ADJUSTED EPS EXCEED
     OUTLOOK", "AMERICAN WATER REPORTS SOLID SECOND QUARTER RESULTS"),
     and the verb is what tells a sub-headline from a table title.
+    Batch 252: the <=4-word branch gets the same guards — a short
+    sub-headline carries a $/% figure ("ANNOUNCES 4% DIVIDEND
+    INCREASE") or, at <=3 words, states a completed corporate event
+    ("TOUCHLAND ACQUISITION COMPLETED" — the verb list gains
+    COMPLETED for it). The verb guard is deliberately narrower than
+    the 5–8-word band's: a present-tense verb at <=3 words does not
+    distinguish a sub-headline from a section heading ("AFFIRMS
+    LONG-TERM TARGETS", "Q1 EPS EXCEEDS OUTLOOK", "UPDATES FULL YEAR
+    OUTLOOK" — all read as headings, and sparing them starves a real
+    bullet under the 6-line budget), while a completed-event statement
+    is news by construction — a heading names a topic (RESULTS,
+    OUTLOOK, TARGETS), it never states that an event is complete.
+    A heading fragment never carries a figure
+    ("QUARTER", "RESULTS FOR THE QUARTER", "Q4 2025 RESULTS" — a
+    bare year or quarter token is not a figure, so the $-less/%-less
+    digits in a period label do not spare it).
     """
     words = ln.split()
     if not words:
@@ -1102,6 +1118,18 @@ def _is_lede_heading_fragment(ln: str) -> bool:
     ):
         return False
     if len(words) <= 4:
+        # Batch 252: a short sub-headline carries a $/% figure, or —
+        # at <=3 words — states a completed corporate event
+        # ("ANNOUNCES 4% DIVIDEND INCREASE", "TOUCHLAND ACQUISITION
+        # COMPLETED"); a heading fragment never does ("QUARTER",
+        # "RESULTS FOR THE QUARTER", "Q4 2025 RESULTS" — bare years
+        # and quarter tokens are not figures; "AFFIRMS LONG-TERM
+        # TARGETS" stays a fragment — a present-tense stance, not a
+        # completed event).
+        if "$" in ln or "%" in ln:
+            return False
+        if len(words) <= 3 and re.search(r"\bCOMPLETED\b", ln):
+            return False
         return True
     if len(words) > 8:
         return False
@@ -1571,6 +1599,47 @@ def _is_lede_dollar_range_statement(ln: str) -> bool:
     return len(words) >= 4
 
 
+_LEDE_PERCENT_RANGE_RE = re.compile(
+    r"\d[\d,.]*\s?%?(?:\s+to\s+|\s+[-–—]\s+|(?<=[\d%])[-–—](?=\d))"
+    r"\d[\d,.]*\s?%",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_percent_range_statement(ln: str) -> bool:
+    """True for a guidance-range STATEMENT in %: a %-to-% range carried
+    by a label or subject (at least 4 alphabetic words besides "to").
+    Batch 252: the %-range mirror of _is_lede_dollar_range_statement.
+    Church & Dwight's "2026 OUTLOOK OF ORGANIC SALES GROWTH OF 3-4%
+    and ADJUSTED EPS GROWTH OF 5-8%" was eaten by _is_lede_data_row's
+    25% branch — _LEDE_FIGURE_RE counts each hyphenated range as two
+    figures ("3", "4%"), so the line reads 4 figures over 14 tokens
+    and ends in a figure. A bare range fragment ("3% to 4%" on its own
+    line — a guidance-table cell) has no words and stays a data row,
+    and a short %-range table row ("Net Sales Growth (0.5%) - 0.5%
+    1.5% - 3.5%") has only 3 words and stays one too: a row's label is
+    short, a statement's subject is not. The range connector is "to",
+    a spaced dash, or a hyphen/dash between two digits (or a % and a
+    digit, "5%-7%") — never the minus of a negative value ("2.02
+    -0.6 %", Fastenal: the dash is spaced from the value on the left
+    and glued to the number on the right, so it is a sign, not a
+    range). A bullet is never a range statement — a bullet-led line
+    ("● ... 5%-7% ...", Edison) is a bullet, served on the budget
+    like any other bullet, not free like a headline-adjacent
+    sub-headline.
+    """
+    if _BULLET_LEAD_RE.match(ln):
+        return False
+    if not _LEDE_PERCENT_RANGE_RE.search(ln):
+        return False
+    words = [
+        tok
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)?", ln)
+        if tok.lower() != "to"
+    ]
+    return len(words) >= 4
+
+
 _LEDE_DASH_TOKENS = frozenset({"—", "–", "-"})
 
 
@@ -1707,6 +1776,10 @@ def _is_lede_data_row(ln: str) -> bool:
         return False
     if _is_lede_dollar_range_statement(ln):
         return False
+    if _is_lede_percent_range_statement(ln):
+        return False  # Batch 252: %-range guidance statement (see
+        # _is_lede_percent_range_statement) — the %-range mirror of the
+        # batch-183 $-range exemption above.
     figures = _LEDE_FIGURE_RE.findall(ln)
     tokens = ln.split()
     # Batch 220: value figures exclude a leading bare year (a label
@@ -8677,17 +8750,21 @@ def extract_press_release_highlights(
                 prev_was_residue = True
                 i += 1
                 continue
-            if _is_lede_dollar_range_statement(ln) and not any(
-                _is_sentence_terminated(x) for x in lede
-            ):
+            if (
+                _is_lede_dollar_range_statement(ln)
+                or _is_lede_percent_range_statement(ln)
+            ) and not any(_is_sentence_terminated(x) for x in lede):
                 # Batch 183: a guidance-range sub-headline ("Reaffirms
                 # 2026 Outlook for Adjusted EPS of $7.50 to $8.00") is
                 # served but never consumes lede budget — it sits with
                 # the headline, and counting it starved the results
                 # paragraph (AXP's dateline), the CEO quote (BBY) or
-                # the final bullet (GPC). Bounded to the pre-body zone
-                # (no terminated line collected yet): a range statement
-                # past the dateline is body prose, not a sub-headline.
+                # the final bullet (GPC). Batch 252: the %-range mirror
+                # ("2026 OUTLOOK OF ORGANIC SALES GROWTH OF 3-4% and
+                # ADJUSTED EPS GROWTH OF 5-8%" — Church & Dwight).
+                # Bounded to the pre-body zone (no terminated line
+                # collected yet): a range statement past the dateline
+                # is body prose, not a sub-headline.
                 lede.append(ln)
                 in_table = False  # Batch 185: narrative resumes.
                 table_seen = False

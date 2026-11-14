@@ -112,10 +112,19 @@ def test_csco_wrapped_bullet_completion_kept() -> None:
 def test_el_headline_semicolon_kept() -> None:
     # The ";" separates headline items (the next line is another
     # headline, "Raises Outlook ..."), not a sentence cut.
+    # Batch 252: the "Raises Outlook ..." %-range guidance line is
+    # now served budget-free (it was eaten as a data row before), so
+    # the dateline paragraph fits too and the semicolon line is no
+    # longer last — the property pinned here is that it is still
+    # present, uncut, as a headline item.
     hl = extract_press_release_highlights(_read("EL_2026-06-30.html"))
     assert hl is not None
-    assert _last(hl).endswith("3% to 5%;")
     assert "Affirms Fiscal 2027 Outlook" in hl
+    assert "of Organic Net Sales Growth of 3% to 5%;" in hl
+    assert "Raises Outlook on Adjusted Operating Margin to 12.7% to 13.5%" in hl
+    assert _last(hl).endswith(
+        "today reported its financial results for its fiscal year ended June 30, 2026."
+    )
 
 
 def test_agnc_sub_bullet_kept() -> None:
