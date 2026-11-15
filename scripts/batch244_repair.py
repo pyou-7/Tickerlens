@@ -215,8 +215,8 @@ def verify_fy_stored(html: str, stored: str, live: str) -> bool:
     lines = [ln.strip() for ln in _html_to_text(html).split("\n") if ln.strip()]
     lines = _split_bullet_runs(lines)
     sections = _extract_highlights_sections_anchored(lines)
-    fy = [c for a, c, _ in sections if _highlights_section_scope(a) == "fullyear"]
-    qtr = [c for a, c, _ in sections if _highlights_section_scope(a) == "quarter"]
+    fy = [c for a, c, _, _ in sections if _highlights_section_scope(a) == "fullyear"]
+    qtr = [c for a, c, _, _ in sections if _highlights_section_scope(a) == "quarter"]
     if not fy or not qtr:
         return False
     s_lines, l_lines = non_empty(stored), non_empty(live)

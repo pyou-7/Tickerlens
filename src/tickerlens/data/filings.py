@@ -9453,9 +9453,9 @@ def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
 
 def _extract_highlights_sections_anchored(
     lines: list[str],
-) -> list[tuple[str, list[str]]]:
-    """Return (anchor, content lines, anchor index) for every explicit
-    "Highlights" section.
+) -> list[tuple[str, list[str], int, list[str]]]:
+    """Return (anchor, content lines, anchor index, sub-list tail) for
+    every explicit "Highlights" section.
 
     Previously only the first match was returned; Halliburton's releases
     pair leading financial bullets with a later business "Highlights"
@@ -9466,8 +9466,13 @@ def _extract_highlights_sections_anchored(
     _extract_highlights_sections returns. Batch 249: the anchor index
     rides along too, so the caller can prepend the executive-quote run
     that sits immediately before the winning heading (Palantir).
+    Batch 256: the sub-list tail rides along too — the continuation of
+    a sub-section bullet list past the 12-line cap, collected by
+    _collect_sublist_tail. It is NOT part of the content: the caller
+    appends it to the WINNER post-selection, so qualification and the
+    density ranking judge the capped section exactly as before.
     """
-    sections: list[tuple[str, list[str]]] = []
+    sections: list[tuple[str, list[str], int, list[str]]] = []
     for i, ln in enumerate(lines):
         if not _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln) or len(ln) > 120:
             continue
@@ -9505,6 +9510,16 @@ def _extract_highlights_sections_anchored(
         # section is never content, and a heading-shaped line right
         # after it ends the section (same rule as the lede loop).
         after_more = False
+        # Batch 256: remember whether collection stopped AT the cap
+        # (and where), so the caller can complete a stranded
+        # sub-section bullet list post-selection — see
+        # _collect_sublist_tail. Only the cap break sets cap_stop:
+        # a break on a heading/table/boilerplate line ends the
+        # section cleanly, and the 16-line bound break is already at
+        # the maximum. stop_idx is the raw index of the last
+        # collected follow line when cap_stop is set.
+        cap_stop = False
+        stop_idx = i
         n_follow = 0  # Batch 184: the cap counts FOLLOW lines only — a
         # prepended sub-headline anchor (above) is headline-adjacent
         # content, not part of the section's 12-line budget. Counting
@@ -9639,6 +9654,14 @@ def _extract_highlights_sections_anchored(
                         collected[-1], lines[j + 1] if j + 1 < len(lines) else ""
                     )
                 ):
+                    # Batch 256: the cap fired — remember where, so
+                    # the post-selection completion can pick the
+                    # sub-section's list back up (see
+                    # _collect_sublist_tail). The 16-line bound break
+                    # below does NOT set it: at 16 the section is
+                    # already at its maximum and nothing more is due.
+                    cap_stop = True
+                    stop_idx = j
                     break
                 if n_follow >= 16 and not term_ahead:
                     break
@@ -9747,15 +9770,79 @@ def _extract_highlights_sections_anchored(
                 j += 1
             collected = kept
             if collected:
-                sections.append((ln, collected, i))
+                # Batch 256: the sub-section bullet-list tail rides
+                # along so the WINNER can be completed post-selection
+                # (see _extract_highlights_section). It is computed
+                # here — the collector is the only place that knows
+                # exactly where the cap stopped — but it is NOT part
+                # of `collected`: qualification and the density ranking
+                # judge the capped section exactly as before, so
+                # completing a list can never flip which candidate
+                # wins. The guard is the sub-heading itself: the tail
+                # of the collected lines after the last Highlights
+                # sub-heading must be all bullets, so the tail
+                # completes the sub-section's list and never extends
+                # the section's own list past its cap (AMD's plain
+                # 12-bullet list, AGNC's portfolio section).
+                tail: list[str] = []
+                if cap_stop:
+                    sub_idx = max(
+                        (
+                            k
+                            for k, ln in enumerate(collected)
+                            if _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln)
+                            and len(ln) <= 120
+                        ),
+                        default=None,
+                    )
+                    if sub_idx is not None and all(
+                        _BULLET_LEAD_RE.match(ln) or ln.startswith("·")
+                        for ln in collected[sub_idx + 1 :]
+                    ):
+                        tail = _collect_sublist_tail(lines, stop_idx + 1)
+                sections.append((ln, collected, i, tail))
             continue
         break  # heading found but section too thin — don't try later headings
     return sections
 
 
+def _collect_sublist_tail(lines: list[str], start: int) -> list[str]:
+    """Collect the continuation of a sub-section bullet list past the
+    section collector's cap (batch 256).
+
+    Starting at raw line `start` (the line after the cap's last
+    collected line), skip admin/page-footer lines the collector
+    itself skips, then take consecutive bullet lines — at most 4,
+    mirroring the +4 completion allowance — stopping at the first
+    non-bullet content line. A lone bullet marker ("•" on its own
+    line) is skipped, not counted: its item text is a non-bullet
+    line and stops the scan, so a flattened list never yields a
+    dangling glyph. Returns [] when the next content line is not a
+    bullet — the list already ended, and there is nothing to
+    complete. The caller bounds the total served lines at 16.
+    """
+    tail: list[str] = []
+    j = start
+    n = len(lines)
+    while j < n and len(tail) < 4:
+        ln = lines[j]
+        if _ADMIN_LINE_RE.match(ln) or _is_page_footer_furniture(lines, j):
+            j += 1
+            continue
+        if _is_lone_bullet_marker(ln):
+            j += 1
+            continue
+        if _BULLET_LEAD_RE.match(ln) or ln.startswith("·"):
+            tail.append(ln)
+            j += 1
+            continue
+        break
+    return tail
+
+
 def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
     """Return the content lines of every explicit "Highlights" section."""
-    return [content for _, content, _ in _extract_highlights_sections_anchored(lines)]
+    return [content for _, content, _, _ in _extract_highlights_sections_anchored(lines)]
 
 
 def _prepend_pre_section_quote(
@@ -9824,10 +9911,10 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     full-year one is untouched, and the leading-bullet block (no
     anchor) neither triggers nor is dropped by it.
     """
-    candidates: list[tuple[str | None, list[str], int | None]] = []
+    candidates: list[tuple[str | None, list[str], int | None, list[str]]] = []
     leading = _leading_bullet_block(lines)
     if leading is not None:
-        candidates.append((None, leading, None))
+        candidates.append((None, leading, None, []))
     candidates.extend(_extract_highlights_sections_anchored(lines))
     if not candidates:
         return None
@@ -9844,17 +9931,17 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         anchor is not None
         and _highlights_section_scope(anchor) == "quarter"
         and _score(content)[0] == 1
-        for anchor, content, _ in candidates
+        for anchor, content, _, _ in candidates
     ):
         candidates = [
-            (anchor, content, idx)
-            for anchor, content, idx in candidates
+            (anchor, content, idx, tail)
+            for anchor, content, idx, tail in candidates
             if anchor is None or _highlights_section_scope(anchor) != "fullyear"
         ]
     best_pair = max(candidates, key=lambda c: _score(c[1]))
     if _score(best_pair[1])[0] <= 0:
         best_pair = candidates[0]
-    best_anchor, best, best_idx = best_pair
+    best_anchor, best, best_idx, best_tail = best_pair
     # Batch 177: drop colon-ended list-intro / section headings and
     # summary-table column-header lines from the WINNING section only.
     # The drop must happen after selection, not in the per-section
@@ -9872,6 +9959,20 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         for ln in best
         if not _is_lede_colon_heading(ln) and not _is_lede_table_header(ln)
     ]
+    # Batch 256: complete the winning section's stranded sub-section
+    # bullet list (BKR: the Q4 section serves 6 Q4 bullets + the
+    # "Full-year highlights" label + 5 of 7 FY bullets; the last two
+    # are the tail). This happens AFTER selection, for the same reason
+    # as the batch-177 drops: growing a candidate pre-selection
+    # changes its figure count and flips which candidate wins — the
+    # broad in-collector form did exactly that (Welltower's Q4
+    # section grew past its Annual section and flipped the winner;
+    # AGNC's later section grew past the quarter section). The tail
+    # is at most 4 lines and the served total stays at or under the
+    # section's own 16-line bound. A headed section is the only
+    # winner with a tail — the leading-bullet block carries [].
+    if best_tail:
+        best = best + best_tail[: max(0, 16 - len(best))]
     # Batch 222: drop a trailing mid-sentence fragment (the same wart
     # as the lede loop — the 12-line cap strands GEV's quote at "and
     # slot"); post-selection, so the financial-density competition is
@@ -9880,7 +9981,9 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     # Batch 230: join fragmented bullet openers ("· Net" / "Sales
     # Increased ...") the same way — post-selection, so qualification
     # and the density competition see the unjoined lines exactly as
-    # before.
+    # before. The batch-256 tail is appended before this step, so a
+    # tail that ends on a dangling opener is trimmed here, and a
+    # fragmented tail opener is joined here.
     best = _join_fragmented_bullet_starts(best)
     best = _trim_unfinished_tail(best)
     # Batch 249: a headed section's executive quote, when it sits
