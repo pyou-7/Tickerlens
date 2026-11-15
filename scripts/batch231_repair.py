@@ -134,14 +134,33 @@ def norm(s: str) -> str:
     # line carries no digits before its dash, so the year anchor can
     # never touch one; every non-space character is preserved, so two
     # lines that differ in content still differ after norm.
+    # Batch 255: canonicalize the ASCII "TM" trademark marker the
+    # same way the ® rule above canonicalizes "®": the seed-era
+    # extractor spaced it ("Exchange TM (IBX", "Intelligence TM to",
+    # EQIX x2; "Crypto TM ,", "Investor TM Account", SCHW) while the
+    # current one emits it glued ("ExchangeTM", "IntelligenceTM").
+    # The capitalized-preceding-word anchor is load-bearing: a
+    # standalone word "TM" ("TM Forum", "TM mode") is never preceded
+    # by a capitalized mark word, so the anchor can never glue one
+    # to the previous word — and a corpus check (all 2,526 stored
+    # rows + the full blast cache) finds no standalone-word "TM"
+    # anywhere; every " TM" is a trademark marker on a capitalized
+    # product name. Every non-space character is preserved, so two
+    # lines that differ in content still differ after norm.
     s = re.sub(r"(?m)^(\s*[•◦▪■●–—‣·○◆▸►])(?!\s)", r"\1 ", s)
     s = re.sub(r"\s+([®™©])", r"\1", s)
+    s = re.sub(r"([A-Z][A-Za-z]*) +(TM)(?![A-Za-z])", r"\1\2", s)
     s = re.sub(r"([,.])\s+(\d)(?=\s|$)", r"\1\2", s)
     s = re.sub(r"•(?!\s)", "• ", s)
     lines = [ln.rstrip() for ln in s.split("\n")]
     out: list[str] = []
     for ln in lines:
         ln = re.sub(r" +([,.])", r"\1", ln)
+        # Batch 255: a space before a closing bracket ("(IBX® )" vs
+        # live "(IBX®)", EQIX 2024-12-31) — the same spacing-only
+        # class as the batch-242 space-before-comma/period rule above:
+        # only spacing is removed, content is preserved.
+        ln = re.sub(r" +([)\]])", r"\1", ln)
         ln = re.sub(r"(\b\d{4}) --(?= |$)", r"\1--", ln)
         ln = re.sub(r"(\d) +(st|nd|rd|th)\b", r"\1\2", ln)
         ln = re.sub(r"([A-Za-z%]) +(\d)(?= |$)", r"\1\2", ln)
