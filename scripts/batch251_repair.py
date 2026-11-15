@@ -179,7 +179,15 @@ def sweep_gate_s9(stored: str, live: str, html: str) -> str | None:
         return "loss"
     if sorted(kinds) != ["fullyear", "quarter"]:
         return "loss"
-    if not added or len(added) > 4:
+    # Batch 259: the tail bound was 4 — calibrated to the 6-line lede
+    # budget, under which live served at most 4 bullets past the
+    # sub-headlines. The bullet-run extension raises the lede to 12
+    # content lines, so a CHD swap can now add up to 9 tail bullets
+    # (10 served, 1 stored). The bound moves to 10: it still refuses
+    # a swap bigger than anything the extractor can serve from one
+    # bullet run, while the tail-run, order, doc-consecutiveness and
+    # live-clean checks below do the real safety work.
+    if not added or len(added) > 10:
         return "loss"
     if not all(x.startswith("•") for x in added):
         return "loss"

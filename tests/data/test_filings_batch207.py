@@ -91,7 +91,10 @@ def test_cci_2026_03_31_highlights_tagline_dropped_bullet_gained():
     assert "Straight-lined revenues (75) to (45)" not in h
     assert "Site rental revenues 3,828 to 3,873" not in h
     assert "approximately $200 million" in h
-    assert len(h) == 2526
+    # Batch 259: the bullet-run extension serves two more genuine
+    # bullets (the AFFO-reconciliation bullet and the $160M interest
+    # decrease bullet), so the pinned length moves 2526 -> 2965.
+    assert len(h) == 2965
 
 
 def test_cci_2024_09_30_highlights_footer_pair_dropped_mid_bullet():

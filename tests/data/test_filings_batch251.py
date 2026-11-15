@@ -78,13 +78,13 @@ def _chd_stored(*extra_lost: str) -> str:
 def test_extractor_drops_summary_headings_and_serves_bullets() -> None:
     # The real extractor, end to end, on the CHD shape: the two
     # summary-table column headings never reach the served text, and
-    # the quarter bullets are served (the 6-line lede budget stops
-    # the run at 4 bullets — the remaining 6 are a live-side budget
-    # item, not part of this swap).
+    # all six quarter bullets are served (batch 259: the bullet-run
+    # extension completes the run to the 12-line cap — the old
+    # 6-line budget stopped it at 4).
     live = _chd_live()
     assert "2024 Third Quarter Results" not in live
     assert "2024 Full Year Outlook" not in live
-    for bullet in _BULLETS[:4]:
+    for bullet in _BULLETS:
         assert bullet in live
 
 
@@ -291,12 +291,23 @@ def test_gate_s9_refuses_residue_heavy_live() -> None:
     assert sweep_gate_s9(stored, live, html) == "live-table"
 
 
-def test_gate_s9_refuses_more_than_four_added_bullets() -> None:
-    # The tail bound is 4 added bullets — 5 is outside the gate.
-    live = "\n\n".join([_HEADLINE, *_SUBHEADS, *_BULLETS[:2], *_BULLETS[2:]])
-    # The live above adds 4 bullets (indices 2-5); extend it with a
-    # fifth added bullet to cross the bound.
-    live = live + "\n\n• Cash from Operations ~$1.1 billion (previously $1.08 billion)"
+def test_gate_s9_refuses_more_than_ten_added_bullets() -> None:
+    # Batch 259 recalibrated the tail bound from 4 to 10: the lede's
+    # bullet-run extension serves up to 12 content lines, so a CHD
+    # swap can now add up to 9 tail bullets. 11 is outside the gate.
+    # The cap fires before the doc check, so the extra bullets need
+    # not sit in the document (same construction as the old test):
+    # stored keeps 2 bullets, live serves 13, so 11 are added.
+    extra = [
+        "• Cash from Operations ~$1.1 billion (previously $1.08 billion)",
+        "• Gross Margin expanded 100 basis points to 46.0%",
+        "• Adjusted EPS grew 12% to $1.02",
+        "• Net Sales grew 4% to $1.5 billion",
+        "• Organic Sales grew 5% in the quarter",
+        "• Reported EPS grew 8% to $0.95",
+        "• Cash from Operations of $400 million",
+    ]
+    live = "\n\n".join([_HEADLINE, *_SUBHEADS, *_BULLETS, *extra])
     stored = _chd_stored()
     html = _chd_html(*_BULLETS)
     assert sweep_gate_s9(stored, live, html) == "loss"

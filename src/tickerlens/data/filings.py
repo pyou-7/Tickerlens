@@ -8850,6 +8850,46 @@ def extract_press_release_highlights(
                 i += 1
                 continue
             if content_lines >= 6:
+                # Batch 259: a bullet-list lede (CHD) — the release's own
+                # summary is a bullet run under section labels, and the
+                # 6-line budget cuts it mid-list: the two caps
+                # sub-headlines spend 2 lines, so only 4 of 10 bullets
+                # survive and the whole FY-outlook group is lost. A
+                # bullet run is a sequence of discrete items, not a prose
+                # paragraph: while the next line is a bullet and the last
+                # collected line is one too, keep collecting up to the
+                # 12-line section cap. A non-bullet past the budget still
+                # falls through to the finish logic below, so prose ledes
+                # keep the hard 6-line cap and the run can never pull in
+                # the dateline or the CEO quote. The cap is on total
+                # content lines, so a lede with sub-headlines serves
+                # fewer bullets than a bare list — the same bound the
+                # section path uses.
+                if (
+                    content_lines < 12
+                    and lede
+                    and _is_inline_bullet_start(ln)
+                    and _is_inline_bullet_start(lede[-1])
+                    # A colon-ended bullet is a sub-list opener, not a
+                    # complete item ("• For the nine months ended March
+                    # 31, 2025:", "• ... Expand Profit Recovery and
+                    # Growth Plan to:") — its items sit on ◦ lines the
+                    # loop does not recognize as bullets, so collecting
+                    # the opener strands the lede at an unfinished item
+                    # and the overrun path then pulls the sub-list plus
+                    # the next section heading (EL 2025-03-31 served
+                    # "BEAUTY GAINS AND OPERATIONAL HIGHLIGHTS3" as a
+                    # highlight; ABT/EL Q4 served the opener dangling
+                    # with nothing after it). Refuse the opener: the
+                    # bullet-break below ends the lede cleanly instead.
+                    and not ln.endswith(":")
+                ):
+                    lede.append(ln)
+                    in_table = False  # Batch 185: narrative resumes.
+                    table_seen = False
+                    content_lines += 1
+                    i += 1
+                    continue
                 if finish_item is None:
                     # First line past the budget: decide once whether the
                     # item at the budget is unfinished. A lone-marker lede
