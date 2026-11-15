@@ -139,12 +139,18 @@ def test_dlr_toc_only_result_unchanged_by_floor() -> None:
     # kept by the batch-153 floor. The batch-253 ◾ fix removes the
     # wart at its root: the "Highlights" section is no longer rejected
     # as a financial table, so live serves the real bullets and the
-    # TOC entries are gone. The "Table of Contents" first line stays
-    # — it is the picked headline, a separate wart the stored rows
-    # already carry (see the batch-253 DECISIONS entry).
+    # TOC entries are gone. The "Table of Contents" first line stayed
+    # — it was the picked headline, a separate wart the stored rows
+    # already carried (see the batch-253 DECISIONS entry).
+    # Batch 258 fixes that headline wart at its root (_skip_toc's
+    # admin-break fired on the "Exhibit 99.1" line inside the TOC):
+    # live now serves the real release headline.
     hl = extract_press_release_highlights(_read("DLR_2026-03-31.html"))
     assert hl is not None
-    assert hl.split("\n\n")[0] == "Table of Contents"
+    assert (
+        hl.split("\n\n")[0]
+        == "Digital Realty Reports First Quarter 2026 Results"
+    )
     assert "Reported net income available to common stockholders of $0.46" in hl
     assert "Signed total bookings during 1Q26" in hl
     assert "Raised 2026 Core FFO per share outlook to $8.00 - $8.10" in hl

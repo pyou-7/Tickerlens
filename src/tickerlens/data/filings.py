@@ -5942,6 +5942,23 @@ _NARRATIVE_TAIL_RE = re.compile(
 )
 
 
+# An exhibit marker ("Exhibit 99.1" / "EXHIBIT-99.1" / the "ECHIBIT"
+# typo / a ticker-prefixed marker) is packet front-matter, not a
+# narrative marker: DLR's packet repeats it inside its table of
+# contents ("Table of Contents" / "Exhibit 99.1" / "Table of
+# Contents" / ...), and the admin-break below fired on it at once,
+# so the skip never ran and the TOC heading became the headline.
+# Consumed here as TOC material; the narrative markers that must
+# still break the scan (contacts, release banners, date lines) are
+# untouched. Batch 258.
+_TOC_EXHIBIT_MARKER_RE = re.compile(
+    r"^exhibit[\s\-]+99(\.1)?\b"
+    r"|^echibit\s+99(\.1)?\b"
+    r"|^[A-Z][\w.\-]*\s+exhibit[\s\-]+99(\.1)?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _skip_toc(lines: list[str], i: int) -> int:
     """Return the index of the first narrative line after a table of contents.
 
@@ -5975,6 +5992,12 @@ def _skip_toc(lines: list[str], i: int) -> int:
             pages += 1
             j += 1
             last_page_end = j
+            continue
+        if _TOC_EXHIBIT_MARKER_RE.match(ln):
+            # Exhibit marker inside the TOC (batch 258): packet
+            # front-matter, never the narrative start — consume it
+            # like a title instead of breaking the scan.
+            j += 1
             continue
         if (
             _CONTACT_HEADER_RE.match(ln)
@@ -8057,6 +8080,11 @@ def extract_press_release_highlights(
 
     headline: str | None = None
     body_start = 0
+    # Batch 258: set when a TOC skip advances — the document is a
+    # release+supplement packet, so the supplement's front matter
+    # (section labels, addresses, tables) precedes the release section
+    # and the fall-through pick below must not take its titles.
+    after_toc = False
     i = 0
     while i < len(lines):
         ln = lines[i]
@@ -8155,6 +8183,7 @@ def extract_press_release_highlights(
             j = _skip_toc(lines, i)
             if j > i:
                 i = j
+                after_toc = True
                 continue
         if _is_subsidiary_list(ln):
             # Flattened subsidiary-list masthead (Cincinnati Financial):
@@ -8288,7 +8317,15 @@ def extract_press_release_highlights(
             # headline, not a separate element. Single-word only: a 2-word
             # line may be a contact name (American Water's "Aaron Musgrave"),
             # which the contact-block skip handles. Batch 105.
+            # Batch 258: after a TOC skip, a lone ticker symbol ("DLR")
+            # ahead of a headline-shaped table label ("Series J Preferred
+            # Stock:") is a supplement stock-listing line, not a wrapped
+            # headline — the join needs the verb+topic shape too, or the
+            # fragment is skipped and the scan continues.
             nxt = lines[i + 1]
+            if after_toc and not _NARRATIVE_TAIL_RE.search(f"{ln} {nxt}"):
+                i += 1
+                continue
             if len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
                 # The joined fragment may itself be wrapped further ("Kroger"
                 # / "Reports Third Quarter 2025 Results and" / "Updates" /
@@ -8341,14 +8378,46 @@ def extract_press_release_highlights(
                     headline = joined
                     body_start = i + rel_next
                     break
+        if after_toc and len(ln) > _MAX_HEADLINE_CHARS:
+            # Batch 258: inside a release+supplement packet, a long line
+            # after the TOC skip is supplement body prose (DLR's
+            # corporate-profile paragraph) ahead of the release section,
+            # not a missing headline — keep scanning instead of breaking
+            # with headline=None.
+            i += 1
+            continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             if _DATELINE_RE.match(ln):
+                if after_toc:
+                    # Batch 258: after a TOC skip, a dateline-shaped
+                    # line inside the supplement's tables (EOG's
+                    # "Acquisition Costs ... (134) —" row, which trips
+                    # the city-dateline shape) is a table row, not the
+                    # release dateline — keep scanning. The real
+                    # dateline follows the real headline, which breaks
+                    # the loop first; a packet with no release section
+                    # ends with headline=None, as before.
+                    i += 1
+                    continue
                 # Dateline reached with no headline found (Berkshire's
                 # releases have no headline at all). A dateline is never a
                 # headline — stop here with headline=None; the lede starts
                 # after the dateline. Batch 112.
                 body_start = i + 1
                 break
+            if after_toc and not (
+                _looks_like_headline(ln) and _NARRATIVE_TAIL_RE.search(ln)
+            ):
+                # Batch 258: after a TOC skip, the supplement's front
+                # matter precedes the release section, and its titles
+                # are headline-shaped ("Key Quarterly Financial Data",
+                # the "Unaudited, Dollars ..." units line) — only a
+                # headline-verb + results-topic line is the release
+                # headline, so keep scanning past the rest. A packet
+                # whose headline never matches ends with headline=None,
+                # the pre-existing fallback.
+                i += 1
+                continue
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i
         break
