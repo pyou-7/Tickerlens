@@ -159,13 +159,19 @@ def test_dis_fiscal_2025_opener_children_served() -> None:
     # items are ◦ bullets, so the leading-block bullet-run extension
     # serves the opener and all four children. (Old name:
     # test_dis_dangling_fiscal_bullet_dropped.)
+    # Batch 264: the sub-list completes — the bullet-run extension
+    # stopped at the 18-line bound on the fourth child, stranding
+    # the last two ◦ children; the sub-list completion serves them,
+    # so the last line is now the Entertainment child.
     hl = extract_press_release_highlights(_read("DIS_2024-09-28.html"))
     assert hl is not None
     assert "Fiscal 2025:" in hl
     assert "High-single digit adjusted EPS(1) growth" in hl
     assert "Target dividend growth that tracks our earnings growth" in hl
+    assert "Targeting $3 billion in stock repurchases" in hl
     assert _lines(hl)[-1].startswith(
-        "◦ Target dividend growth that tracks our earnings growth"
+        "◦ Entertainment: Double digit percentage segment operating "
+        "income growth compared to fiscal 2024"
     )
 
 

@@ -169,8 +169,11 @@ def test_dis_q4_2025_real_exhibit_sports_experiences_served():
     assert "Domestic advertising revenue increased 8%" in out
     assert "Experiences: Record full year segment operating income" in out
     assert "International Parks & Experiences operating income grew 25%" in out
+    # Batch 264: the Experiences sub-list completes — the second ◦
+    # child ("Domestic Parks ...") is served too, so ◦ goes 9 -> 10.
+    assert "Domestic Parks & Experiences operating income grew 9%" in out
     assert "Guidance and Outlook" not in out
-    assert out.count("◦") == 9
+    assert out.count("◦") == 10
     assert out.count("•") == 8
 
 

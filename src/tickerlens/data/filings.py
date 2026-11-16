@@ -9613,6 +9613,35 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 and bullets[-1].startswith(_LEADING_BULLET_STARTS)
                 and _next_content_line_is_bullet(lines, idx)
             )
+            # Batch 264: sub-list completion — the mirror of the
+            # batch-263 bullet-run extension past the 18-line bound.
+            # The extension stops at 18 even mid-sub-list: DIS Q4
+            # FY2025 ends on the first Experiences ◦ child while its
+            # sibling ("Domestic Parks & Experiences operating income
+            # grew 9% to $920 million") sits one line past the cap,
+            # and the line after that is the "Guidance and Outlook"
+            # heading, so the sub-list is one bullet short of
+            # complete. When the block is at the bound on a ◦ child
+            # of a colon-ended • parent and the next content line is
+            # another ◦ child of the same parent, keep collecting —
+            # at most 4 lines past the cap, mirroring the batch-222
+            # allowance, and only while the next line is a ◦ child:
+            # the moment a heading or a • bullet follows, the
+            # sub-list is over and both breaks below fire. The
+            # colon-parent check is what keeps it a sub-list finish
+            # rather than a general cap raise: a ◦ run with no
+            # colon-ended parent is a top-level list the 18-line
+            # bound still ends.
+            parent = next(
+                (b for b in reversed(bullets) if b.startswith("•")),
+                "",
+            )
+            sublist_run = (
+                18 <= len(bullets) < 22
+                and bullets[-1].startswith("◦")
+                and parent.endswith(":")
+                and _next_content_line(lines, idx).startswith("◦")
+            )
             # Batch 222: completion allowance — the same mid-sentence
             # wart as the lede loop and the section collector: the
             # 14-line cap can strand a quote/sentence (GEV's quote
@@ -9636,14 +9665,14 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # line continuing it): once the tail terminates, the pull
             # stops even when another terminated line sits ahead.
             term_ahead = _lede_termination_ahead(bullets, lines[idx + 1 : idx + 5])
-            if not bullet_run and not (
+            if not bullet_run and not sublist_run and not (
                 _lede_item_still_unfinished(bullets)
                 or _lede_next_line_continues(
                     bullets[-1], lines[idx + 1] if idx + 1 < n else ""
                 )
             ):
                 break
-            if len(bullets) >= 18 and not term_ahead and not bullet_run:
+            if len(bullets) >= 18 and not term_ahead and not bullet_run and not sublist_run:
                 break
     if len("\n".join(bullets)) >= 150:
         # Batch 140: drop lone-marker lines AFTER qualification, so the
@@ -9669,6 +9698,21 @@ def _is_section_footnote_line(ln: str) -> bool:
         or _FOOTNOTE_DEF_RE.match(ln)
         or _LEDE_FOOTNOTE_NUM_RE.match(ln)
     )
+
+
+def _next_content_line(lines: list[str], idx: int) -> str:
+    """First non-admin line after lines[idx], or "" when there is none.
+
+    Batch 264: the batch-195 look-ahead behind
+    _next_content_line_is_bullet, returning the line itself so the
+    batch-264 sub-list completion can check its marker — a ◦ child
+    continuing the same sub-list as the last collected line.
+    """
+    for ln in lines[idx + 1 :]:
+        if _ADMIN_LINE_RE.match(ln):
+            continue
+        return ln
+    return ""
 
 
 def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
