@@ -87,11 +87,18 @@ def test_fdx_adjusted_for_intro_dropped() -> None:
 
 
 def test_gild_dangling_bullet_dropped() -> None:
+    # Batch 262: no longer dropped — the "◦" sub-bullet joins
+    # _BULLET_LEAD_RE, so the revenue bullet's ◦ sub-list is recognized
+    # and the colon-opener is served with its sub-bullets instead of
+    # being cut as dangling.
     hl = extract_press_release_highlights(_read("GILD_2026-06-30.html"))
     assert hl is not None
-    assert "primarily driven by:" not in hl
-    assert "Total second quarter 2026 revenues increased 10%" not in hl
-    assert "Daniel O’Day" in _lines(hl)[-1]
+    assert "primarily driven by:" in hl
+    assert "Total second quarter 2026 revenues increased 10%" in hl
+    assert "◦ Higher sales of HIV products" in hl
+    assert _lines(hl)[-1].startswith(
+        "• During the second quarter 2026, Gilead generated $3.6 billion"
+    )
 
 
 def test_fast_sga_row_and_dsr_intro_dropped() -> None:

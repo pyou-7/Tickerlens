@@ -119,12 +119,17 @@ def test_fdx_live_ends_on_dangling_table_intro():
 
 
 def test_gild_live_last_bullet_is_cut_off():
+    # Batch 262: the "◦" sub-bullet joins _BULLET_LEAD_RE, so the
+    # revenue bullet's ◦ sub-list is now recognized and the bullet is
+    # no longer dangling — the full bullet list is served (5 bullets +
+    # 2 sub-bullets) and the highlights end on the cash-flow bullet,
+    # not the CEO quote.
     lines = _lines(_live("GILD_2026-06-30"))
-    assert "primarily driven by:" not in _live("GILD_2026-06-30")
-    assert "Total second quarter 2026 revenues increased 10%" not in _live(
+    assert "primarily driven by:" in _live("GILD_2026-06-30")
+    assert "Total second quarter 2026 revenues increased 10%" in _live(
         "GILD_2026-06-30"
     )
-    assert "Daniel O’Day" in lines[-1]
+    assert "During the second quarter 2026, Gilead generated $3.6 billion in operating cash flow." in lines[-1]
 
 
 # --- Blocked fragment: live body opens mid-sentence. ---

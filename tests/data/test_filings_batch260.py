@@ -105,9 +105,11 @@ def test_gate_s4_new_lowercase_second_line_still_fragment() -> None:
     assert sweep_gate_s4(stored, live) == "fragment"
 
 
-def test_gate_s4_dis_sub_bullet_still_added_table() -> None:
-    # DIS 2024-12-28 shape: the added "◦" sub-bullet is a real
-    # hard_table line, not chrome, so it must still block.
+def test_gate_s4_dis_sub_bullet_now_blessed() -> None:
+    # DIS 2024-12-28 shape. Batch 260 pinned the old behavior: the
+    # added "◦" sub-bullet was a real hard_table line, so it blocked.
+    # Batch 262: "◦" joins _BULLET_LEAD_RE, so the sub-bullet is a
+    # bullet, not added-table material, and S4 blesses the re-sync.
     stored = (
         "THE WALT DISNEY COMPANY REPORTS FIRST QUARTER EARNINGS FOR "
         "FISCAL 2025\n"
@@ -118,4 +120,4 @@ def test_gate_s4_dis_sub_bullet_still_added_table() -> None:
         "◦ Direct-to-Consumer operating income increased $431 million "
         "to $293 million\n"
     )
-    assert sweep_gate_s4(stored, live) == "added-table"
+    assert sweep_gate_s4(stored, live) is None

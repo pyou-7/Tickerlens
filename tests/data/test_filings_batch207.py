@@ -94,7 +94,10 @@ def test_cci_2026_03_31_highlights_tagline_dropped_bullet_gained():
     # Batch 259: the bullet-run extension serves two more genuine
     # bullets (the AFFO-reconciliation bullet and the $160M interest
     # decrease bullet), so the pinned length moves 2526 -> 2965.
-    assert len(h) == 2965
+    # Batch 262: the "◦" sub-bullet joins _BULLET_LEAD_RE, so the two
+    # ◦ outlook lines plus the "Other items" bullet below them are
+    # served too — pinned length moves 2965 -> 3666.
+    assert len(h) == 3666
 
 
 def test_cci_2024_09_30_highlights_footer_pair_dropped_mid_bullet():

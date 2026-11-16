@@ -525,17 +525,29 @@ _TABLE_UNITS_RE = re.compile(
 # cache, so this is verified by the predicate tests plus a zero-delta
 # blast (no "n "-starting line exists in the 1,699-exhibit cache),
 # not by a JPM exhibit.
-_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾]\s?|-\s|l\s|n\s)")
+# Batch 262: the white-bullet "◦" (U+25E6) — the sub-bullet marker
+# Disney, AMD, Amgen, AGNC, NFLX and others use under their "•"
+# segment bullets ("◦ Direct-to-Consumer operating income increased
+# $431 million to $293 million"). It was missing from the glyph
+# class even though the rest of the file already treats it as a
+# bullet (the 81-120 band exclusion at _is_lede_data_row, the
+# _is_trailing_table_data_row guard, _strip_bullet), so the batch-175
+# top guard in _is_lede_data_row missed it and figure-dense ◦ lines
+# read as table rows — which tripped S4's added-table check and
+# blocked the DIS x4 re-sync (live adds 8 genuine ◦/• lines, stored
+# only loses its dateline). A lone "◦" plus a space is never prose,
+# so "◦" joins the bullet lead on the same argument as "•".
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾◦]\s?|-\s|l\s|n\s)")
 
 
 def _is_inline_bullet_start(ln: str) -> bool:
     """True for a line that opens a bullet item with its marker attached
     to the text: "•Q2 was our best quarter ...".
 
-    The _BULLET_LEAD_RE glyphs (•/●/–/—, "- " with the space) plus the
-    flattened-list glyphs the lede already treats as bullets ("·"/"○"/
-    "▪"/"■" — batch 138/139/140) and "*" (a bullet start in
-    _leading_bullet_block). A lone marker line is NOT one — it is a
+    The _BULLET_LEAD_RE glyphs (•/●/–/—/◾/◦, "- " with the space,
+    "l "/"n ") plus the flattened-list glyphs the lede already treats
+    as bullets ("·"/"○"/"▪"/"■" — batch 138/139/140) and "*" (a bullet
+    start in _leading_bullet_block). A lone marker line is NOT one — it is a
     separator, handled by _is_lone_bullet_marker — so text must follow
     the marker. Batch 165.
     """
@@ -1364,7 +1376,7 @@ _LEDE_SYMBOL_LEGEND_RE = re.compile(
 # purposes — a spaced "* Foo" is pinned as not-a-footnote-def there — but
 # in the lede a line leading with a footnote glyph is the table's legend,
 # never narrative: "*" is not a bullet lead in this extractor
-# (_BULLET_LEAD_RE is •●–—/-/l only), so no bullet is ever shaped this way.
+# (_BULLET_LEAD_RE is •●–—◾◦/-/l/n), so no bullet is ever shaped this way.
 # Batch 160.
 _LEDE_FOOTNOTE_GLYPH_RE = re.compile(r"^[*†‡]\s+\S")
 # A table-intro sentence (batch 156): "The following table summarizes ..."
@@ -1741,10 +1753,12 @@ def _is_lede_data_row(ln: str) -> bool:
     no $ figure is followed by a scale word, no $-to-$ range (Amex's
     "EPS OF $12.65 TO $13.15"; Cencora's "$17.45 to $17.75" — a range
     is a guidance statement, never a table row), and the line is not a
-    flattened-list bullet ("■"/"◦" are not in _BULLET_LEAD_RE, so the
-    top guard misses them — AIG's "■Net income per diluted share was
-    $0.12 ..." and AWK's "◦2023 weather-normalized earnings of $4.77
-    ..." are bullets). The plain 80-char branch is unchanged — short
+    flattened-list bullet ("■" is not in _BULLET_LEAD_RE, so the top
+    guard misses it — AIG's "■Net income per diluted share was $0.12
+    ..." is a bullet; "◦" joined _BULLET_LEAD_RE in batch 262, so the
+    top guard now catches AWK's "◦2023 weather-normalized earnings of
+    $4.77 ..." and the explicit exclusion below is belt-and-braces for
+    it). The plain 80-char branch is unchanged — short
     rows keep the old behavior, and the repair script's $-row guard
     already uses 120. The $-figure count also accepts the spaced-decimal
     form ("$ .44" — Estée Lauder's "$ .44 $ .91" row), via the optional
@@ -1881,10 +1895,11 @@ def _is_lede_data_row(ln: str) -> bool:
         # Batch 178, extended band (see docstring): bare-number table
         # values only — ends in a figure (never a bare year), no scaled
         # $ figure, no $-to-$ range, and never a flattened-list bullet
-        # ("■"/"◦" bullets are not in _BULLET_LEAD_RE, so the top guard
-        # misses them — AIG's "■Net income per diluted share was $0.12
-        # ..." and AWK's "◦2023 weather-normalized earnings of $4.77
-        # ..." are bullets, not rows). A bare-year ending is prose
+        # ("■" is not in _BULLET_LEAD_RE, so the top guard misses it —
+        # AIG's "■Net income per diluted share was $0.12 ..." is a
+        # bullet; "◦" joined _BULLET_LEAD_RE in batch 262, so the top
+        # guard catches it and the explicit exclusion below is
+        # belt-and-braces for it). A bare-year ending is prose
         # (Eaton's "Fourth quarter earnings per share of $2.35 and
         # record adjusted earnings per share of $2.55, up 24% over
         # 2022"), and a $-to-$ range is a guidance statement (Amex's
