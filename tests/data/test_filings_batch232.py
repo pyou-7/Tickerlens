@@ -153,11 +153,20 @@ def test_cnc_summary_intro_truncated() -> None:
     assert dateline.endswith("June 30, 2025.")
 
 
-def test_dis_dangling_fiscal_bullet_dropped() -> None:
+def test_dis_fiscal_2025_opener_children_served() -> None:
+    # Batch 263: the batch-232 pin is reversed — "• Fiscal 2025:" is
+    # a genuine guidance sub-list opener, not a dangling intro: its
+    # items are ◦ bullets, so the leading-block bullet-run extension
+    # serves the opener and all four children. (Old name:
+    # test_dis_dangling_fiscal_bullet_dropped.)
     hl = extract_press_release_highlights(_read("DIS_2024-09-28.html"))
     assert hl is not None
-    assert "Fiscal 2025:" not in hl
-    assert _lines(hl)[-1].startswith("• We are confident in the long-term prospects")
+    assert "Fiscal 2025:" in hl
+    assert "High-single digit adjusted EPS(1) growth" in hl
+    assert "Target dividend growth that tracks our earnings growth" in hl
+    assert _lines(hl)[-1].startswith(
+        "◦ Target dividend growth that tracks our earnings growth"
+    )
 
 
 # --- unit pins: the dangling-intro predicate ------------------------

@@ -2565,6 +2565,30 @@ def _is_lede_table_tail_continuation(ln: str) -> bool:
     )
 
 
+def _is_lede_caps_heading(ln: str) -> bool:
+    """True for an all-caps section heading ("BEAUTY GAINS AND
+    OPERATIONAL HIGHLIGHTS3") — the heading whose bullets the budget
+    never reached. A continuation of the unfinished item the overrun
+    exists to finish is a sentence or a quote, never an entirely
+    uppercase line: sentences and quotes in these releases are
+    mixed-case, and a figure line is content, not a heading. Guards:
+    short (a wrapped heading is a paragraph, not a label), not
+    sentence-terminated, no $/% figures, not bullet-led. Trailing
+    footnote digits ("HIGHLIGHTS3") do not disqualify — they ride the
+    heading the same way they ride the batch-177 table headers.
+    Batch 263."""
+    s = ln.strip()
+    if not s or len(s) > 90:
+        return False
+    if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    return s.isupper() and any(c.isalpha() for c in s)
+
+
 def _is_bare_highlights_heading(ln: str) -> bool:
     """True for a dangling section heading at the lede tail ("Additional
     Financial Highlights:") — the heading whose bullets the budget never
@@ -8898,16 +8922,39 @@ def extract_press_release_highlights(
                     # A colon-ended bullet is a sub-list opener, not a
                     # complete item ("• For the nine months ended March
                     # 31, 2025:", "• ... Expand Profit Recovery and
-                    # Growth Plan to:") — its items sit on ◦ lines the
-                    # loop does not recognize as bullets, so collecting
-                    # the opener strands the lede at an unfinished item
-                    # and the overrun path then pulls the sub-list plus
+                    # Growth Plan to:") — batch 259 refused the opener
+                    # outright because its items sat on ◦ lines the
+                    # loop did not recognize as bullets, so collecting
+                    # it stranded the lede at an unfinished item and
+                    # the overrun path then pulled the sub-list plus
                     # the next section heading (EL 2025-03-31 served
                     # "BEAUTY GAINS AND OPERATIONAL HIGHLIGHTS3" as a
                     # highlight; ABT/EL Q4 served the opener dangling
-                    # with nothing after it). Refuse the opener: the
-                    # bullet-break below ends the lede cleanly instead.
-                    and not ln.endswith(":")
+                    # with nothing after it). Batch 262 made that
+                    # premise false: ◦ joins _BULLET_LEAD_RE, so the
+                    # sub-list items ARE bullets and the extension
+                    # collects them itself. Batch 263: collect the
+                    # opener exactly when its items are bullets — the
+                    # next content line is a bullet start — and keep
+                    # refusing it when they are not (a table intro
+                    # like Berkshire's "Net earnings includes:" whose
+                    # continuation is table label lines, not bullets).
+                    and (
+                        not ln.endswith(":")
+                        or (
+                            # Batch 263: the opener needs room for at
+                            # least one child — collecting it at the
+                            # cap (content 11 -> 12) strands it with
+                            # its sub-list unserved (ABT Q4 FY2025:
+                            # the Electrophysiology opener is the last
+                            # line, its two • children stranded), which
+                            # reads broken; refusing it ends the lede
+                            # cleanly at the previous complete bullet
+                            # instead, as batch 259 did.
+                            content_lines < 11
+                            and _next_content_line_is_bullet(lede_lines, i)
+                        )
+                    )
                 ):
                     lede.append(ln)
                     in_table = False  # Batch 185: narrative resumes.
@@ -9028,6 +9075,39 @@ def extract_press_release_highlights(
                         break
                     if overrun >= 8 and not term_ahead:
                         break  # finishing cap: at most 8 lines past the budget
+                if _is_lede_caps_heading(ln):
+                    # Batch 263: a section heading is never the
+                    # continuation of the unfinished item — EL
+                    # 2025-03-31 served "BEAUTY GAINS AND OPERATIONAL
+                    # HIGHLIGHTS3" as a highlight because the CEO
+                    # quote's opening “ never closes (multi-paragraph
+                    # quote: the first paragraph opens “ and only the
+                    # last closes ”), so _lede_quote_is_open stays
+                    # true, the terminated-break is suppressed, and
+                    # the overrun pulls the heading as a "continuation".
+                    # The heading ends the lede instead; the bullets
+                    # under it belong to the next section, not to the
+                    # quote. The exception is a repeated page header
+                    # inside a wrapped item: AMGN 2023-12-31's ◦ bullet
+                    # wraps across the repeated headline, and the line
+                    # after the header ("the full year, GAAP operating
+                    # income ...") continues the bullet's sentence —
+                    # then the header is page furniture, skipped
+                    # transparently so the continuation is pulled
+                    # without the header riding mid-bullet (the
+                    # batch-262 wart, fixed here rather than merely
+                    # preserved). The lookahead is the batch-224
+                    # signal: a new item never starts lowercase.
+                    j = i + 1
+                    while j < len(lede_lines) and _ADMIN_LINE_RE.match(
+                        lede_lines[j]
+                    ):
+                        j += 1
+                    nxt = lede_lines[j] if j < len(lede_lines) else ""
+                    if _lede_next_line_continues(lede[-1], nxt):
+                        i += 1
+                        continue
+                    break
                 lede.append(ln)
                 in_table = False  # Batch 185: narrative resumes.
                 table_seen = False
@@ -9510,6 +9590,29 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
         else:
             break  # first line isn't a bullet — no leading block
         if len(bullets) >= 14:
+            # Batch 263: bullet-run extension — the mirror of the
+            # batch-259 lede extension. A bullet run is a sequence of
+            # discrete items, not a prose paragraph: when the next
+            # content line is a bullet and the last collected line is
+            # one too, keep collecting up to the 18-line bound the
+            # completion allowance already trusts. The case that
+            # forces it is DIS Q4 FY2025: the run hits 14 exactly on
+            # the colon-ended "• Sports: ... For Q4:" parent, whose
+            # ◦ children the allowance refuses — a colon-ended parent
+            # is not "unfinished" by the finish rule's signals (its
+            # continuation is a bullet, not a prose continuation), so
+            # the block ends on the dangling parent and the Sports
+            # children plus the Experiences parent and children are
+            # stranded. The extension only fires bullet-to-bullet, so
+            # a heading after the run still ends the block through
+            # the allowance below (a mid-block heading is appended
+            # as a continuation and is then the last collected line,
+            # not a bullet start), and the 18-line bound is unchanged.
+            bullet_run = (
+                len(bullets) < 18
+                and bullets[-1].startswith(_LEADING_BULLET_STARTS)
+                and _next_content_line_is_bullet(lines, idx)
+            )
             # Batch 222: completion allowance — the same mid-sentence
             # wart as the lede loop and the section collector: the
             # 14-line cap can strand a quote/sentence (GEV's quote
@@ -9533,14 +9636,14 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # line continuing it): once the tail terminates, the pull
             # stops even when another terminated line sits ahead.
             term_ahead = _lede_termination_ahead(bullets, lines[idx + 1 : idx + 5])
-            if not (
+            if not bullet_run and not (
                 _lede_item_still_unfinished(bullets)
                 or _lede_next_line_continues(
                     bullets[-1], lines[idx + 1] if idx + 1 < n else ""
                 )
             ):
                 break
-            if len(bullets) >= 18 and not term_ahead:
+            if len(bullets) >= 18 and not term_ahead and not bullet_run:
                 break
     if len("\n".join(bullets)) >= 150:
         # Batch 140: drop lone-marker lines AFTER qualification, so the

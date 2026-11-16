@@ -20,6 +20,17 @@ section heading (EL 2025-03-31 served "BEAUTY GAINS AND
 OPERATIONAL HIGHLIGHTS3" as a highlight; ABT/EL Q4 served the
 opener dangling with nothing after it). The opener is refused, so
 the bullet-break ends the lede cleanly instead.
+
+Batch 263 narrows the refusal instead of keeping it: ◦ joined
+_BULLET_LEAD_RE in batch 262, so the opener's items ARE bullets and
+the extension collects them itself. The opener is now collected
+exactly when its items are bullets (next content line is a bullet
+start) and there is room for at least one child; a table-intro
+opener is still refused, and the overrun path never pulls a section
+heading as a "continuation" (the EL heading leak's real cause was
+the CEO quote's unclosed “, which suppresses the terminated-break).
+The two tests below that pinned the blanket refusal are updated in
+place.
 """
 import os
 import sys
@@ -163,9 +174,12 @@ def test_prose_lede_keeps_six_line_cap():
 
 
 def test_colon_opener_refused():
-    # EL-shaped: the first line past the budget is a sub-list opener.
-    # The opener, its ◦ sub-bullets and the next section heading are
-    # all refused — the lede ends at the last complete bullet.
+    # Batch 263: the batch-259 refusal is narrowed, not removed. The
+    # opener's items are ◦ bullets now (batch 262: ◦ joins
+    # _BULLET_LEAD_RE), so the opener and its sub-list are served; the
+    # section heading after the sub-list still ends the lede (the
+    # overrun heading guard). Renamed by the batch-263 edit below —
+    # the old name is kept so the pin stays findable.
     lines = [
         "ACME CORP REPORTS FISCAL 2026 THIRD QUARTER RESULTS",
         "New York, May 1, 2026 - Acme Corp today reported its financial "
@@ -184,8 +198,8 @@ def test_colon_opener_refused():
     ]
     out = extract_press_release_highlights(_html([*lines, _FILLER])) or ""
     assert "Operating margin declined to 8.6%" in out
-    assert "For the nine months ended" not in out
-    assert "Net cash flows provided" not in out
+    assert "For the nine months ended" in out
+    assert "Net cash flows provided" in out
     assert "BEAUTY GAINS" not in out
 
 
@@ -205,13 +219,21 @@ def test_chd_q3_2025_real_exhibit_serves_ten_bullets():
 
 
 def test_el_q3_2025_real_exhibit_no_heading_leak():
+    # Batch 263: the opener and its ◦ sub-list are served now (the
+    # batch-259 refusal's premise — ◦ lines unrecognized as bullets —
+    # is false since batch 262); the heading leak stays refused.
     out = _live("EL_2025-03-31")
     assert "Effective tax rate was 34.0%" in out
     assert "Diluted net earnings per common share decreased to $.44" in out
-    assert "For the nine months ended" not in out
+    assert "For the nine months ended March 31, 2025:" in out
+    assert "Net cash flows provided by operating activities decreased" in out
+    assert "The Company paid dividends of $492 million." in out
     assert "BEAUTY GAINS" not in out
 
 
 def test_abt_q4_2025_real_exhibit_no_dangling_opener():
+    # Batch 263: still refused — the opener lands exactly at the
+    # 12-line cap, so there is no room for its children, and the
+    # extension refuses an opener with no room for a child.
     out = _live("ABT_2025-12-31")
     assert "two significant regulatory approvals:" not in out
