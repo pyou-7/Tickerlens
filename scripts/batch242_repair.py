@@ -294,7 +294,19 @@ def _split_flattened(s_lines: list[str], l_lines: list[str]) -> list[str]:
 def sweep_gate_s4(stored: str, live: str) -> str | None:
     """Gate S4: gate S3 with the S4 entry condition (chrome strip +
     headline alignment + single-line split). Every other gate-S3
-    condition is unchanged."""
+    condition is unchanged.
+
+    Batch 260: two policing fixes. (1) The added-table scan strips
+    leading chrome from the live lines too — the gate already strips
+    it from stored, so a leading contact line whose phone number
+    matches _is_lede_data_row (EIX: "Investor Relations: Sam Ramraj,
+    (626) 302-2540") counted as live-only table material even though
+    stored carries the same line. The strip is front-only, so a
+    contact line added mid-text still trips added-table. (2) The
+    fragment refusal is exempted when live's second line equals
+    stored's second line post-alignment — a lowercase second line
+    both sides share is a headline continuation (BRO: "including
+    total revenues ..."), not a live-only fragment."""
     s_lines = non_empty(stored)
     l_lines = non_empty(live)
     s_lines = _split_flattened(s_lines, l_lines)
@@ -318,7 +330,8 @@ def sweep_gate_s4(stored: str, live: str) -> str | None:
     if lfrac >= 0.4 or has_dateline_table_shape(l_lines):
         return "live-table"
     s_set = set(s_lines)
-    if any(hard_table(x) for x in l_lines if x not in s_set):
+    scan_lines = _strip_leading_chrome(l_lines)
+    if any(hard_table(x) for x in scan_lines if x not in s_set):
         return "added-table"
     last = l_lines[-1] if l_lines else ""
     if last not in s_set and (
@@ -326,7 +339,10 @@ def sweep_gate_s4(stored: str, live: str) -> str | None:
     ):
         return "tail"
     if len(l_lines) > 1 and l_lines[1][:1].islower():
-        return "fragment"
+        if len(s_lines) > 1 and l_lines[1] == s_lines[1]:
+            pass
+        else:
+            return "fragment"
     return None
 
 

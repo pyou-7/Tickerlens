@@ -15,8 +15,11 @@ Two things, both found while probing the AMT seeding gap:
    exhibits and the extractor were all unchanged (old-vs-new
    extractor output byte-identical on all 19 rows). The fast path
    now lives inside classify() so the decision is in one place,
-   and the two shapes below pin it: S4 refuses, classify still
-   says in-sync.
+   and the two shapes below pin it. Batch 260 then fixed S4 itself
+   (leading-chrome strip on the live side, shared-second-line
+   fragment exemption), so S4 no longer refuses these shapes at
+   all; the classify pins below still hold, and the fast path
+   remains as the safety net for any future policing shape.
 
 2. S12 refusal pin (scripts/batch255_repair.py). AMT 2024-09-30
    stays loss: its stored row is seed-era truncated mid-sentence
@@ -81,18 +84,17 @@ _LIVE_AMT = (
 
 
 def test_census_fast_path_fragment_shape_is_in_sync() -> None:
-    # S4 refuses the pair on its own policing (live's second line
-    # starts lowercase), but stored == live, so the census must say
-    # in-sync, not loss.
-    assert sweep_gate_s4(_FRAG, _FRAG) == "fragment"
+    # Batch 260 fixed S4 itself (shared-second-line exemption), so
+    # S4 no longer refuses this pair; classify still says in-sync.
+    assert sweep_gate_s4(_FRAG, _FRAG) is None
     assert classify(_FRAG, _FRAG, "") == "in-sync"
 
 
 def test_census_fast_path_added_table_shape_is_in_sync() -> None:
-    # The leading contact line is stripped from stored as chrome and
-    # then reads as an added table line in live — again S4 refuses a
-    # pair that is identical.
-    assert sweep_gate_s4(_EIX, _EIX) == "added-table"
+    # Batch 260 fixed S4 itself (leading-chrome strip on the live
+    # side), so S4 no longer refuses this pair; classify still says
+    # in-sync.
+    assert sweep_gate_s4(_EIX, _EIX) is None
     assert classify(_EIX, _EIX, "") == "in-sync"
 
 
