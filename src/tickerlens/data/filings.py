@@ -515,7 +515,17 @@ _TABLE_UNITS_RE = re.compile(
 # 220 chars of TOC junk vs 1638 stored). The batch-154 defect class,
 # a new glyph: the bullet guard must see the same markers the
 # exhibits use, or figure-dense bullet lists read as tables.
-_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾]\s?|-\s|l\s)")
+# Batch 261: the Wingdings "n" bullet — the same glyph family as
+# batch 175's "l", JPM's releases render their bullets as <font
+# face="Wingdings">n</font> (in Wingdings "n" is a small square, the
+# same mark CINF uses as the " n " separator between subsidiary
+# names in its masthead). A lone "n" plus a space is never prose
+# either (no English word is a lone "n"), so "n " joins the bullet
+# lead on the same argument. JPM's exhibits are not in the blast
+# cache, so this is verified by the predicate tests plus a zero-delta
+# blast (no "n "-starting line exists in the 1,699-exhibit cache),
+# not by a JPM exhibit.
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾]\s?|-\s|l\s|n\s)")
 
 
 def _is_inline_bullet_start(ln: str) -> bool:
@@ -551,7 +561,7 @@ def _is_inline_bullet_start(ln: str) -> bool:
 # punctuation mark in the fragment means the line is already a
 # complete item or a label, not an orphaned opener.
 _FRAGMENTED_BULLET_RE = re.compile(
-    r"^(?:[•●–—]\s?|-\s|l\s|[▪■·○]\s?)"
+    r"^(?:[•●–—]\s?|-\s|l\s|n\s|[▪■·○]\s?)"
     r"([A-Za-z][A-Za-z\-']*(?:\s+[A-Za-z][A-Za-z\-']*)?)\s*$"
 )
 
@@ -10004,10 +10014,17 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     """Return the content lines of an explicit "Highlights" section, or None.
 
     Financial priority (batch 102): the leading bullet block right after
-    the headline and every "Highlights" section compete; the one densest
-    with reported financial figures wins (earlier wins ties). When nothing
-    is financial, the earliest candidate is kept — the pre-batch-102
-    behavior.
+    the headline and every "Highlights" section compete; the one with
+    the most reported financial figure lines wins (earlier wins ties).
+    When nothing is financial, the earliest candidate is kept — the
+    pre-batch-102 behavior. Batch 261: the docstring used to say
+    "densest", but the code has always scored by absolute figure-line
+    count, and that is the right rule — a density-first simulation
+    over the 1,699-exhibit cache flips 27 winners to thinner sections
+    (ADBE's 7-figure Financial Highlights lose to 3-figure Business
+    Segment Highlights; CRM's 11-figure quarter section loses to the
+    6-figure guidance section), so density-first is rejected and the
+    docstring now states the implemented rule.
 
     Scope priority (batch 244): a full-year-scoped section never wins
     over a quarter-scoped section that financially qualifies. A Q4
