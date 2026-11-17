@@ -25,8 +25,8 @@ The 2024-06-30 sibling already stores the live shape (stored ==
 live), which is the consistency cross-check for the re-sync. No
 extractor change in batch 270: the re-sync is a DB repair.
 
-Known live-shape wart pinned here rather than fixed: Q4 FY2025
-(V_2025-09-30) serves only the 4 figure bullets, with no dateline
+Known live-shape wart, fixed in batch 271 (see below): Q4 FY2025
+(V_2025-09-30) served only the 4 figure bullets, with no dateline
 and no CEO quote. Its dateline ("San Francisco, October 28, 2025
 \u2013 Visa (NYSE: V)") matches _DATED_DATELINE_LEAD_RE, so the
 leading-bullet block exists and wins over the lede — but the block
@@ -45,10 +45,15 @@ tails), BKNG x1 (a bullet line ending in the glued "Full Year
 2024 Highlights" label trips the same break), and V_2025-09-30
 itself (the block then runs past the table into "Income Statement
 Summary" residue, because the leading block has no stop for that
-title). Fixing the wart properly needs both a narrowed heading
+title). Fixed properly in batch 271: a narrowed heading
 continuation (colon-ended standalone heading only, never a bullet
-line) and a table-title stop for "Income Statement Summary" —
-carried forward, not shipped here.
+line) plus a table-title stop for "Income Statement Summary" —
+the full-cache blast moves exactly 1 row (V_2025-09-30, 420 ->
+732 chars); APD and BKNG are unchanged (pinned in
+test_filings_batch271). The dateline and the CEO quote remain
+unserved for this quarter (the dateline is skipped by the block
+by design; the quote is glued to a summary-table row) — separate
+gaps, not part of this fix.
 """
 import os
 import sys
@@ -201,23 +206,32 @@ def test_visa_q4_2024_lede_serves_all_seven_bullets():
     assert "Visa had a robust fourth quarter" not in live
 
 
-def test_visa_q4_2025_leading_block_serves_four_figure_bullets_only():
-    # KNOWN WART (see module docstring): the Q4 FY2025 live shape is
-    # the leading bullet block only — headline + 4 figure bullets, no
-    # dateline, no CEO quote, and the 3 "Other Highlights" narrative
-    # bullets are stranded by the _HIGHLIGHTS_HEADING_RE break. The
-    # naive continuation fix was tried and reverted in batch 270
-    # (blast: APD x3, BKNG x1, V table residue) — pin the current
-    # shape so any future fix (or regression) fails loudly.
+def test_visa_q4_2025_leading_block_serves_all_seven_bullets():
+    # Fixed in batch 271 (see module docstring): the narrowed heading
+    # continuation carries the block past the "Other Highlights:"
+    # sub-heading, and the table-title stop ends it at "Income
+    # Statement Summary" — so the live shape is now headline + all 7
+    # bullets (4 figure + 3 narrative), matching the Q4 FY2024
+    # sibling's lede shape minus the dateline and the CEO quote
+    # (both remain unserved: the dateline is skipped by the block
+    # by design, the quote is glued to a summary-table row).
     key = "V_2025-09-30"
     body = _body_lines(key)
     block = _leading_bullet_block(body)
     assert block is not None
-    assert len(block) == 5  # 4 bullets + "Fiscal Full-Year Results:" label
+    # 4 figure bullets + 2 colon labels + 3 narrative bullets.
+    assert len(block) == 9
     assert block[2] == "Fiscal Full-Year Results:"
+    assert block[5] == "Other Highlights:"
+    assert block[6].startswith(
+        "\u2022 Fiscal fourth quarter growth in payments volume"
+    )
+    assert block[8].startswith(
+        "\u2022 The board of directors increased Visa's quarterly cash dividend"
+    )
     section = _extract_highlights_section(body)
     assert section is not None
-    assert len(section) == 4  # label dropped post-selection (batch 177)
+    assert len(section) == 7  # labels dropped post-selection (batch 177)
     live = _live(key)
     lines = _live_lines(key)
     assert live.startswith(
@@ -230,13 +244,19 @@ def test_visa_q4_2025_leading_block_serves_four_figure_bullets_only():
     assert lines[3].startswith(
         "\u2022 GAAP net income of $20.1B or $10.20 per share"
     )
-    assert len(lines) == 5
-    # No dateline, no quote, no stranded narrative bullets, no table.
+    assert lines[5].startswith(
+        "\u2022 Fiscal fourth quarter growth in payments volume"
+    )
+    assert lines[6].startswith(
+        "\u2022 Share repurchases and dividends of $6.1B"
+    )
+    assert lines[7].startswith(
+        "\u2022 The board of directors increased Visa's quarterly cash dividend"
+    )
+    assert len(lines) == 8
+    # No dateline, no quote, no table residue.
     assert "San Francisco" not in live
     assert "continued healthy consumer spending" not in live
-    assert "remained strong" not in live
-    assert "Share repurchases and dividends of $6.1B" not in live
-    assert "quarterly cash dividend 14% to $0.670" not in live
     assert "Income Statement Summary" not in live
     assert "$10.7 12% $40.0 11%" not in live
 

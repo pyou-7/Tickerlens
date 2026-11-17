@@ -9406,6 +9406,63 @@ def _is_executive_quote_line(ln: str) -> bool:
     return bool(re.search(r'[”"]', s[m.start() + 1 :]))
 
 
+# A financial-statement table title ("Income Statement Summary",
+# "Condensed Consolidated Statements of Operations", "Key Business
+# Drivers", "Results Summary", "Financial Summary"): short,
+# unterminated, every word capital-led (small connectors "of" /
+# "and" / "from" / "for" / "on" / "the" allowed; parenthesized
+# qualifiers, trailing footnote digits and bare-dash separators
+# transparent), carrying a statement / summary / balance-sheet /
+# cash-flow / operations / drivers keyword. A table title is never a bullet
+# continuation — the flattened statement behind it (units line, row
+# labels, data rows) is table residue, and without the stop the
+# leading-bullet block swallows it (Visa Q4 FY2025: the block ran
+# past "Income Statement Summary" into the units line, the quote
+# intro and the table rows, to the 18-line cap). Row labels are kept
+# out by the capital-led rule ("Income from operations", "Free cash
+# flow", "Accumulated other comprehensive loss" all carry lowercase
+# non-connector words) and by the keyword list ("Net Revenue",
+# "GAAP Net Income" carry no title keyword); boilerplate titles
+# ("Forward-Looking Statements", "Safe Harbor Statement") never
+# reach this predicate — _BOILERPLATE_RE breaks the block first.
+# Batch 271.
+_FINANCIAL_TABLE_TITLE_KW_RE = re.compile(
+    r"\b(statement|statements|summary|balance sheet|balance sheets|"
+    r"cash flow|cash flows|operations|drivers)\b",
+    re.IGNORECASE,
+)
+_FINANCIAL_TABLE_TITLE_CONNECTORS = frozenset(
+    {"of", "and", "from", "for", "on", "the"}
+)
+
+
+def _is_financial_table_title(ln: str) -> bool:
+    """True when ln is a financial-statement table title (see above)."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if re.search(r"[.!?;]\s*$", s):
+        return False  # terminated: a sentence, not a title
+    if not _FINANCIAL_TABLE_TITLE_KW_RE.search(s):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 8:
+        return False
+    for w in words:
+        if w in ("-", "–", "—"):
+            continue  # bare dash separator ("BALANCE SHEETS – ASSETS")
+        w2 = re.sub(r"\d+$", "", w.strip("()").rstrip(","))
+        if not w2:
+            continue
+        if w2.lower() in _FINANCIAL_TABLE_TITLE_CONNECTORS:
+            continue
+        if not w2[0].isupper():
+            return False
+    return True
+
+
 def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     """Consecutive bullet lines immediately after the headline.
 
@@ -9437,7 +9494,39 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
         if _BOILERPLATE_RE.match(ln):
             break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
-            break  # a headed section follows; it competes on its own
+            # Batch 271: narrowed heading continuation — a short
+            # colon-ended standalone sub-heading ("Other Highlights:"
+            # — Visa Q4 FY2025) that introduces a bullet list is a
+            # label line inside the leading block, not a competing
+            # section: keep collecting when bullets are already in
+            # hand and the next content line is a bullet. The label
+            # is dropped post-selection by the batch-177 rule, so
+            # only the bullets are served. The gates are what keep
+            # this narrow: a bare heading ("Recent Highlights" —
+            # Air Products, no colon) still breaks, and a bullet
+            # line carrying a glued heading label (Booking's
+            # "• Revenue grew ... Full Year 2024 Highlights")
+            # never reaches this branch as a heading —
+            # _is_lede_colon_heading refuses bullet lines. The
+            # batch-270 naive form (continue past ANY heading
+            # followed by bullets) flipped APD x3 and BKNG x1
+            # and is not used.
+            if (
+                bullets
+                and not ln.startswith(_LEADING_BULLET_STARTS)
+                and _is_lede_colon_heading(ln)
+                and _next_content_line_is_bullet(lines, idx)
+            ):
+                bullets.append(ln)
+                in_item = True
+                # Continue: the continuation branch below would
+                # append the same label a second time. The cap
+                # check at the bottom of the loop is skipped for
+                # this label line only — the bullet the gate just
+                # confirmed follows immediately and runs it.
+                continue
+            else:
+                break  # a headed section follows; it competes on its own
         if not bullets and (
             _DATELINE_LEAD_RE.match(ln) or _DATED_DATELINE_LEAD_RE.match(ln)
         ):
@@ -9520,6 +9609,18 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 or _TABLE_WORD_UNITS_RE.match(ln)
                 or (
                     _is_lede_table_heading(ln)
+                    and not _next_content_line_is_bullet(lines, idx)
+                )
+                # Batch 271: a financial-statement table title
+                # ("Income Statement Summary" — Visa Q4 FY2025)
+                # ends the block: the flattened statement behind
+                # it is table residue, not a bullet continuation.
+                # The next-is-bullet guard is the batch-195 shape:
+                # a title that introduces bullets ("KEY DRIVERS"
+                # + its bullet list) is a sub-heading, not a table,
+                # so the break fires only when a table follows.
+                or (
+                    _is_financial_table_title(ln)
                     and not _next_content_line_is_bullet(lines, idx)
                 )
                 or _is_lede_period_header(ln)
