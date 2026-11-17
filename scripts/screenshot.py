@@ -25,6 +25,7 @@ BASE = "http://127.0.0.1:8123"
 
 SHOTS = {
     "home": "/",
+    "login": "/login",
     "aapl-overview": "/company/AAPL",
     "aapl-detail": "/company/AAPL/detail",
     "aapl-compare": "/company/AAPL/compare",

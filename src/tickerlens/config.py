@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     edgar_user_agent: str = Field(min_length=1)
     edgar_cache_dir: Path = Path(".edgar_cache")
     database_url: str = "sqlite:///tickerlens.db"
+    # Shared passcode gate for the publicly hosted site (Railway). When set,
+    # every route except /login, /logout, /healthz and /static/* requires the
+    # passcode (see tickerlens.auth). When unset (local dev) the gate is
+    # inactive and the site stays open.
+    tickerlens_passcode: str | None = None
 
 
 @lru_cache
