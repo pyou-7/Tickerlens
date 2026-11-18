@@ -9484,6 +9484,64 @@ def _is_financial_table_title(ln: str) -> bool:
     return True
 
 
+_PAGE_MARKER_RE = re.compile(r"^\d{1,2} [A-Z]")
+# Batch 274: section headings that end a leading-bullet block. The
+# Cautionary heading is the batch-214 cut string, applied at
+# collection instead of assembly: the safe-harbor risk bullets that
+# follow it are never highlights. The Conference Call Details
+# heading is the same class — call logistics, not results. Both
+# match only a heading-shaped line (optional bare page number +
+# heading); a bullet line merely mentioning a call, or a mega-line
+# with the Cautionary string glued inside a footnote bullet, never
+# matches, so genuine content is untouched.
+_CAUTIONARY_HEADING_RE = re.compile(
+    r"^(\d{1,2} )?Cautionary Note on Forward-Looking Statements"
+)
+_CONFERENCE_CALL_HEADING_RE = re.compile(
+    r"^(\d{1,2} )?Conference Call Details\b"
+)
+
+
+def _is_page_marker_page(lines: list[str], idx: int) -> bool:
+    """True when lines[idx + 1] is the next page of a flattened
+    page-image exhibit and lines[idx] is the page before it (batch 274).
+
+    Page-image exhibits (Ford) flatten each page into one mega-line
+    prefixed with its bare page number ("2 Total Company Highlights
+    ...", "3 Business Segment Highlights ...", "2 The company reported
+    ..."). The leading block's item-close rule treats a terminated
+    continuation line as the end of the bullet item — but here the
+    "next line" is the next page of the same body, not new prose, so
+    the close strands a whole page: the segment table, the segment
+    narrative, or the outlook page, each of which carries figures the
+    stored rows hold. lines[idx] must be a mega-line (>= 1000 chars,
+    the batch-105 page-line notion) so the rule only fires inside a
+    flattened exhibit; the next page must open with a capital letter
+    after its page number, so a data row ("9 4 971 193") or a
+    lowercase wrap tail ("3 percentage points ...") never qualifies
+    — and a period fragment ("3 Months Ended"), a footnote
+    definition, the Cautionary heading, or a conference-call heading
+    still ends the block through the break shapes on the next
+    iteration. The next page must carry figures: either a dollar
+    figure in the page itself, or a figure-carrying bullet on the
+    next content line — the outlook page's figures may live in the
+    bullets it introduces, not its opener (F 2026-06-30's 162-char
+    "4 Full-Year 2026 Outlook ..." opener, whose guidance bullets
+    carry the segment EBIT figures). A contacts page fails both —
+    its next line is a figure-free footnote bullet — so the block
+    still ends before it (F 2026-03-31), instead of running on into
+    the footnote bullets and truncating at the 9000-char cap.
+    """
+    prev = lines[idx]
+    nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
+    if len(prev) < 1000 or not _PAGE_MARKER_RE.match(nxt):
+        return False
+    if "$" in nxt:
+        return True
+    following = _next_content_line(lines, idx + 1)
+    return following.startswith(_LEADING_BULLET_STARTS) and "$" in following
+
+
 def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     """Consecutive bullet lines immediately after the headline.
 
@@ -9513,6 +9571,19 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # open across the skip.
             continue
         if _BOILERPLATE_RE.match(ln):
+            break
+        if _CAUTIONARY_HEADING_RE.match(ln) or _CONFERENCE_CALL_HEADING_RE.match(ln):
+            # Batch 274: a safe-harbor heading or a conference-call
+            # section heading ends the block — the risk bullets (Ford:
+            # the "• Ford's long-term success..." run after the
+            # Cautionary page, which the footnote-definition skip
+            # otherwise swallows transparently) and the call-details
+            # page are never highlights. Placed with the boilerplate
+            # break, before the footnote-definition skip: the
+            # Cautionary page itself matches the numbered-definition
+            # shape ("4 Cautionary Note ..."), so the skip would
+            # swallow it and the block would run on into the risk
+            # bullets (F 2026-09-30).
             break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
             # Batch 271: narrowed heading continuation — a short
@@ -9686,6 +9757,13 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # heading/boilerplate breaks above still bound the block,
                 # so an unclosed quote cannot run away.
                 and not _item_has_open_quote(_current_leading_item_text(bullets))
+                # Batch 274: don't close the item when the next line is
+                # the next page of a flattened page-image exhibit —
+                # _is_page_marker_page above. The page marker is
+                # furniture, not a new item: the block keeps collecting
+                # the next page (segment table, segment narrative,
+                # outlook) as a continuation.
+                and not _is_page_marker_page(lines, idx)
             ):
                 # Batch 246: the dateline closes the item, and the
                 # executive quote follows it immediately (ADI, Deckers,
