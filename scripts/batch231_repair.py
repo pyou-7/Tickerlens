@@ -117,11 +117,21 @@ def norm(s: str) -> str:
     # "Darden1", Darden) or off a percent sign ("an increase of
     # 12.5% 3" vs "12.5%3", Darden). The footnote-key rule needs a
     # LETTER or "%" before the space and a single digit after it
-    # (followed by space or end-of-line), so "Q3 2024", "year 2024",
-    # "up 10 percent" and "2024 1" never collapse — and because every
-    # non-space character is preserved, two lines that differ in
-    # content still differ after norm ("sales 1" vs "sales 2" stays
-    # different).
+    # (followed by space, comma, or end-of-line), so "Q3 2024",
+    # "year 2024", "up 10 percent" and "2024 1" never collapse — and
+    # because every non-space character is preserved, two lines that
+    # differ in content still differ after norm ("sales 1" vs
+    # "sales 2" stays different). Batch 272: the comma joins the
+    # lookahead — the seed-era extractor also spaced a footnote key
+    # off a following comma ("Bahama Breeze brand 2, ..." vs live
+    # "brand2, ...", Darden x2), the same spacing-only class; a
+    # comma after the digit can never start a year or a decimal
+    # (those continue with another digit), so the guard is unchanged
+    # — EXCEPT a date's day number ("November 6, 2024"): the comma
+    # there is followed by a 4-digit year, and gluing the day to
+    # the month ("November6, 2024") breaks the dateline predicates
+    # the gates run on normed lines (batch-241 CVS pins), so a
+    # comma followed by a year never glues.
     # Batch 247: canonicalize spacing around a double hyphen, but
     # ONLY when a 4-digit year precedes it ("SAN FRANCISCO, MAY 22,
     # 2025 -- Autodesk ..." vs the live "2025-- Autodesk ...", ADSK
@@ -163,7 +173,7 @@ def norm(s: str) -> str:
         ln = re.sub(r" +([)\]])", r"\1", ln)
         ln = re.sub(r"(\b\d{4}) --(?= |$)", r"\1--", ln)
         ln = re.sub(r"(\d) +(st|nd|rd|th)\b", r"\1\2", ln)
-        ln = re.sub(r"([A-Za-z%]) +(\d)(?= |$)", r"\1\2", ln)
+        ln = re.sub(r"([A-Za-z%]) +(\d)(?= |,(?!\s*\d{4})|$)", r"\1\2", ln)
         if ln == "" and out and out[-1] == "":
             continue
         out.append(ln)

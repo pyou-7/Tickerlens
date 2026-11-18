@@ -420,8 +420,29 @@ _HIGHLIGHTS_HEADING_RE = re.compile(
 # heading (used where a match means drop/break); this regex is only
 # the "a section starts here" signal, and _extract_highlights_sections
 # decides per anchor whether the line itself is content.
+# Batch 272: a Highlights heading carrying a short comparison tail
+# ("Second Quarter 2025 Financial Highlights, Comparisons Versus
+# Same Fiscal Quarter Last Year" — Darden Q1-Q3). The old trailing
+# branch required "highlights" at end-of-line, so these headings
+# never anchored and the releases fell to the lede, which drops the
+# same-restaurant-sales table under a dangling "Same-restaurant
+# sales:" opener. The tail is a comparisons-versus clause only,
+# short, and unterminated — prose that merely mentions highlights
+# (AIG's non-GAAP boilerplate, Airbnb's letter prose, Salesforce's
+# pointer sentence) is long or terminated and never anchors; the
+# 120-char bound at the use site keeps flattened mega-lines out.
+# The first form also covered Chipotle's "<period> highlights, year
+# over year:" headings, but the blast proved that a regression:
+# the CMG sections serve long prose and drop the all-caps summary
+# sub-headlines the lede served (batch 184: those sub-headlines
+# carry real news), so 8 of 9 stored CMG rows would newly refuse
+# the gates as loss — the year-over-year tail is NOT included.
+# Surveyed across the whole cache: the only newly-anchored lines
+# are the DRI heading shape.
 _HIGHLIGHTS_SECTION_ANCHOR_RE = re.compile(
-    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
+    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$"
+    r"|\bhighlights?\b,\s*comparisons?\s+versus\s+[^.!?]{1,80}\s*$",
+    re.IGNORECASE,
 )
 # Batch 244: scope words on a Highlights-section anchor. A Q4 release
 # often carries two financial Highlights sections — the quarter's and
