@@ -157,15 +157,34 @@ def norm(s: str) -> str:
     # anywhere; every " TM" is a trademark marker on a capitalized
     # product name. Every non-space character is preserved, so two
     # lines that differ in content still differ after norm.
+    # Batch 275: the footnote-key rule `([,.])\s+(\d)` moved from the
+    # whole-string block into the per-line loop below. It claimed to
+    # be per-line but ran on the whole string, and `\s` matches a
+    # newline — so a line ending in "." or "," glued to a
+    # digit-starting next line (31 stored rows, 7 live extractions,
+    # incl. every F lede + segment pair). The per-line form uses
+    # literal spaces/tabs only, so a rule can never join two lines;
+    # the intra-line cases the batch-241 pins cover are unchanged.
+    # The trademark rule `\s+([®™©])` above keeps its whole-string
+    # form: a corpus check finds no line starting with ®/™/© in any
+    # live extraction, so it has no attested cross-line case.
     s = re.sub(r"(?m)^(\s*[•◦▪■●–—‣·○◆▸►])(?!\s)", r"\1 ", s)
     s = re.sub(r"\s+([®™©])", r"\1", s)
     s = re.sub(r"([A-Z][A-Za-z]*) +(TM)(?![A-Za-z])", r"\1\2", s)
-    s = re.sub(r"([,.])\s+(\d)(?=\s|$)", r"\1\2", s)
     s = re.sub(r"•(?!\s)", "• ", s)
     lines = [ln.rstrip() for ln in s.split("\n")]
     out: list[str] = []
     for ln in lines:
         ln = re.sub(r" +([,.])", r"\1", ln)
+        # Batch 275: the footnote-key rule that used to run on the whole
+        # string (above) is per-line now. Its `\s` matched newlines, so
+        # it glued a line ending in "." or "," to a digit-starting next
+        # line — the F lede (2910 chars) + segment line (2256 chars)
+        # became one 5162-char normed line, which defeated the gates'
+        # exact line-match even when every figure was present (the
+        # batch-274 F override rows were refused for exactly this).
+        # Literal spaces/tabs only: a rule can never join two lines.
+        ln = re.sub(r"([,.])[ \t]+(\d)(?=[ \t]|$)", r"\1\2", ln)
         # Batch 255: a space before a closing bracket ("(IBX® )" vs
         # live "(IBX®)", EQIX 2024-12-31) — the same spacing-only
         # class as the batch-242 space-before-comma/period rule above:
