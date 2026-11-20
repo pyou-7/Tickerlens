@@ -259,9 +259,16 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     # Parent-attributable temporary equity is filed under the carrying-amount
     # tag on the filers checked (KDP's $4.418B convertible preferred stock,
     # 2026-10-17); the liquidation-preference tag is a disclosure amount,
-    # not the carrying amount, so the chain is one tag.
+    # not the carrying amount. Batch 289: REITs with operating-partnership
+    # units (Digital Realty's $1.499B at 2025-12-31) file the mezzanine
+    # total under the including-NCI variant instead — appended as a
+    # gap-fill fallback so ends the parent tag lacks still close the
+    # identity; the parent tag keeps winning wherever it has a fact.
     Metric.TEMPORARY_EQUITY: ConceptSpec(
-        tags=("TemporaryEquityCarryingAmountAttributableToParent",),
+        tags=(
+            "TemporaryEquityCarryingAmountAttributableToParent",
+            "TemporaryEquityCarryingAmountIncludingPortionAttributableToNoncontrollingInterests",
+        ),
         unit="USD",
     ),
     # FFO components (batch 72). Depreciation: filers use either the
@@ -628,7 +635,17 @@ def extract_recent_quarterly_financials(
     # different filings (Darden's segment note misdates its consolidated
     # total-assets context); repair the basis before the identity is used to
     # derive missing legs below.
+    # One mezzanine line double-tagged under both concepts (KKR/PRU/NEE/
+    # TDG) must collapse to a single leg before the identity is judged;
+    # reconcile can re-read both tags from a closing filing, so dedupe
+    # again after it (idempotent).
+    _dedupe_double_tagged_mezzanine(bs_facts)
     _reconcile_balance_sheet_identity(bs_facts, companyfacts, fiscal_year_end)
+    _dedupe_double_tagged_mezzanine(bs_facts)
+    # Mezzanine tagged only dimensionally (per-series/member) is invisible
+    # to companyfacts; when one filing's filed legs still don't close, the
+    # residual is that mezzanine total (batch 289: BLK/CART/APLD).
+    _derive_residual_mezzanine(bs_facts, companyfacts)
     balance_sheet = {
         metric: {end: fact.val for end, fact in facts.items()}
         for metric, facts in bs_facts.items()
@@ -2338,6 +2355,59 @@ def balance_sheet_metric(
 # shared with the mezzanine render gate).
 
 
+def _dedupe_double_tagged_mezzanine(
+    chosen: dict[Metric, dict[dt.date, XbrlFact]],
+) -> None:
+    """Drop a mezzanine leg that double-tags the same balance-sheet line.
+
+    Some filers tag one mezzanine line under both concepts — redeemable
+    noncontrolling interest presented in temporary equity gets filed as
+    ``RedeemableNoncontrollingInterestEquityCarryingAmount`` *and* a
+    ``TemporaryEquityCarryingAmount…`` tag with the identical amount
+    (KKR every quarter; Prudential, NEE, and TDG via the including-NCI
+    variant added in batch 289). Summing both legs double-counts the
+    line and breaks A = L + mezzanine + E by exactly one copy.
+
+    When both legs carry the same value at an end and one copy fits the
+    identity strictly better than two (one copy closes within tolerance
+    and two copies land farther from zero — Tesla's $63M double-tag is
+    inside the $122M tolerance either way, so a plain break test would
+    miss it), the temporary-equity copy is dropped (the redeemable-NCI
+    label is the more specific one and is what pre-existing stored rows
+    carry). Two genuinely distinct lines that happen to be equal are
+    kept: the identity itself arbitrates — if both copies are needed to
+    close, two copies fit strictly better and nothing is dropped.
+    """
+    need = (Metric.TOTAL_ASSETS, Metric.TOTAL_LIABILITIES, Metric.TOTAL_EQUITY)
+    if not all(m in chosen for m in need):
+        return
+    rnci_by_end = chosen.get(Metric.REDEEMABLE_NCI, {})
+    temp_by_end = chosen.get(Metric.TEMPORARY_EQUITY, {})
+    ends = (
+        set(chosen[Metric.TOTAL_ASSETS])
+        & set(chosen[Metric.TOTAL_LIABILITIES])
+        & set(chosen[Metric.TOTAL_EQUITY])
+        & set(rnci_by_end)
+        & set(temp_by_end)
+    )
+    for end in sorted(ends):
+        rnci = rnci_by_end[end].val
+        temp = temp_by_end[end].val
+        if abs(rnci - temp) > 1.0:
+            continue
+        a = chosen[Metric.TOTAL_ASSETS][end].val
+        gap_one = a - chosen[Metric.TOTAL_LIABILITIES][end].val \
+            - chosen[Metric.TOTAL_EQUITY][end].val - rnci
+        if abs(gap_one) <= _identity_tolerance(a) \
+                and abs(gap_one - temp) > abs(gap_one):
+            del temp_by_end[end]
+            logger.info(
+                "Double-tagged mezzanine deduped for %s: redeemable NCI "
+                "and temporary equity both %.1fM; keeping redeemable NCI",
+                end, rnci / 1e6,
+            )
+
+
 def _reconcile_balance_sheet_identity(
     chosen: dict[Metric, dict[dt.date, XbrlFact]],
     companyfacts: dict[str, Any],
@@ -2441,6 +2511,130 @@ def _reconcile_balance_sheet_identity(
                     end, sorted(accns), (a - l - mezz - e) / 1e6, accn,
                 )
                 break
+
+
+def _single_filing_basis(
+    chosen: dict[Metric, dict[dt.date, XbrlFact]],
+    companyfacts: dict[str, Any],
+    end: dt.date,
+) -> str | None:
+    """The accession proving one filing's own balance sheet at ``end``.
+
+    Returns the shared ``accn`` when the chosen Assets/Liabilities/Equity
+    legs demonstrably come from one filing's balance sheet: either all
+    three legs carry it, or two legs carry it and the third leg's chosen
+    value is corroborated by a fact in that same filing (the common case
+    — per-metric latest-filed-wins picks Equity from a later filing's
+    comparative column, which repeats the original filing's value to the
+    dollar). Returns None when no single filing corroborates all three
+    values — the residual could then be a mixed-basis artifact (the
+    Darden misdated-fact class), not a mezzanine section.
+    """
+    legs = {
+        m: chosen[m][end]
+        for m in (Metric.TOTAL_ASSETS, Metric.TOTAL_LIABILITIES,
+                  Metric.TOTAL_EQUITY)
+    }
+    accns = [f.accn for f in legs.values()]
+    shared = {a for a in accns if a is not None and accns.count(a) >= 2}
+    for accn in shared:
+        odd = [m for m, f in legs.items() if f.accn != accn]
+        if not odd:
+            return accn
+        metric = odd[0]
+        spec = CONCEPTS[metric]
+        try:
+            candidates = _chain_candidates(
+                companyfacts, spec.tags, spec.unit,
+                instant=True, metric_name=metric.value,
+            )
+        except KeyError:
+            continue
+        for _tag, facts in candidates:
+            for fact in facts:
+                if (
+                    fact.end == end
+                    and fact.accn == accn
+                    and abs(fact.val - legs[metric].val) <= 1.0
+                ):
+                    return accn
+    return None
+
+
+def _derive_residual_mezzanine(
+    chosen: dict[Metric, dict[dt.date, XbrlFact]],
+    companyfacts: dict[str, Any],
+) -> None:
+    """Recover dimensional mezzanine equity as the identity residual.
+
+    Some filers tag their mezzanine section only with dimensional facts
+    (per-series / per-member breakdowns), which the companyfacts API
+    drops: BlackRock's temporary equity is two member-axis redeemable-NCI
+    lines (Subco $2,791M + Consolidated Sponsored Investment Products
+    $2,636M = $5,427M at 2025-12-31), Maplebear's is a Series-A-axis
+    redeemable convertible preferred ($196M), and Applied Digital's is
+    three per-series temporary-equity lines ($105M on top of its filed
+    redeemable NCI). The extracted Assets/Liabilities/Equity legs then
+    violate A = L + mezzanine + E by exactly the mezzanine amount, and
+    the balance-sheet tab renders numbers that do not foot.
+
+    When all three legs are filed on one filing's basis (see
+    :func:`_single_filing_basis` — so the residual is a real mezzanine
+    section rather than a mixed-basis artifact) and a material positive
+    residual remains after any filed mezzanine, the residual is
+    definitionally the unfiled mezzanine total. It is stored in the
+    temporary-equity slot when that end has no filed temporary equity
+    (the face label on all three attested filers), else the
+    redeemable-NCI slot when empty; a filed value is never overwritten,
+    and when both slots are occupied the gap is left as filed. Runs
+    after :func:`_reconcile_balance_sheet_identity` so mixed bases are
+    repaired first; a negative residual (legs overshoot assets) never
+    derives — that signals a wrong leg, not negative mezzanine.
+    """
+    need = (Metric.TOTAL_ASSETS, Metric.TOTAL_LIABILITIES, Metric.TOTAL_EQUITY)
+    if not all(m in chosen for m in need):
+        return
+    ends = (
+        set(chosen[Metric.TOTAL_ASSETS])
+        & set(chosen[Metric.TOTAL_LIABILITIES])
+        & set(chosen[Metric.TOTAL_EQUITY])
+    )
+    for end in sorted(ends):
+        a_fact = chosen[Metric.TOTAL_ASSETS][end]
+        l_fact = chosen[Metric.TOTAL_LIABILITIES][end]
+        e_fact = chosen[Metric.TOTAL_EQUITY][end]
+        filed_mezz = sum(
+            chosen[m][end].val
+            for m in (Metric.REDEEMABLE_NCI, Metric.TEMPORARY_EQUITY)
+            if end in chosen.get(m, {})
+        )
+        residual = a_fact.val - l_fact.val - e_fact.val - filed_mezz
+        if residual <= _identity_tolerance(a_fact.val):
+            continue
+        basis_accn = _single_filing_basis(chosen, companyfacts, end)
+        if basis_accn is None:
+            continue
+        target = None
+        for m in (Metric.TEMPORARY_EQUITY, Metric.REDEEMABLE_NCI):
+            if end not in chosen.get(m, {}):
+                target = m
+                break
+        if target is None:
+            continue
+        chosen.setdefault(target, {})[end] = XbrlFact(
+            end=end,
+            val=residual,
+            filed=a_fact.filed,
+            form=a_fact.form,
+            fy=a_fact.fy,
+            fp=a_fact.fp,
+            accn=basis_accn,
+        )
+        logger.info(
+            "Residual mezzanine derived for %s: A-L-E-filed_mezz = %.1fM "
+            "stored as %s (filing %s)",
+            end, residual / 1e6, target.value, basis_accn,
+        )
 
 
 def _derive_missing_balance_sheet(
