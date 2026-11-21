@@ -1594,7 +1594,7 @@ def _income_series_for_tag(
     eps_annual_fallback: tuple[str, list[XbrlFact]] | None = None,
     basis_break_starts: set[dt.date] | None = None,
 ) -> list[PeriodMetric]:
-    """Quarterly series from one tag: standalone quarters + derived Q4s."""
+    """Quarterly series from one tag: standalones + derived middles + Q4s."""
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
     q4 = _derive_q4_income(
         facts,
@@ -1605,7 +1605,202 @@ def _income_series_for_tag(
         eps_annual_fallback=eps_annual_fallback,
         basis_break_starts=basis_break_starts,
     )
-    return _merge_standalone_with_q4(metric, source_tag, standalone, q4)
+    merged = _merge_standalone_with_q4(metric, source_tag, standalone, q4)
+    middle = _derive_missing_quarters(
+        facts,
+        source_tag,
+        metric,
+        fiscal_year_end,
+        ni_facts=ni_facts,
+        basis_break_starts=basis_break_starts,
+    )
+    if middle:
+        merged = _merge_gap_fill([merged, middle])
+    return merged
+
+
+def _is_month_end(day: dt.date) -> bool:
+    return day.day == calendar.monthrange(day.year, day.month)[1]
+
+
+def _month_end(day: dt.date) -> dt.date:
+    return day.replace(day=calendar.monthrange(day.year, day.month)[1])
+
+
+def _add_months(day: dt.date, months: int) -> dt.date:
+    total = (day.year * 12 + day.month - 1) + months
+    year, month = divmod(total, 12)
+    month += 1
+    return dt.date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def _expected_quarter_end(fiscal_start: dt.date, quarter_index: int) -> dt.date:
+    """Month-end of the fiscal quarter ``quarter_index`` (1-based) from start."""
+    return _month_end(_add_months(fiscal_start, 3 * quarter_index) - dt.timedelta(days=1))
+
+
+def _match_quarter_index(end: dt.date, expected: list[dt.date]) -> int | None:
+    """1-based index of the expected quarter end nearest ``end`` (≤12 days)."""
+    best: int | None = None
+    best_gap: int | None = None
+    for index, candidate in enumerate(expected, start=1):
+        gap = abs((end - candidate).days)
+        if gap <= 12 and (best_gap is None or gap < best_gap):
+            best, best_gap = index, gap
+    return best
+
+
+def _derive_missing_quarters(
+    facts: list[XbrlFact],
+    source_tag: str,
+    metric: Metric,
+    fiscal_year_end: str | None,
+    ni_facts: list[XbrlFact] | None = None,
+    basis_break_starts: set[dt.date] | None = None,
+) -> list[PeriodMetric]:
+    """Derive a missing middle quarter from a YTD span (batch 292).
+
+    SEC's companyfacts occasionally lacks an entire 10-Q's facts while the
+    next quarter's filing — with its YTD and standalone facts — is present
+    (DOW/ED/EIX/URI Q2 2026: the Q2 10-Qs were filed in Jul/Aug 2026 but
+    carry no companyfacts facts, while the Q3 10-Qs' 9M and Q3-standalone
+    facts are present). When a YTD span (6M or 9M) has exactly one
+    constituent quarter without a standalone fact, that quarter is
+    YTD − Σ(known standalones) — the Q4 derivation's arithmetic,
+    generalized to middle quarters. Derivations never chain: only filed
+    standalones count as known constituents.
+
+    The missing quarter's end date: when it is the span's last quarter,
+    the YTD fact's own end. Otherwise the end is inferred from the fiscal
+    calendar (month-end of start + 3j months − 1 day), which is exact only
+    for month-end filers — inference is gated on every standalone end in
+    the series being a month-end, so 52/53-week filers abstain rather than
+    risk a phantom row at a wrong end date once SEC aggregates the filing.
+
+    Guards mirror ``_derive_q4_income``: discontinued-ops basis breaks
+    skip the fiscal year, and a derived negative revenue abstains when the
+    filer has no negative standalone revenue (basis-mismatched legs — the
+    APLD FY2025 class). EPS derives share-implied, never by subtraction.
+    """
+    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+    if not standalone:
+        return []
+    month_end_filer = all(_is_month_end(fact.end) for fact in standalone)
+    has_negative_standalone = any(fact.val < 0 for fact in standalone)
+
+    # NI legs for the EPS share-implied derivation, deduped like the Q4 path.
+    ni_standalone_by_end: dict[dt.date, XbrlFact] = {}
+    ni_ytd_by_span: dict[tuple[dt.date, dt.date], XbrlFact] = {}
+    if ni_facts:
+        ni_standalone_by_end = {
+            fact.end: fact
+            for fact in _dedup_by_end(ni_facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+        }
+        for lo, hi in ((165, 200), (240, 290)):
+            for fact in _dedup_by_end(ni_facts, lo, hi, fiscal_year_end):
+                if fact.start is not None:
+                    ni_ytd_by_span[(fact.start, fact.end)] = fact
+
+    spans: list[tuple[int, XbrlFact]] = []
+    for k, (lo, hi) in ((2, (165, 200)), (3, (240, 290))):
+        for fact in _dedup_by_end(facts, lo, hi, fiscal_year_end):
+            spans.append((k, fact))
+
+    results: list[PeriodMetric] = []
+    derived_ends: set[dt.date] = set()
+    standalone_ends = {fact.end for fact in standalone}
+    for k, ytd in spans:
+        start = ytd.start
+        if start is None:
+            continue
+        if basis_break_starts and start in basis_break_starts:
+            continue
+        constituents = [
+            fact
+            for fact in standalone
+            if fact.start is not None and fact.start >= start and fact.end <= ytd.end
+        ]
+        if len(constituents) != k - 1:
+            continue
+        expected = [_expected_quarter_end(start, j) for j in range(1, k + 1)]
+        matched: dict[int, XbrlFact] = {}
+        identifiable = True
+        for fact in constituents:
+            index = _match_quarter_index(fact.end, expected)
+            if index is None or index in matched:
+                identifiable = False
+                break
+            matched[index] = fact
+        if not identifiable:
+            continue
+        missing_j = next(j for j in range(1, k + 1) if j not in matched)
+        if missing_j == k:
+            end = ytd.end
+        elif month_end_filer:
+            end = expected[missing_j - 1]
+        else:
+            continue
+        if end in derived_ends or end in standalone_ends:
+            continue
+        if metric in (Metric.EPS_BASIC, Metric.EPS_DILUTED):
+            value = _implied_missing_eps(
+                ytd, constituents, k, ni_ytd_by_span, ni_standalone_by_end
+            )
+        else:
+            value = ytd.val - sum(fact.val for fact in constituents)
+        if value is None:
+            continue
+        if metric is Metric.REVENUE and value < 0 and not has_negative_standalone:
+            continue
+        derived_ends.add(end)
+        results.append(
+            _metric_value(metric, source_tag, _fact_fy(ytd), f"Q{missing_j}", end, value)
+        )
+    return results
+
+
+def _implied_missing_eps(
+    ytd_eps: XbrlFact,
+    eps_constituents: list[XbrlFact],
+    span_quarters: int,
+    ni_ytd_by_span: dict[tuple[dt.date, dt.date], XbrlFact],
+    ni_standalone_by_end: dict[dt.date, XbrlFact],
+) -> float | None:
+    """Share-implied EPS for a missing middle quarter (batch 292).
+
+    Same construction as ``_implied_q4_eps``, generalized: the missing
+    quarter's average share count is the share-month residual of the YTD
+    span (3k·S_ytd − 3·ΣS_i)/3, and its EPS is the missing net income over
+    that count. Returns None (abstain) when any leg is missing, zero, or
+    incoherent — per-share values are never un-cumulated by subtraction.
+    """
+    if ytd_eps.start is None or not ytd_eps.val:
+        return None
+    ni_ytd = ni_ytd_by_span.get((ytd_eps.start, ytd_eps.end))
+    if ni_ytd is None:
+        return None
+    ni_constituents: list[XbrlFact] = []
+    for fact in eps_constituents:
+        ni = ni_standalone_by_end.get(fact.end)
+        if ni is None or not fact.val:
+            return None
+        ni_constituents.append(ni)
+    shares_ytd = ni_ytd.val / ytd_eps.val
+    if shares_ytd <= 0:
+        return None
+    shares_known: list[float] = []
+    for eps_fact, ni_fact in zip(eps_constituents, ni_constituents):
+        shares = ni_fact.val / eps_fact.val
+        if shares <= 0:
+            return None
+        if abs(shares_ytd - shares) / shares > _PRIMARY_SHARES_TOLERANCE:
+            return None
+        shares_known.append(shares)
+    shares_missing = (3 * span_quarters * shares_ytd - 3 * sum(shares_known)) / 3
+    if shares_missing <= 0:
+        return None
+    ni_missing = ni_ytd.val - sum(fact.val for fact in ni_constituents)
+    return round(ni_missing / shares_missing, 4)
 
 
 def _merge_gap_fill(series_list: list[list[PeriodMetric]]) -> list[PeriodMetric]:
@@ -2111,15 +2306,13 @@ def _finance_total_revenue(
     newest = _newest_in_window(facts, _QUARTERLY_FACT_WINDOW)
     if newest is None or (dt.date.today() - newest).days > _MAX_TAG_STALENESS_DAYS:
         return []
-    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(
-        facts,
-        source_tag,
+    return _income_series_for_tag(
         Metric.REVENUE,
+        source_tag,
+        facts,
         fiscal_year_end,
         basis_break_starts=_discontinued_basis_break_starts(companyfacts),
     )
-    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
 def _bdc_quarterly_revenue(
@@ -2145,15 +2338,13 @@ def _bdc_quarterly_revenue(
             "BDC revenue tag %s missing — composite skipped", _BDC_REVENUE_TAGS[0]
         )
         return []
-    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(
-        facts,
-        source_tag,
+    return _income_series_for_tag(
         Metric.REVENUE,
+        source_tag,
+        facts,
         fiscal_year_end,
         basis_break_starts=_discontinued_basis_break_starts(companyfacts),
     )
-    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
 def _is_bank_sic(sic: str | int | None) -> bool:
@@ -2191,16 +2382,14 @@ def _bank_quarterly_revenue(
                 "bank revenue component %s missing — composite skipped", tags[0]
             )
             return []
-        standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-        q4 = _derive_q4_income(
-        facts,
-        source_tag,
-        Metric.REVENUE,
-        fiscal_year_end,
-        basis_break_starts=_discontinued_basis_break_starts(companyfacts),
-    )
         component_series.append(
-            _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
+            _income_series_for_tag(
+                Metric.REVENUE,
+                source_tag,
+                facts,
+                fiscal_year_end,
+                basis_break_starts=_discontinued_basis_break_starts(companyfacts),
+            )
         )
     by_end: dict[dt.date, list[PeriodMetric]] = {}
     for series in component_series:
@@ -2279,15 +2468,13 @@ def _mreit_quarterly_revenue(
             _MREIT_REVENUE_TAGS[0],
         )
         return []
-    standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
-    q4 = _derive_q4_income(
-        facts,
-        source_tag,
+    return _income_series_for_tag(
         Metric.REVENUE,
+        source_tag,
+        facts,
         fiscal_year_end,
         basis_break_starts=_discontinued_basis_break_starts(companyfacts),
     )
-    return _merge_standalone_with_q4(Metric.REVENUE, source_tag, standalone, q4)
 
 
 def _newest_in_window(
@@ -2810,6 +2997,17 @@ def _derive_q4_income(
     # Same 240-day floor as quarterly_cash_flow_metric's m9 window (52/53-week
     # filers like Costco file a 251-day 9M fact).
     ytd_9m = _dedup_by_end(facts, 240, 290, fiscal_year_end)
+    # Batch 292: a derived negative revenue from positive legs means the
+    # annual and 9M facts sit on different bases (APLD FY2025: the 10-K
+    # reclassified contract revenue, FY $144.2M < stale 9M $177.5M, while
+    # the restated standalones sum to $123.9M). Filers whose tag genuinely
+    # goes negative (mREIT net interest income) file negative standalones,
+    # so the guard abstains only when no standalone in the series is
+    # negative — a missing Q4 is honest, a fabricated negative is not.
+    has_negative_standalone = any(
+        fact.val < 0
+        for fact in _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+    )
     annual_by_start = _by_start(annual)
     ytd_by_start = _by_start(ytd_9m)
     # Annual-only EPS fallback (batch 65): a filer may tag its 10-K annual
@@ -2952,6 +3150,8 @@ def _derive_q4_income(
                 value = implied if implied is not None else _round_like_inputs(
                     annual_calc.val, ytd.val, value
                 )
+        if metric is Metric.REVENUE and value < 0 and not has_negative_standalone:
+            continue
         results.append(
             _metric_value(
                 metric,
