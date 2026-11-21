@@ -83,7 +83,11 @@ def test_delisted_ticker_resolves_via_stored_mapping() -> None:
         pass
 
 
-def test_only_sec_stale_set_remains_stale() -> None:
+def test_sec_stale_set_recovered_via_filing_fallback() -> None:
+    # Batch 293 superseded batch 291's "remains stale" pin: the 11 filers
+    # SEC's companyfacts feed lags now recover their quarters from the
+    # filings' own inline XBRL, so none of them is stale anymore and
+    # their pending-filing notes have cleared.
     con = _con()
     try:
         stale = {
@@ -94,13 +98,13 @@ def test_only_sec_stale_set_remains_stale() -> None:
             ).fetchall()
             if m <= "2026-03-31"
         }
-        assert stale == SEC_STALE
+        assert stale == set()
         notes = dict(
             con.execute(
                 "SELECT ticker, pending_filing_note FROM companies "
                 "WHERE ticker IN ('AEP','C','D','DLR','DUK','ETR','NEE','PLD','PPL','SO','SRE')"
             ).fetchall()
         )
-        assert all(notes[t] for t in SEC_STALE)
+        assert all(notes[t] is None for t in SEC_STALE)
     finally:
         con.close()

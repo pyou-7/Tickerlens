@@ -17,6 +17,11 @@ from tickerlens.data.edgar import (
     companyfacts_with_predecessors,
     normalize_cik,
 )
+from tickerlens.data.filing_xbrl import (
+    companyfacts_accns,
+    merge_filing_facts,
+    parse_inline_xbrl,
+)
 from tickerlens.data.filings import (
     extract_management_guidance,
     extract_press_release_highlights,
@@ -173,6 +178,70 @@ def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
         if marker is None or filing_date > marker:
             marker = filing_date
     return marker
+
+
+def _augment_with_uningested_filings(
+    edgar_client: EdgarClient,
+    cik: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 3,
+    lookback_days: int = 550,
+) -> int:
+    """Merge inline-XBRL facts from recent 10-Q/10-Ks companyfacts lacks.
+
+    Batch 293: SEC's companyfacts aggregation can lag a filing by months
+    (11 filers' Q2+Q3 2026 10-Qs contributed zero facts). The filings
+    themselves carry full inline XBRL, so for each recent quarterly filing
+    whose accession number appears nowhere in companyfacts, parse its
+    primary document into companyfacts shape and merge — the extractor
+    then runs unchanged. Filings already ingested cost nothing (accession
+    gate), amendments are skipped (the extractor reads 10-Q/10-K forms
+    only, matching companyfacts parity), and any failure leaves
+    companyfacts untouched. Returns how many filings were merged.
+    """
+    try:
+        ingested = companyfacts_accns(companyfacts)
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff or accn in ingested:
+                continue
+            url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/{doc}"
+            )
+            filing_facts = parse_inline_xbrl(
+                edgar_client.fetch_text(url), form=form, filed=filed, accn=accn
+            )
+            if filing_facts:
+                merge_filing_facts(companyfacts, filing_facts)
+                merged += 1
+                logger.info(
+                    "merged un-ingested filing %s (%s filed %s) for CIK %s",
+                    accn, form, filed, cik,
+                )
+        return merged
+    except Exception:
+        logger.warning(
+            "un-ingested filing augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
 
 
 def _read_skipped_quarters(value: str | None) -> set[str]:
@@ -928,6 +997,11 @@ class FinancialsService:
         # freshness check suspects new data, so it must see the current feed.
         submissions = self.edgar_client.submissions(cik, fresh=True)
         companyfacts = companyfacts_with_predecessors(self.edgar_client, cik, fresh=True)
+        # Batch 293: recover quarters from filings SEC hasn't aggregated
+        # into companyfacts yet (accession-gated; no-op when ingested).
+        _augment_with_uningested_filings(
+            self.edgar_client, cik, submissions, companyfacts
+        )
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
