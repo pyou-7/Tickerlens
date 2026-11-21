@@ -1585,6 +1585,66 @@ def quarterly_income_metric(
     return merged
 
 
+_RECAST_LAG_DAYS = 180
+_RECAST_OVERLAP_DAYS = 20
+
+
+def _recast_overlap_ends(
+    facts: list[XbrlFact], standalone: list[XbrlFact]
+) -> set[dt.date]:
+    """Period ends of recast comparative quarters after an FYE change.
+
+    When a filer changes its fiscal year end, the first 10-Q on the new
+    calendar carries recast comparative quarters sliced on the new
+    calendar (FedEx's May→Dec FYE change: the Sep-2026 10-Q recasts
+    Jul–Sep 2025 as a standalone quarter). Those recasts overlap the
+    old-calendar quarters they slice across, so keeping both puts two
+    different "quarters" over the same months and corrupts every trend
+    and YoY computation downstream.
+
+    Genuine consecutive quarters tile exactly (next start = prev end +
+    1 day, including 52/53-week filers), so any material overlap marks
+    a recast. The recast is identified by its filing lag: a quarter's
+    own 10-Q is filed within ~4 months of period end, while a recast
+    comparative first appears in a filing a year or more later. The lag
+    is measured from the *earliest* filing carrying the period — the
+    deduped standalone's ``filed`` is the latest comparative, which
+    would make every restated quarter look late. A standalone is a
+    recast only when it overlaps a promptly-filed standalone by more
+    than 20 days and its own first appearance lags its end by more
+    than 180 days; every other configuration (delinquent filers,
+    comparative-only histories) abstains.
+    """
+    if len(standalone) < 2:
+        return set()
+    earliest_filed: dict[dt.date, dt.date] = {}
+    for fact in facts:
+        if fact.start is None:
+            continue
+        days = (fact.end - fact.start).days
+        if _QUARTERLY_FACT_MIN_DAYS <= days <= _QUARTERLY_FACT_MAX_DAYS:
+            prev = earliest_filed.get(fact.end)
+            if prev is None or fact.filed < prev:
+                earliest_filed[fact.end] = fact.filed
+
+    def lag(fact: XbrlFact) -> int:
+        first = earliest_filed.get(fact.end, fact.filed)
+        return (first - fact.end).days
+
+    recast: set[dt.date] = set()
+    for fact in standalone:
+        if fact.start is None or lag(fact) <= _RECAST_LAG_DAYS:
+            continue
+        for other in standalone:
+            if other is fact or other.start is None or lag(other) > _RECAST_LAG_DAYS:
+                continue
+            overlap = (min(fact.end, other.end) - max(fact.start, other.start)).days + 1
+            if overlap > _RECAST_OVERLAP_DAYS:
+                recast.add(fact.end)
+                break
+    return recast
+
+
 def _income_series_for_tag(
     metric: Metric,
     source_tag: str,
@@ -1596,6 +1656,9 @@ def _income_series_for_tag(
 ) -> list[PeriodMetric]:
     """Quarterly series from one tag: standalones + derived middles + Q4s."""
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+    recast_ends = _recast_overlap_ends(facts, standalone)
+    if recast_ends:
+        standalone = [f for f in standalone if f.end not in recast_ends]
     q4 = _derive_q4_income(
         facts,
         source_tag,
@@ -1683,6 +1746,9 @@ def _derive_missing_quarters(
     APLD FY2025 class). EPS derives share-implied, never by subtraction.
     """
     standalone = _dedup_by_end(facts, *_QUARTERLY_FACT_WINDOW, fiscal_year_end)
+    recast_ends = _recast_overlap_ends(facts, standalone)
+    if recast_ends:
+        standalone = [f for f in standalone if f.end not in recast_ends]
     if not standalone:
         return []
     month_end_filer = all(_is_month_end(fact.end) for fact in standalone)
