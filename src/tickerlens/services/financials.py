@@ -71,16 +71,41 @@ class CompanyNotFoundError(Exception):
     cannot be resolved to a CIK at all (unknown / invalid ticker)."""
 
 
+def _stored_cik_for_ticker(ticker: str) -> str | None:
+    """CIK from the local companies table, or None when not stored."""
+    db = get_session()
+    try:
+        cik = db.scalar(select(Company.cik).where(Company.ticker == ticker.upper()))
+        if cik is None:
+            # Berkshire-style: SEC lists BRK-B, the DB stores BRK.B.
+            cik = db.scalar(
+                select(Company.cik).where(
+                    Company.ticker == ticker.upper().replace("-", ".").replace("/", ".")
+                )
+            )
+        return normalize_cik(cik) if cik else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
 def _resolve_cik(edgar_client, ticker: str) -> str:
     """Resolve a ticker to a normalized CIK.
 
     The EDGAR client raises a bare KeyError for unknown tickers; convert it
     to CompanyNotFoundError so routes can map it to a clean 404 instead of
-    a 500.
+    a 500. Delisted tickers drop out of SEC's company_tickers.json (KVUE
+    after the Kimberly-Clark close, 2026-11) while their stored history
+    remains servable, so fall back to the local ticker->CIK mapping before
+    giving up (batch 291).
     """
     try:
         return normalize_cik(edgar_client.cik_for_ticker(ticker))
     except KeyError as exc:
+        cik = _stored_cik_for_ticker(ticker)
+        if cik is not None:
+            return cik
         raise CompanyNotFoundError(f"Unknown ticker: {ticker}") from exc
 
 

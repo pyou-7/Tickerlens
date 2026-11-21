@@ -1095,6 +1095,34 @@ def test_dedupe_period_labels_collision_without_sequence_context_walks_earlier_b
     assert by_end[dt.date(2026, 6, 30)] == (2026, "Q2")
 
 
+def test_dedupe_period_labels_stale_fy_later_end_relabels_not_earlier() -> None:
+    """MTD's 8-quarter window (batch 291): the Q1/Q2-2025 rows carry the
+    stale-fy signature (fy=2024), so the correctly labeled Q3 FY2025 row
+    (end 2025-09-30) is not "grounded" — its claim cannot match the naive
+    successor expectation from a stale-fy predecessor. When the stale-fy
+    Q3 FY2026 row (tagged fy=2025) collided with it, the legacy branch
+    walked the correct row back to FY2024 Q3. A later end claiming exactly
+    one year behind its sequence expectation is itself the mislabeled one:
+    relabel it and leave the earlier row alone."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2024, "Q1", dt.date(2025, 3, 31)),  # stale fy
+        _xbrl_row(2024, "Q2", dt.date(2025, 6, 30)),  # stale fy
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),  # correct, ungrounded
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2026, 9, 30)),  # stale fy, collides
+    ]
+    fixed = _dedupe_period_labels(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 9, 30)] == (2025, "Q3")
+    assert by_end[dt.date(2026, 9, 30)] == (2026, "Q3")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
 def test_repair_sequence_breaks_fixes_filer_shifted_year() -> None:
     """CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q tag their periods by the
     calendar year the fiscal year *began* (fy=2024/2025); later filings'

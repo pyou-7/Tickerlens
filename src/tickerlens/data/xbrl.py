@@ -840,11 +840,28 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
         claim = (row.fy, row.fp)
         if claim in holder:
             earlier = holder[claim]
+            # A later end claiming exactly one year behind its sequence
+            # expectation (same fp) carries the stale-fy signature (batch
+            # 89): its own filing never incremented the fiscal-year focus.
+            # That identifies the later end as the mislabeled one even when
+            # the earlier end is not "grounded" — MTD's correct Q3 FY2025
+            # row follows two stale-fy rows, so its claim cannot match the
+            # naive successor expectation, and the legacy branch walked the
+            # correct row back a year when the stale-fy Q3 FY2026 row
+            # collided with it (batch 291). The signature cannot fire for
+            # the comparative-column case the legacy branch exists for:
+            # there the earlier claim equals the later claim, so the
+            # expectation's fp (the next quarter) never matches the claim.
+            later_is_stale_fy = (
+                expected is not None
+                and claim == (expected[0] - 1, expected[1])
+                and expected not in holder
+            )
             if (
                 expected is not None
                 and expected != claim
                 and expected not in holder
-                and grounded.get(id(earlier), False)
+                and (grounded.get(id(earlier), False) or later_is_stale_fy)
             ):
                 # The earlier end's label is sequence-consistent, so the
                 # later end's original filing mislabeled the year — relabel
