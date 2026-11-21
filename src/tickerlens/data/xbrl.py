@@ -616,9 +616,11 @@ def extract_recent_quarterly_financials(
     # only). Basic wins wherever it exists; diluted fills only missing ends,
     # so the displayed "EPS (Basic)" never blanks for a filed quarter.
     eps_basic   = _fill_missing_eps_basic(eps_basic, eps_diluted)
-    # Batch 87: diluted EPS can never exceed basic EPS; the independent
-    # batch-12 Q4 derivations can invert the ranking on filing-rounded
-    # inputs (BBY FY2026Q4). Clamp the corrupted diluted leg to basic.
+    # Batch 87: diluted EPS can never be more extreme than basic EPS; the
+    # independent batch-12 Q4 derivations can invert the ranking on
+    # filing-rounded inputs (BBY FY2026Q4; batch 290: loss quarters
+    # deriving diluted more negative than basic). Clamp the corrupted
+    # diluted leg to basic.
     eps_diluted = _reconcile_eps_basic_diluted(eps_basic, eps_diluted)
     opcf        = _safe(quarterly_cash_flow_metric, Metric.OPERATING_CASH_FLOW)
     capex       = _safe(quarterly_cash_flow_metric, Metric.CAPEX)
@@ -748,26 +750,38 @@ def _reconcile_eps_basic_diluted(
 ) -> list[PeriodMetric]:
     """Clamp diluted EPS to basic EPS wherever the ranking inverts.
 
-    Diluted EPS can never exceed basic EPS — anti-dilutive securities are
-    excluded from the diluted share count, never added — so any
-    diluted > basic pair is corrupt by definition. The batch-12
-    share-implied Q4 derivation computes the two legs independently, and
-    filing-rounded 9M inputs get 3x leverage through the
-    (12·FY_avg − 9·9M_avg)/3 share-month residual, so a 2-decimal 9M EPS
-    can invert the ranking (BBY FY2026Q4 derived 2.5584 basic vs 2.5798
-    diluted). The diluted leg is the corrupted one; clamp it to basic —
-    the two differ by fractions of a percent, so no information is lost.
-    This also subsumes the batch-12 "residual sub-cent flips" limitation
-    (DLTR FY2025Q4: 2.5434/2.548) and corrects loss quarters, where
-    diluted must equal basic (DLTR FY2024Q4: −17.18/−17.17).
+    Diluted EPS can never be more extreme than basic EPS — the diluted
+    share count is the basic count plus dilutive securities, never fewer
+    shares — so the diluted leg's magnitude is bounded by the basic
+    leg's. In profit quarters that means diluted ≤ basic; in loss
+    quarters anti-dilutive securities are excluded entirely, so diluted
+    must equal basic exactly (ASC 260). Any pair violating those bounds
+    is corrupt by definition. The batch-12 share-implied Q4 derivation
+    computes the two legs independently, and filing-rounded 9M inputs
+    get 3x leverage through the (12·FY_avg − 9·9M_avg)/3 share-month
+    residual, so a 2-decimal 9M EPS can invert the ranking (BBY
+    FY2026Q4 derived 2.5584 basic vs 2.5798 diluted). The diluted leg is
+    the corrupted one; clamp it to basic — the two differ by fractions
+    of a percent, so no information is lost. This also subsumes the
+    batch-12 "residual sub-cent flips" limitation (DLTR FY2025Q4:
+    2.5434/2.548) and corrects loss quarters in both directions: DLTR
+    FY2024Q4 filed −17.18/−17.17 (diluted less negative, caught by the
+    diluted > basic test), while batch 290 found the mirror image the
+    original clamp missed — Q4-derived loss quarters whose diluted leg
+    came out *more* negative than basic (CRWD FY2025Q4 −0.3953/−0.4431,
+    GPC FY2025Q4 −4.224/−4.2493, KMX FY2026Q4 −0.8508/−0.8618). For a
+    negative basic leg, any diluted ≠ basic is impossible, so both
+    directions clamp.
     """
     by_end = {m.end: m for m in basic}
     fixed: list[PeriodMetric] = []
     for m in diluted:
         b = by_end.get(m.end)
-        if b is not None and m.value > b.value:
+        if b is not None and (
+            m.value > b.value or (b.value < 0 and m.value < b.value)
+        ):
             logger.warning(
-                "diluted EPS %.4f exceeds basic EPS %.4f for %s %s — "
+                "diluted EPS %.4f violates basic EPS %.4f for %s %s — "
                 "clamping diluted to basic (arithmetically impossible)",
                 m.value,
                 b.value,

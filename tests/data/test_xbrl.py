@@ -2148,6 +2148,21 @@ def test_reconcile_eps_equalizes_loss_quarter_pair() -> None:
     assert fixed[0].value == -17.18
 
 
+def test_reconcile_eps_clamps_more_negative_loss_diluted_to_basic() -> None:
+    # Batch 290: the mirror image of the DLTR case — a Q4-derived loss
+    # quarter whose diluted leg came out MORE negative than basic
+    # (CRWD FY2025Q4: −0.3953 basic / −0.4431 diluted). Diluted shares
+    # can never be fewer than basic shares, so a larger-magnitude loss
+    # per share is arithmetically impossible; clamp diluted to basic.
+    b, d = _eps_pair(dt.date(2025, 1, 31), -0.3953, -0.4431)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -0.3953
+    # A healthy loss pair (diluted == basic, as filers report) is untouched.
+    b, d = _eps_pair(dt.date(2025, 1, 31), -0.42, -0.42)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -0.42
+
+
 def test_reconcile_eps_ignores_unpaired_diluted() -> None:
     _, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.50)
     fixed = _reconcile_eps_basic_diluted([], [d])
@@ -2184,6 +2199,52 @@ def test_q4_eps_flip_never_reaches_rows() -> None:
     q4 = next(r for r in rows if r.fp == "Q4")
     assert q4.eps_basic is not None and q4.eps_diluted is not None
     assert q4.eps_diluted <= q4.eps_basic
+
+
+def test_q4_loss_eps_flip_never_reaches_rows() -> None:
+    # Batch 290 end-to-end: a loss year (FY NI −100M after a +50M 9M)
+    # whose independent share-implied Q4 derivations invert the loss
+    # ranking — basic derives −1.50 while diluted derives ≈−5.17
+    # (implied Q4 diluted shares 29M < basic 100M, impossible). The
+    # stored row must equalize the pair (ASC 260 anti-dilution).
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-01-01", "2025-09-30", 700_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 1_000_000_000, 2025, "FY"),
+        ],
+        net_income_values=[
+            ("2025-01-01", "2025-09-30", 50_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -100_000_000, 2025, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.50, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -1.00, 2025, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.40, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -0.99, 2025, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    # Pre-clamp legs really do invert (guards against a fixture that
+    # silently stops exercising the defect).
+    end = dt.date(2025, 12, 31)
+    basic_leg = {
+        m.end: m.value
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }[end]
+    diluted_leg = {
+        m.end: m.value
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }[end]
+    assert diluted_leg < basic_leg < 0
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q4 = next(r for r in rows if r.fp == "Q4")
+    assert q4.eps_basic == -1.5
+    assert q4.eps_diluted == q4.eps_basic
 
 
 def _hal_like_companyfacts(
