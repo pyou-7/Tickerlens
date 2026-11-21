@@ -222,12 +222,27 @@ def _augment_with_uningested_filings(
                 continue
             if filed < cutoff or accn in ingested:
                 continue
-            url = (
+            base_url = (
                 "https://www.sec.gov/Archives/edgar/data/"
-                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/{doc}"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
             )
+            html = edgar_client.fetch_text(base_url + doc)
+            # Batch 294: multi-document inline XBRL (CLX's FY2026 10-K)
+            # splits one filing across <stem>.htm + <stem>_d2.htm + … —
+            # the header (contexts, units, dei focus) lives in the
+            # primary document while the tagged statements sit in the
+            # siblings, so parsing the primary alone yields ~zero facts
+            # and the filing silently abstains. Concatenate siblings
+            # until one 404s; the regex parser then sees the whole
+            # filing (sibling context redefinitions are identical).
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
             filing_facts = parse_inline_xbrl(
-                edgar_client.fetch_text(url), form=form, filed=filed, accn=accn
+                html, form=form, filed=filed, accn=accn
             )
             if filing_facts:
                 merge_filing_facts(companyfacts, filing_facts)

@@ -2525,6 +2525,15 @@ def _balance_sheet_facts(
     for tag, facts in candidates:
         grouped: dict[dt.date, list[XbrlFact]] = {}
         for fact in facts:
+            # Batch 294: a consolidated total-assets instant of zero (or
+            # below) is never a real balance sheet for a filer with
+            # revenue — Skydance's pre-merger shell 10-Qs filed literal
+            # Assets=0 placeholders, which then poisoned the identity
+            # derivation into negative liabilities. Skip such facts so
+            # the end renders "—" (and a later chain tag's real value
+            # can still fill it).
+            if metric is Metric.TOTAL_ASSETS and fact.val <= 0:
+                continue
             grouped.setdefault(fact.end, []).append(fact)
         for end, end_candidates in grouped.items():
             if end not in chosen:
@@ -2886,7 +2895,14 @@ def _derive_missing_balance_sheet(
         return mezz_nci.get(end, 0.0) + mezz_temp.get(end, 0.0)
 
     for end in sorted(set(assets) & set(equity)):
-        liabilities.setdefault(end, assets[end] - equity[end] - _mezz(end))
+        # Batch 294: total liabilities can never be negative. A negative
+        # result means the legs sit on inconsistent bases (e.g. equity
+        # from a later comparative against a placeholder assets fact),
+        # so abstain rather than fabricate. Derived *equity* stays
+        # unguarded below — negative equity is real (buyback filers).
+        derived = assets[end] - equity[end] - _mezz(end)
+        if derived >= 0:
+            liabilities.setdefault(end, derived)
     for end in sorted(set(assets) & set(liabilities)):
         equity.setdefault(end, assets[end] - liabilities[end] - _mezz(end))
 

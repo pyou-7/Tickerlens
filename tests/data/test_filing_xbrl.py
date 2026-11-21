@@ -189,12 +189,22 @@ def test_merged_filings_recover_missing_quarters():
 # ── augment wiring ───────────────────────────────────────────────────────────
 
 class FakeClient:
-    def __init__(self, html_by_accn):
+    def __init__(self, html_by_accn, html_by_url_part=None):
         self.html_by_accn = html_by_accn
+        self.html_by_url_part = html_by_url_part or {}
         self.fetched = []
 
     def fetch_text(self, url):
         self.fetched.append(url)
+        for part, html in self.html_by_url_part.items():
+            if part in url:
+                if isinstance(html, Exception):
+                    raise html
+                return html
+        # Batch 294: multi-document sibling probes (<stem>_d<N>.htm) 404
+        # unless a test explicitly supplies them above.
+        if "_d" in url.rsplit("/", 1)[-1]:
+            raise FileNotFoundError(f"no sibling document: {url}")
         for accn, html in self.html_by_accn.items():
             if accn.replace("-", "") in url:
                 if isinstance(html, Exception):
@@ -223,7 +233,8 @@ def test_augment_merges_only_uningested():
                          "0000000001-26-000002": Q2_HTML})
     merged = _augment_with_uningested_filings(client, "0000000001", subs, cf)
     assert merged == 2
-    assert len(client.fetched) == 2
+    primary_fetches = [u for u in client.fetched if "_d" not in u.rsplit("/", 1)[-1]]
+    assert len(primary_fetches) == 2
     assert "0000000001-26-000003" in companyfacts_accns(cf)
 
 
@@ -241,3 +252,46 @@ def test_augment_never_raises():
     client = FakeClient({"0000000001-26-000003": RuntimeError("boom")})
     assert _augment_with_uningested_filings(client, "0000000001", subs, cf) == 0
     assert cf == q1_companyfacts()
+
+
+# ── batch 294: multi-document inline XBRL ────────────────────────────────────
+# CLX's FY2026 10-K splits across clx-20260630.htm (header + dei cover)
+# and clx-20260630_d2.htm (the tagged statements). Parsing the primary
+# alone yields zero us-gaap facts, so the filing silently abstained and
+# Q4 FY2026 stayed missing. The augment now concatenates <stem>_d<N>.htm
+# siblings until one 404s.
+
+Q3_BODY = "".join([
+    fact(REV, "q3", "usd", "300"),
+    fact(REV, "m9", "usd", "600"),
+    fact("NetIncomeLoss", "q3", "usd", "30"),
+    fact("NetIncomeLoss", "m9", "usd", "60"),
+    fact("EarningsPerShareBasic", "q3", "usdPerShare", "3.00"),
+    fact("EarningsPerShareDiluted", "q3", "usdPerShare", "2.90"),
+    fact("Assets", "i9", "usd", "5500"),
+])
+
+
+def test_augment_merges_multi_document_filing():
+    cf = q1_companyfacts()
+    subs = submissions([("10-Q", "2026-10-28", "0000000001-26-000003", "q3.htm")])
+    client = FakeClient(
+        {"0000000001-26-000003": filing("Q3", "")},  # primary: header+dei only
+        html_by_url_part={"q3_d2.htm": Q3_BODY},     # sibling: the facts
+    )
+    merged = _augment_with_uningested_filings(client, "0000000001", subs, cf)
+    assert merged == 1
+    assert "0000000001-26-000003" in companyfacts_accns(cf)
+    rows = extract_recent_quarterly_financials(cf, fiscal_year_end="1231", periods=8)
+    by_end = {row.end.isoformat(): row for row in rows}
+    assert by_end["2026-09-30"].revenue == 300.0
+    assert by_end["2026-09-30"].total_assets == 5500.0
+
+
+def test_augment_primary_without_siblings_still_merges():
+    """Single-document filings: sibling probes 404, primary still merges."""
+    cf = q1_companyfacts()
+    subs = submissions([("10-Q", "2026-10-28", "0000000001-26-000003", "q3.htm")])
+    client = FakeClient({"0000000001-26-000003": Q3_HTML})
+    assert _augment_with_uningested_filings(client, "0000000001", subs, cf) == 1
+    assert any("q3_d2.htm" in u for u in client.fetched)  # probed, 404'd, moved on
