@@ -159,7 +159,9 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
     # (Northern Trust Q2 2026 — see the batch-66 note on
     # EPS_UNDISTRIBUTED_TAG). The Distributed guard in
     # quarterly_income_metric drops it for filers that split two-class EPS
-    # into components, so it is never read as a partial EPS there.
+    # into components, so it is never read as a partial EPS there, and
+    # the batch-296 demotion keeps it gap-fill-only so freshness alone
+    # can never crown it over the generic tag.
     # The per-unit tags cover partnership filers (MLPs such as Energy
     # Transfer and MPLX) that report income per outstanding unit instead of
     # per share — total-income tags, so no continuing/total ambiguity.
@@ -379,6 +381,38 @@ def _has_distributed_eps_facts(companyfacts: dict[str, Any], metric: Metric) -> 
         if raw.get("form") in {"10-Q", "10-K"} and raw.get("end"):
             return True
     return False
+
+
+def _demote_undistributed_eps_winner(
+    candidates: list[tuple[str, list[XbrlFact]]], metric: Metric
+) -> list[tuple[str, list[XbrlFact]]]:
+    """Keep the Undistributed EPS tag gap-fill-only (batch 296).
+
+    The batch-66 design reads ``...Undistributed`` as total EPS only for
+    quarters the generic tag lacks. The freshness rule in
+    ``_chain_candidates`` can still crown it winner when the generic
+    tag's newest quarterly fact lags by more than 180 days — Northern
+    Trust filed generic EPS through Q1 2026 (2026-03-31) and then
+    tagged Q2/Q3 2026 only as Undistributed (newest 2026-09-30, a
+    183-day lag), so the sparse 8-fact Undistributed tag displaced the
+    dense 213-fact generic tag. As winner, its share-implied middle
+    derivations (Q1 2025: 1.9144, Q1 2026: 2.7413) then blocked the
+    generic tag's filed values (1.91, 2.72) in the gap-fill merge —
+    an approximation displacing reported EPS on the same definition.
+
+    When the generic tag is also a candidate, move Undistributed to
+    the tail so it only fills ends the generic series lacks. A filer
+    with no generic-tag candidate (generic truly abandoned or never
+    filed) keeps Undistributed as winner.
+    """
+    if metric not in (Metric.EPS_BASIC, Metric.EPS_DILUTED) or len(candidates) < 2:
+        return candidates
+    if candidates[0][0] != EPS_UNDISTRIBUTED_TAG[metric]:
+        return candidates
+    generic_tag = CONCEPTS[metric].tags[0]
+    if generic_tag not in {tag for tag, _ in candidates}:
+        return candidates
+    return candidates[1:] + candidates[:1]
 
 
 # Income-statement discontinued-operations tags (batch 68). The
@@ -1525,6 +1559,11 @@ def quarterly_income_metric(
             if bdc:
                 return bdc
         raise
+    # Batch 296: the Undistributed EPS tag gap-fills only — it must never
+    # win over the generic tag on freshness alone (NTRS: 183-day lag
+    # crowned the sparse Undistributed tag, whose derived Q1s displaced
+    # filed generic EPS). Demote it to the tail when both are present.
+    candidates = _demote_undistributed_eps_winner(candidates, metric)
     # Per-share metrics must share one share basis: after a stock split the
     # filer restates comparative per-share facts in later filings (NFLX's
     # 10-for-1 split restated Q2-2025 diluted EPS from 7.19 to 0.72 in the
