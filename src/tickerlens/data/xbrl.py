@@ -69,6 +69,12 @@ class XbrlFact(BaseModel):
     # "0000940944-25-000071"). Lets the balance-sheet identity guard tell
     # whether the three legs of one period end share a filing basis.
     accn: str | None = None
+    # Earliest filed date among same-end candidates (batch 300): set by
+    # _choose_fact_for_end so label arbitration can tell a period carried
+    # by its own original filing (prompt) from one that only ever appeared
+    # as a comparative column in a later filing (its fy is inherited from
+    # that later filing and untrustworthy). None on raw parsed facts.
+    first_filed: dt.date | None = None
 
 
 class PeriodMetric(BaseModel):
@@ -78,6 +84,10 @@ class PeriodMetric(BaseModel):
     end: dt.date
     value: float
     source_tag: str
+    # Label provenance (batch 300): earliest filed date among the facts
+    # that first carried this period end. first_filed − end is the label
+    # lag _dedupe_period_labels uses to distrust comparative-only labels.
+    first_filed: dt.date | None = None
 
     @property
     def period(self) -> str:
@@ -111,6 +121,9 @@ class QuarterlyFinancials(BaseModel):
     # Mezzanine equity (parent-attributable temporary equity, e.g.
     # convertible preferred stock) — same treatment as redeemable NCI.
     temporary_equity: float | None = None
+    # Extraction provenance only (batch 300): the revenue anchor's
+    # first_filed, threaded for label arbitration. Never persisted.
+    first_filed: dt.date | None = None
 
     @property
     def period(self) -> str:
@@ -753,6 +766,7 @@ def extract_recent_quarterly_financials(
                 cash_and_equivalents=balance_sheet[Metric.CASH_AND_EQUIVALENTS].get(item.end),
                 redeemable_nci=balance_sheet[Metric.REDEEMABLE_NCI].get(item.end),
                 temporary_equity=balance_sheet[Metric.TEMPORARY_EQUITY].get(item.end),
+                first_filed=item.first_filed,
             )
         )
     rows = _dedupe_period_labels(rows)
@@ -903,6 +917,22 @@ def _reconcile_eps_basic_diluted(
     return sorted(fixed, key=lambda item: item.end)
 
 
+# Batch 300: a period whose facts first appear more than this many days
+# after its end was never carried by an original filing — original 10-Qs
+# are due in 40–45 days and 10-Ks in 60–90, and even delinquent filers
+# (SMCI's delayed 2024 10-K) land well inside ~240 days, while a
+# prior-year comparative column first appears ~365+ days after the
+# period end. 270 sits between the two populations.
+_COMPARATIVE_ONLY_LAG_DAYS = 270
+
+
+def _label_lag_days(row: QuarterlyFinancials) -> int | None:
+    """Days between a row's period end and its first appearance in a filing."""
+    if row.first_filed is None:
+        return None
+    return (row.first_filed - row.end).days
+
+
 def _successor_label(fy: int, fp: str) -> tuple[int, str] | None:
     """The (fy, fp) label the quarter after ``(fy, fp)`` should carry.
 
@@ -938,6 +968,21 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
     (the earlier end is the first row, or a quarter is missing), the legacy
     behavior applies: the later end keeps its label and the earlier walks
     back. Rows without a collision are never touched.
+
+    Sequence consistency alone misfires on comparative-only histories
+    (batch 300): a recent IPO (Circle, IPO Jun 2025) has no original
+    filings for its pre-IPO periods, so every early fact's fy is inherited
+    from the later filing that first carried it as a comparative — the
+    early chain is uniformly one year high yet internally consistent
+    ("grounded"), and each correct later claim then looks one year behind
+    its expectation, so the stale-fy branch relabeled the *correct* rows
+    forward (CRCL's Sep-2026 quarter rendered "FY2027 Q3"). Filing lag
+    breaks the tie honestly: when the earlier end first appeared only as
+    a comparative (lag > _COMPARATIVE_ONLY_LAG_DAYS) and the later end
+    was carried promptly by its own filing, the earlier end's fy is the
+    inherited one and the legacy walk-back applies. When both ends were
+    filed promptly (MTD's stale-fy 10-Qs), the sequence arbitration is
+    unchanged.
     """
     holder: dict[tuple[int, str], QuarterlyFinancials] = {}
     # id(row) -> the row's claim matched the sequence expectation derived
@@ -967,11 +1012,24 @@ def _dedupe_period_labels(rows: list[QuarterlyFinancials]) -> list[QuarterlyFina
                 and claim == (expected[0] - 1, expected[1])
                 and expected not in holder
             )
+            # Batch 300: comparative-only earlier end + promptly-filed
+            # later end — the earlier fy was inherited from the later
+            # filing that first carried it, so it is the mislabeled one
+            # even when its chain looks grounded (CRCL). Force legacy.
+            earlier_lag = _label_lag_days(earlier)
+            later_lag = _label_lag_days(row)
+            earlier_comparative_only = (
+                earlier_lag is not None
+                and later_lag is not None
+                and earlier_lag > _COMPARATIVE_ONLY_LAG_DAYS
+                and later_lag <= _COMPARATIVE_ONLY_LAG_DAYS
+            )
             if (
                 expected is not None
                 and expected != claim
                 and expected not in holder
                 and (grounded.get(id(earlier), False) or later_is_stale_fy)
+                and not earlier_comparative_only
             ):
                 # The earlier end's label is sequence-consistent, so the
                 # later end's original filing mislabeled the year — relabel
@@ -1049,6 +1107,20 @@ def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFi
     changes fp, so it can never be "repaired" into a wrong label; two rows
     whose walked expectations coincide keep the first and the second is left
     alone via the unheld-target guard.
+
+    Batch 300 extension: when the backbone is not a strict majority but
+    every backbone row was carried promptly by its own filing, rows whose
+    labels are provably inherited — first appearance only as a comparative
+    (lag > _COMPARATIVE_ONLY_LAG_DAYS) — are still walked from the
+    backbone. A comparative-only fy cannot be the period's own fiscal-year
+    focus, so relabeling it to the sequence expectation is safe even
+    without a majority; promptly-filed rows keep the strict-majority
+    protection (convention disputes between original filings are never
+    settled by a minority backbone). This closes the Q1 label swaps left
+    by _dedupe_period_labels' walk-back overshoot on tag-switch histories
+    (GOOGL/AWK: the winning revenue tag's early quarters exist only as
+    comparatives, so two Q1 ends hold each other's labels with no
+    collision for dedupe to arbitrate).
     """
     ordered = sorted(rows, key=lambda r: r.end)
     n = len(ordered)
@@ -1070,10 +1142,18 @@ def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFi
         return (length, start + length == n)
 
     bstart, blen = max(runs, key=_run_key)
-    if blen < 3 or blen * 2 <= n:
+    if blen < 3:
+        return rows
+    bend = bstart + blen  # exclusive
+    # Batch 300: without a strict majority, only comparative-only rows
+    # may be walked, and only from a backbone of promptly-filed rows.
+    comparative_only_only = blen * 2 <= n
+    if comparative_only_only and any(
+        (_label_lag_days(r) or 0) > _COMPARATIVE_ONLY_LAG_DAYS
+        for r in ordered[bstart:bend]
+    ):
         return rows
 
-    bend = bstart + blen  # exclusive
     held = {(r.fy, r.fp) for r in ordered[bstart:bend]}
     for i, row in enumerate(ordered):
         if bstart <= i < bend:
@@ -1086,11 +1166,16 @@ def _repair_sequence_breaks(rows: list[QuarterlyFinancials]) -> list[QuarterlyFi
             steps = _quarter_steps(ref.end, row.end)
         expected = _walk_label((ref.fy, ref.fp), steps)
         claim = (row.fy, row.fp)
+        row_lag = _label_lag_days(row)
+        row_comparative_only = (
+            row_lag is not None and row_lag > _COMPARATIVE_ONLY_LAG_DAYS
+        )
         if (
             expected is not None
             and expected != claim
             and expected[1] == claim[1]
             and expected not in held
+            and (not comparative_only_only or row_comparative_only)
         ):
             row.fy, row.fp = expected
         held.add((row.fy, row.fp))
@@ -1935,7 +2020,15 @@ def _derive_missing_quarters(
             continue
         derived_ends.add(end)
         results.append(
-            _metric_value(metric, source_tag, _fact_fy(ytd), f"Q{missing_j}", end, value)
+            _metric_value(
+                metric,
+                source_tag,
+                _fact_fy(ytd),
+                f"Q{missing_j}",
+                end,
+                value,
+                first_filed=ytd.first_filed if ytd.first_filed is not None else ytd.filed,
+            )
         )
     return results
 
@@ -2618,6 +2711,11 @@ def _bank_quarterly_revenue(
                 items[0].fp,
                 end,
                 sum(item.value for item in items),
+                first_filed=(
+                    max(item.first_filed for item in items)
+                    if all(item.first_filed is not None for item in items)
+                    else None
+                ),
             )
             for end, items in by_end.items()
         ),
@@ -3408,6 +3506,11 @@ def _derive_q4_income(
                 "Q4",
                 annual_fact.end,
                 value,
+                first_filed=(
+                    annual_fact.first_filed
+                    if annual_fact.first_filed is not None
+                    else annual_fact.filed
+                ),
             )
         )
     return results
@@ -3622,13 +3725,21 @@ def _choose_fact_for_end(
     _ = fiscal_year_end  # kept for signature compatibility; labels come from filings
     earliest = min(candidates, key=lambda fact: fact.filed)
     latest = max(candidates, key=lambda fact: fact.filed)
-    if earliest is latest:
-        return latest
-    return latest.model_copy(update={"fy": earliest.fy, "fp": earliest.fp})
+    return latest.model_copy(
+        update={"fy": earliest.fy, "fp": earliest.fp, "first_filed": earliest.filed}
+    )
 
 
 def _period_metric(metric: Metric, source_tag: str, fact: XbrlFact) -> PeriodMetric:
-    return _metric_value(metric, source_tag, _fact_fy(fact), _fact_fp(fact), fact.end, fact.val)
+    return _metric_value(
+        metric,
+        source_tag,
+        _fact_fy(fact),
+        _fact_fp(fact),
+        fact.end,
+        fact.val,
+        first_filed=fact.first_filed if fact.first_filed is not None else fact.filed,
+    )
 
 
 def _metric_value(
@@ -3638,8 +3749,17 @@ def _metric_value(
     fp: str,
     end: dt.date,
     value: float,
+    first_filed: dt.date | None = None,
 ) -> PeriodMetric:
-    return PeriodMetric(metric=metric, source_tag=source_tag, fy=fy, fp=fp, end=end, value=value)
+    return PeriodMetric(
+        metric=metric,
+        source_tag=source_tag,
+        fy=fy,
+        fp=fp,
+        end=end,
+        value=value,
+        first_filed=first_filed,
+    )
 
 
 def _by_end(items: list[PeriodMetric]) -> dict[dt.date, PeriodMetric]:
