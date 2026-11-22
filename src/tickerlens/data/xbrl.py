@@ -645,6 +645,13 @@ def extract_recent_quarterly_financials(
     net_income  = _safe(quarterly_income_metric,    Metric.NET_INCOME)
     eps_basic   = _safe(quarterly_income_metric,    Metric.EPS_BASIC)
     eps_diluted = _safe(quarterly_income_metric,    Metric.EPS_DILUTED)
+    # Batch 298: the mirror fill (diluted from basic) is gated — it fires
+    # only where diluted must equal basic (loss quarters, ASC 260) or the
+    # filer's nearby filed pairs are all equal (no dilutive securities;
+    # LEN's FY2025 10-K filed the FY basic fact but no FY diluted fact,
+    # leaving Q4 FY2025 diluted underivable). Judged on the raw series,
+    # before the basic fill below can manufacture equal pairs.
+    eps_diluted = _fill_missing_eps_diluted(eps_basic, eps_diluted)
     # A filing may omit EarningsPerShareBasic for a quarter while filing
     # EarningsPerShareDiluted (Goldman Sachs's Q2 2026 10-Q files diluted
     # only). Basic wins wherever it exists; diluted fills only missing ends,
@@ -777,6 +784,75 @@ def _fill_missing_eps_basic(
                 source_tag=m.source_tag,
             )
     return sorted(by_end.values(), key=lambda item: item.end)
+
+
+# Batch 298 gate for the diluted<-basic EPS fill: half a cent (the filing
+# rounding unit), two years of quarters around the gap, at least a year of
+# overlapping filed pairs as evidence.
+_EPS_FILL_EQUALITY_TOLERANCE = 0.005
+_EPS_FILL_EVIDENCE_WINDOW_DAYS = 730
+_EPS_FILL_MIN_EVIDENCE = 4
+
+
+def _fill_missing_eps_diluted(
+    basic: list[PeriodMetric], diluted: list[PeriodMetric]
+) -> list[PeriodMetric]:
+    """Fill per-quarter gaps in diluted EPS from basic EPS, gated.
+
+    The mirror of ``_fill_missing_eps_basic`` is NOT safe unconditionally:
+    for most filers diluted < basic, so copying basic across would
+    overstate diluted EPS. It fires only where diluted must equal basic:
+
+    * Loss quarters (basic < 0): potential common shares are
+      anti-dilutive and excluded entirely, so diluted EPS equals basic
+      EPS by definition (ASC 260) — the same identity
+      ``_reconcile_eps_basic_diluted`` enforces on filed pairs.
+    * Filers with no dilutive securities in the gap's era: when every
+      overlapping basic/diluted pair near the gap is equal within filing
+      rounding, a missing diluted leg equals basic. LEN's FY2025 10-K
+      filed the FY ``EarningsPerShareBasic`` fact (7.98) but no FY
+      diluted fact, so Q4 FY2025 diluted was underivable while basic
+      share-derived to 1.9181; LEN's pairs have been exactly equal since
+      2023. The evidence window is local to the gap because LEN's
+      2013-2022 pairs genuinely differ (convert-era dilution, diffs up
+      to 0.13) — an all-history gate would never fire for it.
+
+    A filer with no diluted series at all gets no fills (the loss rule
+    requires a non-empty diluted series; the gate requires overlaps).
+    Filled facts carry the basic fact's source tag, mirroring
+    ``_fill_missing_eps_basic``'s provenance. Call on the raw extracted
+    series, before ``_fill_missing_eps_basic`` manufactures equal pairs.
+    """
+    b_by_end = {m.end: m for m in basic}
+    d_by_end = {m.end: m for m in diluted}
+    overlap = sorted(set(b_by_end) & set(d_by_end))
+    filled = dict(d_by_end)
+    for end, b in b_by_end.items():
+        if end in d_by_end:
+            continue
+        if b.value < 0 and diluted:
+            pass  # loss quarter: diluted == basic by definition
+        else:
+            nearby = [
+                e
+                for e in overlap
+                if abs((e - end).days) <= _EPS_FILL_EVIDENCE_WINDOW_DAYS
+            ]
+            if len(nearby) < _EPS_FILL_MIN_EVIDENCE or any(
+                abs(b_by_end[e].value - d_by_end[e].value)
+                > _EPS_FILL_EQUALITY_TOLERANCE + 1e-9
+                for e in nearby
+            ):
+                continue
+        filled[end] = PeriodMetric(
+            metric=Metric.EPS_DILUTED,
+            fy=b.fy,
+            fp=b.fp,
+            end=b.end,
+            value=b.value,
+            source_tag=b.source_tag,
+        )
+    return sorted(filled.values(), key=lambda item: item.end)
 
 
 def _reconcile_eps_basic_diluted(
