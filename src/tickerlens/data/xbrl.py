@@ -2212,6 +2212,19 @@ def _select_tag_facts(
 # dead for over a year (an insurer's absolutely-stale ``Revenues``, 640 days
 # behind) stays out. Gap-fill never overrides the winner, so this is
 # deliberately laxer than the 180-day winner-take-all abandonment rule.
+#
+# Batch 297 exception: a stale tag that fills an *interior* hole in the
+# winner's coverage is admitted regardless of lag. A mid-history tag switch
+# (Entergy filed revenue under the contract tag 2018-2023 between
+# ``Revenues`` eras; Alphabet likewise 2021-2023; Halliburton's cash sits
+# under the restricted-cash composite for 2024Q3/2025Q1-Q2) leaves exactly
+# that signature — winner facts on both sides, tail facts in the middle —
+# and the tag-level lag grows without bound as the winner advances, so the
+# plain 365-day gate eventually revokes fills that were correct when seeded
+# (Halliburton's stored 2024-09-30 cash became irreproducible). Interior
+# fills are definition-consistent by construction (the filer used the tail
+# tag for those periods), while a merely ancient tag whose ends all predate
+# or overlap the winner's coverage still stays out.
 _GAP_FILL_MAX_STALENESS_DAYS = 365
 
 
@@ -2279,7 +2292,11 @@ def _chain_candidates(
     ``_GAP_FILL_MAX_STALENESS_DAYS`` behind the overall newest), so ancient
     facts can't pollute the recent window — e.g. an insurer's absolutely
     stale ``Revenues`` (640 days behind) stays out while AT&T's recently
-    superseded plain OpCF tag (181 days behind) still backfills.
+    superseded plain OpCF tag (181 days behind) still backfills. Batch 297:
+    a stale tag that fills an interior hole in the winner's coverage (winner
+    facts on both sides of an end only the tail has — the mid-history
+    tag-switch signature) is admitted regardless of lag; see
+    ``_GAP_FILL_MAX_STALENESS_DAYS``.
     """
     us_gaap_root = companyfacts.get("facts", {})
     if "us-gaap" not in us_gaap_root:
@@ -2315,12 +2332,28 @@ def _chain_candidates(
                 winner = (tag, facts)
                 break
         assert winner is not None  # the overall-newest tag is 0 days behind
+        winner_ends = _window_ends(winner[1], staleness_window)
+
+        def _fills_interior_hole(facts: list[XbrlFact]) -> bool:
+            if not winner_ends:
+                return False
+            lo, hi = min(winner_ends), max(winner_ends)
+            return any(
+                lo < end < hi and end not in winner_ends
+                for end in _window_ends(facts, staleness_window)
+            )
+
         tail = [
             (t, f)
             for t, f, n in candidates
             if t != winner[0]
-            and n is not None
-            and (newest_overall - n).days <= _GAP_FILL_MAX_STALENESS_DAYS
+            and (
+                (
+                    n is not None
+                    and (newest_overall - n).days <= _GAP_FILL_MAX_STALENESS_DAYS
+                )
+                or _fills_interior_hole(f)
+            )
         ]
     else:
         winner = (candidates[0][0], candidates[0][1])
@@ -2580,6 +2613,24 @@ def _mreit_quarterly_revenue(
         fiscal_year_end,
         basis_break_starts=_discontinued_basis_break_starts(companyfacts),
     )
+
+
+def _window_ends(
+    facts: list[XbrlFact], window: tuple[int, int] | None
+) -> set[dt.date]:
+    """End dates among facts whose duration falls in ``window``.
+
+    Same duration rule as :func:`_newest_in_window` (``None`` = any duration,
+    including instant facts). Used by ``_chain_candidates`` to detect
+    interior holes in the winner tag's coverage (batch 297).
+    """
+    if window is None:
+        return {f.end for f in facts}
+    return {
+        f.end
+        for f in facts
+        if f.start is not None and window[0] <= (f.end - f.start).days <= window[1]
+    }
 
 
 def _newest_in_window(
