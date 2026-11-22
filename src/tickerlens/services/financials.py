@@ -20,6 +20,8 @@ from tickerlens.data.edgar import (
 from tickerlens.data.filing_xbrl import (
     companyfacts_accns,
     merge_filing_facts,
+    merge_filing_facts_gap_only,
+    parse_class_eps_facts,
     parse_inline_xbrl,
 )
 from tickerlens.data.filings import (
@@ -255,6 +257,131 @@ def _augment_with_uningested_filings(
     except Exception:
         logger.warning(
             "un-ingested filing augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
+
+
+# Batch 301: EPS is "missing for recent ends" when the newest EPS-chain
+# fact ends more than this many days before the newest revenue fact. A
+# normal filer's EPS ends track its revenue ends (same filings); 270 days
+# is three quarters of slack for annual-only EPS taggers (GD) and
+# late EPS filings, while every multi-class filer lags by 600+ days.
+_EPS_MISSING_LAG_DAYS = 270
+
+
+def _max_fact_end(
+    companyfacts: dict, tags: tuple[str, ...] | set[str], unit: str
+) -> str | None:
+    best: str | None = None
+    gaap = (companyfacts.get("facts") or {}).get("us-gaap", {})
+    for tag in tags:
+        for item in (gaap.get(tag, {}).get("units", {}) or {}).get(unit, []):
+            end = item.get("end")
+            if end and (best is None or end > best):
+                best = end
+    return best
+
+
+def _eps_missing_for_recent_ends(companyfacts: dict) -> bool:
+    """True when companyfacts EPS is absent/stale vs the revenue anchor.
+
+    Batch 301: multi-class filers (V, BRK.B, HSY, KKR, STZ, BKR) tag EPS
+    only per share class, so companyfacts (consolidated-only) carries no
+    recent EPS facts at all — the trigger for recovering the traded
+    class's EPS from the filings. Abstains (False) when there is no
+    revenue anchor to judge against or on any malformed input.
+    """
+    try:
+        rev_spec = CONCEPTS[Metric.REVENUE]
+        rev_end = _max_fact_end(companyfacts, rev_spec.tags, rev_spec.unit)
+        if rev_end is None:
+            return False
+        rev_date = dt.date.fromisoformat(rev_end)  # malformed -> abstain
+        eps_tags = set(CONCEPTS[Metric.EPS_BASIC].tags) | set(
+            CONCEPTS[Metric.EPS_DILUTED].tags
+        )
+        eps_end = _max_fact_end(companyfacts, eps_tags, "USD/shares")
+        if eps_end is None:
+            return True
+        lag = (rev_date - dt.date.fromisoformat(eps_end)).days
+        return lag > _EPS_MISSING_LAG_DAYS
+    except Exception:
+        return False
+
+
+def _augment_with_class_eps(
+    edgar_client: EdgarClient,
+    cik: str,
+    ticker: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 10,
+    lookback_days: int = 1100,
+) -> int:
+    """Merge per-class EPS facts from recent filings (batch 301).
+
+    Companion to ``_augment_with_uningested_filings`` for the opposite
+    gap: the filings ARE ingested (revenue/NI present) but their EPS
+    facts are dimensional per share class, which companyfacts never
+    carries. There is no accession gate — every recent 10-Q/10-K is
+    parsed for class EPS — but the merge is gap-only, so a consolidated
+    fact for the same period always wins. The window is wider than
+    batch 293's (1100 days / 10 filings) because EPS history must cover
+    the stored quarter window, and filing HTML is disk-cached. Any
+    failure leaves companyfacts untouched. Returns how many filings
+    contributed facts.
+    """
+    try:
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff:
+                continue
+            base_url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
+            )
+            html = edgar_client.fetch_text(base_url + doc)
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
+            filing_facts = parse_class_eps_facts(
+                html, form=form, filed=filed, accn=accn, ticker=ticker
+            )
+            if filing_facts:
+                count = merge_filing_facts_gap_only(companyfacts, filing_facts)
+                if count:
+                    merged += 1
+                    logger.info(
+                        "merged %d class-EPS facts from %s (%s filed %s) for CIK %s",
+                        count,
+                        accn,
+                        form,
+                        filed,
+                        cik,
+                    )
+        return merged
+    except Exception:
+        logger.warning(
+            "class-EPS augment failed for CIK %s", cik, exc_info=True
         )
         return 0
 
@@ -1017,6 +1144,14 @@ class FinancialsService:
         _augment_with_uningested_filings(
             self.edgar_client, cik, submissions, companyfacts
         )
+        # Batch 301: multi-class filers tag EPS only per share class
+        # (dimensional), which companyfacts never carries — recover the
+        # traded class's EPS from the filings when EPS is missing for
+        # recent ends. Gap-only merge; consolidated facts always win.
+        if _eps_missing_for_recent_ends(companyfacts):
+            _augment_with_class_eps(
+                self.edgar_client, cik, ticker, submissions, companyfacts
+            )
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(
