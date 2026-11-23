@@ -22,6 +22,7 @@ from tickerlens.data.filing_xbrl import (
     merge_filing_facts,
     merge_filing_facts_gap_only,
     parse_class_eps_facts,
+    parse_extension_capex_facts,
     parse_inline_xbrl,
 )
 from tickerlens.data.filings import (
@@ -39,6 +40,7 @@ from tickerlens.data.xbrl import (
     Metric,
     QuarterlyFinancials,
     _is_bank_insurer_sic,
+    _is_finance_sic,
     _is_mreit_sic,
     _quarter_steps,
     _walk_label,
@@ -382,6 +384,115 @@ def _augment_with_class_eps(
     except Exception:
         logger.warning(
             "class-EPS augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
+
+
+# Batch 303: CapEx is "missing for recent ends" when the newest
+# CAPEX-chain fact ends more than this many days before the newest
+# operating-cash-flow fact (FCF's other leg). Same 270-day slack as
+# batch 301's EPS trigger: a normal filer's CapEx ends track its OpCF
+# ends (same filings), while extension-concept taggers lag by years
+# or have no chain facts at all.
+_CAPEX_MISSING_LAG_DAYS = 270
+
+
+def _capex_missing_for_recent_ends(companyfacts: dict) -> bool:
+    """True when companyfacts CapEx is absent/stale vs the OpCF anchor.
+
+    Batch 303: filers that tag CapEx under an extension concept (LYFT,
+    Dominion) have no usable CAPEX-chain facts in companyfacts, so FCF
+    renders blank — the trigger for recovering the cash-flow line from
+    the filings. Abstains (False) when there is no OpCF anchor to
+    judge against or on any malformed input.
+    """
+    try:
+        opcf_spec = CONCEPTS[Metric.OPERATING_CASH_FLOW]
+        opcf_end = _max_fact_end(companyfacts, opcf_spec.tags, opcf_spec.unit)
+        if opcf_end is None:
+            return False
+        opcf_date = dt.date.fromisoformat(opcf_end)  # malformed -> abstain
+        capex_spec = CONCEPTS[Metric.CAPEX]
+        capex_end = _max_fact_end(companyfacts, capex_spec.tags, capex_spec.unit)
+        if capex_end is None:
+            return True
+        lag = (opcf_date - dt.date.fromisoformat(capex_end)).days
+        return lag > _CAPEX_MISSING_LAG_DAYS
+    except Exception:
+        return False
+
+
+def _augment_with_extension_capex(
+    edgar_client: EdgarClient,
+    cik: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 10,
+    lookback_days: int = 1100,
+) -> int:
+    """Merge extension-concept CapEx facts from recent filings (batch 303).
+
+    Companion to ``_augment_with_class_eps`` for the CapEx leg: the
+    filings ARE ingested (OpCF present) but their CapEx line is tagged
+    under a filer-extension concept, which companyfacts never carries.
+    No accession gate — every recent 10-Q/10-K is parsed — but the
+    merge is gap-only under the canonical CapEx tag, so a consolidated
+    us-gaap fact for the same period always wins. Same 1100-day /
+    10-filing window as batch 301 (CapEx history must cover the stored
+    quarter window; filing HTML is disk-cached). Any failure leaves
+    companyfacts untouched. Returns how many filings contributed facts.
+    """
+    try:
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff:
+                continue
+            base_url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
+            )
+            html = edgar_client.fetch_text(base_url + doc)
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
+            filing_facts = parse_extension_capex_facts(
+                html, form=form, filed=filed, accn=accn
+            )
+            if filing_facts:
+                count = merge_filing_facts_gap_only(companyfacts, filing_facts)
+                if count:
+                    merged += 1
+                    logger.info(
+                        "merged %d extension-CapEx facts from %s (%s filed %s) for CIK %s",
+                        count,
+                        accn,
+                        form,
+                        filed,
+                        cik,
+                    )
+        return merged
+    except Exception:
+        logger.warning(
+            "extension-CapEx augment failed for CIK %s", cik, exc_info=True
         )
         return 0
 
@@ -1151,6 +1262,17 @@ class FinancialsService:
         if _eps_missing_for_recent_ends(companyfacts):
             _augment_with_class_eps(
                 self.edgar_client, cik, ticker, submissions, companyfacts
+            )
+        # Batch 303: some filers tag CapEx under an extension concept
+        # (LYFT, Dominion), which companyfacts never carries — recover
+        # the cash-flow line from the filings when CapEx is missing for
+        # recent ends. Finance SICs are skipped: FCF is suppressed for
+        # them by design, so the recovery could never render.
+        if not _is_finance_sic(submissions.get("sic")) and (
+            _capex_missing_for_recent_ends(companyfacts)
+        ):
+            _augment_with_extension_capex(
+                self.edgar_client, cik, submissions, companyfacts
             )
         latest_filing = _latest_quarterly_filing_date(submissions)
 

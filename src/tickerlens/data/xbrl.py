@@ -219,6 +219,12 @@ CONCEPTS: dict[Metric, ConceptSpec] = {
             # Eli Lilly never filed the classic tag at all and files CapEx as
             # "Capital expenditures" under this tag (current through 2026).
             "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+            # Batch 303: Verizon tags its total "Capital expenditures"
+            # cash-flow line under this tag (current through 2026) while
+            # its ProductiveAssets facts stop in 2019. Airlines file it
+            # as a flight-equipment component, but the batch-73 composite
+            # dispatches before the chain, so they never reach here.
+            "PaymentsToAcquireOtherProductiveAssets",
         ),
         unit="USD",
     ),

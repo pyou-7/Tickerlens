@@ -445,6 +445,137 @@ def parse_class_eps_facts(
     return out
 
 
+# Batch 303: extension-concept CapEx. Some filers tag their cash-flow
+# CapEx line under a filer-extension concept instead of a us-gaap tag,
+# so companyfacts (us-gaap only) carries no CapEx facts at all and FCF
+# renders blank (LYFT: ``lyft:PaymentsToAcquirePropertyAndEquipmentAnd
+# ScooterFleet``; Dominion: ``d:PaymentsToAcquirePropertyPlantAnd
+# EquipmentIncludingNuclearFuel``). The signature is deliberately
+# narrow: a cash-flow "PaymentsToAcquire…" name mentioning property or
+# productive assets (tier 1), or the bare ``CapitalExpenditures`` name
+# (tier 2, only when no tier-1 concept has facts — Dominion files both
+# and they differ: tier 2 is accrual-basis, tier 1 is the cash line).
+# Segment/planned lookalikes (COP's segment concept, NEE's planned-
+# capex family, ED's dimensional breakdown) never match: tier 2 is an
+# exact-name match and dimensional contexts are skipped as everywhere.
+_EXTENSION_CAPEX_TAG = "PaymentsToAcquirePropertyPlantAndEquipment"
+
+
+def _extension_capex_tier(local_name: str) -> int | None:
+    """1 for cash-flow PaymentsToAcquire… names, 2 for bare
+    CapitalExpenditures, None otherwise."""
+    low = local_name.lower()
+    if low.startswith("paymentstoacquire") and (
+        "property" in low or "productive" in low
+    ):
+        return 1
+    if low == "capitalexpenditures":
+        return 2
+    return None
+
+
+def parse_extension_capex_facts(
+    html_text: str, *, form: str, filed: str, accn: str
+) -> dict[str, Any]:
+    """Parse extension-concept CapEx from a filing into companyfacts shape.
+
+    Non-us-gaap concepts matching ``_extension_capex_tier`` are mapped
+    onto the canonical ``PaymentsToAcquirePropertyPlantAndEquipment``
+    tag so the extractor runs unchanged. Only consolidated (non-
+    dimensional) USD duration facts count. Tier 1 (the cash-flow line)
+    wins over tier 2 (accrual-basis ``CapitalExpenditures``) when both
+    carry facts; two distinct concepts in the winning tier giving
+    different values for the same period abstain the filing wholesale
+    (batch-301-style consistency) rather than risk a component being
+    read as the total. Same dei-focus abstention as
+    ``parse_inline_xbrl``.
+    """
+    fy_text = _dei_focus(html_text, "DocumentFiscalYearFocus")
+    fp_text = _dei_focus(html_text, "DocumentFiscalPeriodFocus")
+    if not fy_text or not fp_text:
+        return {}
+    try:
+        fy = int(fy_text)
+    except ValueError:
+        return {}
+    fp = fp_text.upper()
+    if fp not in ("Q1", "Q2", "Q3", "Q4", "FY"):
+        return {}
+
+    contexts = _parse_contexts(html_text)
+    units = _parse_units(html_text)
+
+    # tier -> {(start, end): {concept: value}}
+    by_tier: dict[int, dict[tuple[str, str], dict[str, float]]] = {1: {}, 2: {}}
+    for attrs_raw, inner in _FACT_RE.findall(html_text):
+        attrs = dict(_ATTR_RE.findall(attrs_raw))
+        name = attrs.get("name", "")
+        if name.startswith("us-gaap:") or ":" not in name:
+            continue
+        local = name.split(":", 1)[1]
+        tier = _extension_capex_tier(local)
+        if tier is None:
+            continue
+        if attrs.get("nil") == "true" or attrs.get("xsi:nil") == "true":
+            continue
+        if "continuedAt" in attrs:
+            continue
+        ctx = contexts.get(attrs.get("contextRef", ""))
+        if ctx is None:
+            continue
+        start, end = ctx
+        if start is None:
+            continue  # CapEx is a duration concept
+        if units.get(attrs.get("unitRef", "")) != "USD":
+            continue
+        text = _html.unescape(_TAG_RE.sub("", inner))
+        value = _parse_value(text, attrs.get("format"))
+        if value is None:
+            continue
+        try:
+            scale = int(attrs.get("scale", "0"))
+        except ValueError:
+            continue
+        value = value * (10.0**scale)
+        if attrs.get("sign") == "-":
+            value = -abs(value)
+        slot = by_tier[tier].setdefault((start, end), {})
+        if name in slot and slot[name] != value:
+            return {}  # one concept, two values for a period — abstain
+        slot[name] = value
+
+    chosen = by_tier[1] or by_tier[2]
+    if not chosen:
+        return {}
+    out: dict[str, Any] = {}
+    for (start, end), values_by_concept in chosen.items():
+        values = set(values_by_concept.values())
+        if len(values) > 1:
+            logger.warning(
+                "extension-CapEx parse for %s abstains: conflicting "
+                "concepts %s for %s..%s",
+                accn,
+                sorted(values_by_concept),
+                start,
+                end,
+            )
+            return {}
+        fact: dict[str, Any] = {
+            "end": end,
+            "val": values.pop(),
+            "filed": filed,
+            "form": form,
+            "accn": accn,
+            "fy": fy,
+            "fp": fp,
+            "start": start,
+        }
+        out.setdefault(_EXTENSION_CAPEX_TAG, {"units": {}})["units"].setdefault(
+            "USD", []
+        ).append(fact)
+    return out
+
+
 def merge_filing_facts_gap_only(
     companyfacts: dict[str, Any], filing_facts: dict[str, Any]
 ) -> int:

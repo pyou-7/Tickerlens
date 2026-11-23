@@ -52,15 +52,17 @@ def test_fresh_cohort_seeded():
     con.close()
 
 
-def test_lyft_fcf_honest_none():
-    # LYFT tags cash CapEx only under a filer-extension concept that
-    # companyfacts does not carry; FCF stays NULL (source limit).
+def test_lyft_fcf_recovered_batch303():
+    # Batch 302 recorded LYFT FCF as an honest source limit (CapEx only
+    # under a filer-extension concept companyfacts doesn't carry);
+    # batch 303 recovers it from the filings — see
+    # test_batch303_repairs.py for the full series.
     con = sqlite3.connect(DB)
     rows = con.execute(
         "SELECT q.free_cash_flow FROM quarterly_financials q JOIN companies c "
         "ON c.cik = q.cik WHERE c.ticker = 'LYFT'").fetchall()
     con.close()
-    assert rows and all(r[0] is None for r in rows)
+    assert rows and all(r[0] is not None for r in rows)
 
 
 def test_db_census_gates():
