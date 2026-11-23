@@ -2235,6 +2235,10 @@ def test_q4_loss_eps_flip_never_reaches_rows() -> None:
     # ranking — basic derives −1.50 while diluted derives ≈−5.17
     # (implied Q4 diluted shares 29M < basic 100M, impossible). The
     # stored row must equalize the pair (ASC 260 anti-dilution).
+    # Batch 302 layering: the diluted derivation's residual interval
+    # is ~23% wide, so the rounding-uncertainty guard now rejects it
+    # first and the diluted leg falls back to subtraction (−1.39);
+    # the clamp still equalizes the stored pair to −1.50.
     companyfacts = make_companyfacts(
         revenue_values=[
             ("2025-01-01", "2025-09-30", 700_000_000, 2025, "Q3"),
@@ -2255,8 +2259,9 @@ def test_q4_loss_eps_flip_never_reaches_rows() -> None:
         opcf_values=[],
         capex_values=[],
     )
-    # Pre-clamp legs really do invert (guards against a fixture that
-    # silently stops exercising the defect).
+    # Pre-clamp legs: basic share-implies −1.50 (tight interval); the
+    # diluted share-implied leg (≈−5.17 pre-batch-302) is rejected by
+    # the rounding guard and falls back to −0.99 − 0.40 = −1.39.
     end = dt.date(2025, 12, 31)
     basic_leg = {
         m.end: m.value
@@ -2266,7 +2271,8 @@ def test_q4_loss_eps_flip_never_reaches_rows() -> None:
         m.end: m.value
         for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
     }[end]
-    assert diluted_leg < basic_leg < 0
+    assert basic_leg == -1.5
+    assert diluted_leg == -1.39
     rows = extract_recent_quarterly_financials(
         companyfacts, fiscal_year_end="1231", periods=4
     )

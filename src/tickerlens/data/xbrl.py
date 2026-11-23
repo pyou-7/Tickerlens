@@ -2045,8 +2045,9 @@ def _implied_missing_eps(
     Same construction as ``_implied_q4_eps``, generalized: the missing
     quarter's average share count is the share-month residual of the YTD
     span (3k·S_ytd − 3·ΣS_i)/3, and its EPS is the missing net income over
-    that count. Returns None (abstain) when any leg is missing, zero, or
-    incoherent — per-share values are never un-cumulated by subtraction.
+    that count. Returns None (abstain) when any leg is missing, zero,
+    incoherent, or too rounding-sensitive to trust (batch 302) —
+    per-share values are never un-cumulated by subtraction.
     """
     if ytd_eps.start is None or not ytd_eps.val:
         return None
@@ -2062,16 +2063,31 @@ def _implied_missing_eps(
     shares_ytd = ni_ytd.val / ytd_eps.val
     if shares_ytd <= 0:
         return None
+    ytd_iv = _implied_shares_interval(ni_ytd.val, ytd_eps.val)
+    if ytd_iv is None:
+        return None
     shares_known: list[float] = []
+    known_ivs: list[tuple[float, float]] = []
     for eps_fact, ni_fact in zip(eps_constituents, ni_constituents):
         shares = ni_fact.val / eps_fact.val
         if shares <= 0:
             return None
         if abs(shares_ytd - shares) / shares > _PRIMARY_SHARES_TOLERANCE:
             return None
+        iv = _implied_shares_interval(ni_fact.val, eps_fact.val)
+        if iv is None:
+            return None
         shares_known.append(shares)
+        known_ivs.append(iv)
     shares_missing = (3 * span_quarters * shares_ytd - 3 * sum(shares_known)) / 3
     if shares_missing <= 0:
+        return None
+    # Same rounding-uncertainty guard as _implied_q4_eps (batch 302): a
+    # tiny-EPS leg makes the residual meaningless even when every leg
+    # looks coherent. Abstain — per-share values are never subtracted.
+    missing_lo = (3 * span_quarters * ytd_iv[0] - 3 * sum(iv[1] for iv in known_ivs)) / 3
+    missing_hi = (3 * span_quarters * ytd_iv[1] - 3 * sum(iv[0] for iv in known_ivs)) / 3
+    if not _residual_shares_reliable(shares_missing, missing_lo, missing_hi):
         return None
     ni_missing = ni_ytd.val - sum(fact.val for fact in ni_constituents)
     return round(ni_missing / shares_missing, 4)
@@ -3636,6 +3652,56 @@ def _shares_coherent(
     return abs(fy_shares - ytd_shares) / ytd_shares <= tolerance
 
 
+# Rounding-uncertainty bound for share-implied EPS derivations (batch 302).
+# Filed EPS is rounded to its last decimal (typically 2dp), so an NI/EPS
+# pair implies the share count only within ±half a unit of that decimal.
+# When a leg's EPS is tiny — near-zero FY net income, e.g. DraftKings
+# FY2025 (NI $3.71M, basic EPS $0.01) — that rounding is a ±50%
+# share-count error, and the share-month residual (12·FY − 9·9M)/3
+# amplifies it catastrophically (DKNG Q4 basic EPS derived 14.55 vs
+# ~0.28 true; the residual was 9.4M shares against a true ~496M). The
+# coherence check above cannot catch this: it abstains on non-positive
+# inputs (DKNG's 9M NI/EPS are negative) and compares the two averages,
+# not the residual. Reject the derivation when the residual's rounding
+# interval includes zero or its relative half-width exceeds 10% — a
+# DB-wide ground-truth blast against filed share counts (batch 302)
+# shows share-implied beats subtraction below that bound and loses
+# above it, with the catastrophic tail concentrated beyond it.
+_MAX_RESIDUAL_SHARES_UNCERTAINTY = 0.10
+
+
+def _implied_shares_interval(ni: float, eps: float) -> tuple[float, float] | None:
+    """Implied share-count interval from a filed NI/EPS pair.
+
+    The true EPS lies within ±half a unit of the filed value's last
+    decimal, so the implied share count NI/EPS lies in the corresponding
+    interval. Filed EPS is presented to the cent, but the float repr
+    drops trailing zeros (0.10 -> "0.1"), so precision is floored at
+    2 decimals. Returns None when EPS is zero or its rounding interval
+    straddles zero (the share count is then unbounded).
+    """
+    if not eps:
+        return None
+    half_unit = 0.5 * 10 ** (-max(_decimals(eps), 2))
+    lo_eps, hi_eps = eps - half_unit, eps + half_unit
+    if lo_eps == 0 or hi_eps == 0 or (lo_eps < 0) != (hi_eps < 0):
+        return None
+    lo, hi = sorted((ni / lo_eps, ni / hi_eps))
+    return lo, hi
+
+
+def _residual_shares_reliable(point: float, lo: float, hi: float) -> bool:
+    """Whether a share-month residual is trustworthy given EPS rounding.
+
+    Rejects when the point estimate or its interval reaches zero
+    (sign-ambiguous) or the interval's relative half-width exceeds
+    ``_MAX_RESIDUAL_SHARES_UNCERTAINTY``.
+    """
+    if point <= 0 or lo <= 0:
+        return False
+    return (hi - lo) / 2 / point <= _MAX_RESIDUAL_SHARES_UNCERTAINTY
+
+
 def _implied_q4_eps(
     annual_eps: XbrlFact,
     ytd_eps: XbrlFact,
@@ -3647,7 +3713,9 @@ def _implied_q4_eps(
     the filed NI and EPS pairs; Q4's average share count is the share-month
     residual (12·FY_avg − 9·9M_avg)/3. Returns None when the inputs can't
     support the derivation (missing or zero EPS/NI facts, non-positive
-    implied shares) so the caller can fall back to plain subtraction.
+    implied shares, or a residual whose EPS-rounding interval is
+    sign-ambiguous or too wide — batch 302) so the caller can fall back
+    to plain subtraction.
     """
     if ni_pair is None:
         return None
@@ -3660,6 +3728,14 @@ def _implied_q4_eps(
         return None
     q4_shares = (12 * fy_shares - 9 * ytd_shares) / 3
     if q4_shares <= 0:
+        return None
+    fy_iv = _implied_shares_interval(annual_ni.val, annual_eps.val)
+    ytd_iv = _implied_shares_interval(ytd_ni.val, ytd_eps.val)
+    if fy_iv is None or ytd_iv is None:
+        return None
+    q4_lo = (12 * fy_iv[0] - 9 * ytd_iv[1]) / 3
+    q4_hi = (12 * fy_iv[1] - 9 * ytd_iv[0]) / 3
+    if not _residual_shares_reliable(q4_shares, q4_lo, q4_hi):
         return None
     return round((annual_ni.val - ytd_ni.val) / q4_shares, 4)
 
