@@ -89,7 +89,8 @@ def test_nflx_salutation_is_not_the_headline() -> None:
         )
     )
     assert hl is not None
-    assert hl.split("\n\n")[0].startswith("•Revenue in Q3 grew 17%")
+    # Batch 198: live bullets are spaced after the glyph ("• Net ...").
+    assert hl.split("\n\n")[0].startswith("• Revenue in Q3 grew 17%")
     assert "Fellow shareholders" not in hl
     assert "October 21, 2025" not in hl
 
@@ -198,7 +199,7 @@ def test_headlineless_bullet_list_is_not_a_page_line() -> None:
         )
     )
     assert hl is not None
-    assert hl.split("\n\n")[0].startswith("•In Q3, revenue grew 15%")
+    assert hl.split("\n\n")[0].startswith("• In Q3, revenue grew 15%")
     assert "Fellow shareholders" not in hl
     assert "We’ve delivered a string of hits" in hl
     assert "finish the year strong" in hl

@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from tickerlens import auth
 from tickerlens.models.database import create_tables, ensure_schema
 from tickerlens.routes import company
 from tickerlens.routes.company import resolve_renamed_ticker
@@ -19,6 +20,7 @@ async def _lifespan(app: FastAPI):
     # and adds any missing columns (e.g. after a feature extends a table).
     create_tables()
     ensure_schema()
+    auth.warn_if_gate_off()
     yield
 
 
@@ -30,6 +32,8 @@ app.mount("/static", StaticFiles(directory=_BASE / "static"), name="static")
 templates = Jinja2Templates(directory=_BASE / "templates")
 
 app.include_router(company.router)
+app.include_router(auth.router)
+app.add_middleware(auth.PasscodeGateMiddleware)
 
 
 @app.middleware("http")

@@ -17,6 +17,14 @@ from tickerlens.data.edgar import (
     companyfacts_with_predecessors,
     normalize_cik,
 )
+from tickerlens.data.filing_xbrl import (
+    companyfacts_accns,
+    merge_filing_facts,
+    merge_filing_facts_gap_only,
+    parse_class_eps_facts,
+    parse_extension_capex_facts,
+    parse_inline_xbrl,
+)
 from tickerlens.data.filings import (
     extract_management_guidance,
     extract_press_release_highlights,
@@ -32,6 +40,7 @@ from tickerlens.data.xbrl import (
     Metric,
     QuarterlyFinancials,
     _is_bank_insurer_sic,
+    _is_finance_sic,
     _is_mreit_sic,
     _quarter_steps,
     _walk_label,
@@ -72,16 +81,41 @@ class CompanyNotFoundError(Exception):
     cannot be resolved to a CIK at all (unknown / invalid ticker)."""
 
 
+def _stored_cik_for_ticker(ticker: str) -> str | None:
+    """CIK from the local companies table, or None when not stored."""
+    db = get_session()
+    try:
+        cik = db.scalar(select(Company.cik).where(Company.ticker == ticker.upper()))
+        if cik is None:
+            # Berkshire-style: SEC lists BRK-B, the DB stores BRK.B.
+            cik = db.scalar(
+                select(Company.cik).where(
+                    Company.ticker == ticker.upper().replace("-", ".").replace("/", ".")
+                )
+            )
+        return normalize_cik(cik) if cik else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
 def _resolve_cik(edgar_client, ticker: str) -> str:
     """Resolve a ticker to a normalized CIK.
 
     The EDGAR client raises a bare KeyError for unknown tickers; convert it
     to CompanyNotFoundError so routes can map it to a clean 404 instead of
-    a 500.
+    a 500. Delisted tickers drop out of SEC's company_tickers.json (KVUE
+    after the Kimberly-Clark close, 2026-11) while their stored history
+    remains servable, so fall back to the local ticker->CIK mapping before
+    giving up (batch 291).
     """
     try:
         return normalize_cik(edgar_client.cik_for_ticker(ticker))
     except KeyError as exc:
+        cik = _stored_cik_for_ticker(ticker)
+        if cik is not None:
+            return cik
         raise CompanyNotFoundError(f"Unknown ticker: {ticker}") from exc
 
 
@@ -149,6 +183,319 @@ def _processed_filing_marker(submissions: dict, rows: list) -> str | None:
         if marker is None or filing_date > marker:
             marker = filing_date
     return marker
+
+
+def _augment_with_uningested_filings(
+    edgar_client: EdgarClient,
+    cik: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 3,
+    lookback_days: int = 550,
+) -> int:
+    """Merge inline-XBRL facts from recent 10-Q/10-Ks companyfacts lacks.
+
+    Batch 293: SEC's companyfacts aggregation can lag a filing by months
+    (11 filers' Q2+Q3 2026 10-Qs contributed zero facts). The filings
+    themselves carry full inline XBRL, so for each recent quarterly filing
+    whose accession number appears nowhere in companyfacts, parse its
+    primary document into companyfacts shape and merge — the extractor
+    then runs unchanged. Filings already ingested cost nothing (accession
+    gate), amendments are skipped (the extractor reads 10-Q/10-K forms
+    only, matching companyfacts parity), and any failure leaves
+    companyfacts untouched. Returns how many filings were merged.
+    """
+    try:
+        ingested = companyfacts_accns(companyfacts)
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff or accn in ingested:
+                continue
+            base_url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
+            )
+            html = edgar_client.fetch_text(base_url + doc)
+            # Batch 294: multi-document inline XBRL (CLX's FY2026 10-K)
+            # splits one filing across <stem>.htm + <stem>_d2.htm + … —
+            # the header (contexts, units, dei focus) lives in the
+            # primary document while the tagged statements sit in the
+            # siblings, so parsing the primary alone yields ~zero facts
+            # and the filing silently abstains. Concatenate siblings
+            # until one 404s; the regex parser then sees the whole
+            # filing (sibling context redefinitions are identical).
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
+            filing_facts = parse_inline_xbrl(
+                html, form=form, filed=filed, accn=accn
+            )
+            if filing_facts:
+                merge_filing_facts(companyfacts, filing_facts)
+                merged += 1
+                logger.info(
+                    "merged un-ingested filing %s (%s filed %s) for CIK %s",
+                    accn, form, filed, cik,
+                )
+        return merged
+    except Exception:
+        logger.warning(
+            "un-ingested filing augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
+
+
+# Batch 301: EPS is "missing for recent ends" when the newest EPS-chain
+# fact ends more than this many days before the newest revenue fact. A
+# normal filer's EPS ends track its revenue ends (same filings); 270 days
+# is three quarters of slack for annual-only EPS taggers (GD) and
+# late EPS filings, while every multi-class filer lags by 600+ days.
+_EPS_MISSING_LAG_DAYS = 270
+
+
+def _max_fact_end(
+    companyfacts: dict, tags: tuple[str, ...] | set[str], unit: str
+) -> str | None:
+    best: str | None = None
+    gaap = (companyfacts.get("facts") or {}).get("us-gaap", {})
+    for tag in tags:
+        for item in (gaap.get(tag, {}).get("units", {}) or {}).get(unit, []):
+            end = item.get("end")
+            if end and (best is None or end > best):
+                best = end
+    return best
+
+
+def _eps_missing_for_recent_ends(companyfacts: dict) -> bool:
+    """True when companyfacts EPS is absent/stale vs the revenue anchor.
+
+    Batch 301: multi-class filers (V, BRK.B, HSY, KKR, STZ, BKR) tag EPS
+    only per share class, so companyfacts (consolidated-only) carries no
+    recent EPS facts at all — the trigger for recovering the traded
+    class's EPS from the filings. Abstains (False) when there is no
+    revenue anchor to judge against or on any malformed input.
+    """
+    try:
+        rev_spec = CONCEPTS[Metric.REVENUE]
+        rev_end = _max_fact_end(companyfacts, rev_spec.tags, rev_spec.unit)
+        if rev_end is None:
+            return False
+        rev_date = dt.date.fromisoformat(rev_end)  # malformed -> abstain
+        eps_tags = set(CONCEPTS[Metric.EPS_BASIC].tags) | set(
+            CONCEPTS[Metric.EPS_DILUTED].tags
+        )
+        eps_end = _max_fact_end(companyfacts, eps_tags, "USD/shares")
+        if eps_end is None:
+            return True
+        lag = (rev_date - dt.date.fromisoformat(eps_end)).days
+        return lag > _EPS_MISSING_LAG_DAYS
+    except Exception:
+        return False
+
+
+def _augment_with_class_eps(
+    edgar_client: EdgarClient,
+    cik: str,
+    ticker: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 10,
+    lookback_days: int = 1100,
+) -> int:
+    """Merge per-class EPS facts from recent filings (batch 301).
+
+    Companion to ``_augment_with_uningested_filings`` for the opposite
+    gap: the filings ARE ingested (revenue/NI present) but their EPS
+    facts are dimensional per share class, which companyfacts never
+    carries. There is no accession gate — every recent 10-Q/10-K is
+    parsed for class EPS — but the merge is gap-only, so a consolidated
+    fact for the same period always wins. The window is wider than
+    batch 293's (1100 days / 10 filings) because EPS history must cover
+    the stored quarter window, and filing HTML is disk-cached. Any
+    failure leaves companyfacts untouched. Returns how many filings
+    contributed facts.
+    """
+    try:
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff:
+                continue
+            base_url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
+            )
+            html = edgar_client.fetch_text(base_url + doc)
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
+            filing_facts = parse_class_eps_facts(
+                html, form=form, filed=filed, accn=accn, ticker=ticker
+            )
+            if filing_facts:
+                count = merge_filing_facts_gap_only(companyfacts, filing_facts)
+                if count:
+                    merged += 1
+                    logger.info(
+                        "merged %d class-EPS facts from %s (%s filed %s) for CIK %s",
+                        count,
+                        accn,
+                        form,
+                        filed,
+                        cik,
+                    )
+        return merged
+    except Exception:
+        logger.warning(
+            "class-EPS augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
+
+
+# Batch 303: CapEx is "missing for recent ends" when the newest
+# CAPEX-chain fact ends more than this many days before the newest
+# operating-cash-flow fact (FCF's other leg). Same 270-day slack as
+# batch 301's EPS trigger: a normal filer's CapEx ends track its OpCF
+# ends (same filings), while extension-concept taggers lag by years
+# or have no chain facts at all.
+_CAPEX_MISSING_LAG_DAYS = 270
+
+
+def _capex_missing_for_recent_ends(companyfacts: dict) -> bool:
+    """True when companyfacts CapEx is absent/stale vs the OpCF anchor.
+
+    Batch 303: filers that tag CapEx under an extension concept (LYFT,
+    Dominion) have no usable CAPEX-chain facts in companyfacts, so FCF
+    renders blank — the trigger for recovering the cash-flow line from
+    the filings. Abstains (False) when there is no OpCF anchor to
+    judge against or on any malformed input.
+    """
+    try:
+        opcf_spec = CONCEPTS[Metric.OPERATING_CASH_FLOW]
+        opcf_end = _max_fact_end(companyfacts, opcf_spec.tags, opcf_spec.unit)
+        if opcf_end is None:
+            return False
+        opcf_date = dt.date.fromisoformat(opcf_end)  # malformed -> abstain
+        capex_spec = CONCEPTS[Metric.CAPEX]
+        capex_end = _max_fact_end(companyfacts, capex_spec.tags, capex_spec.unit)
+        if capex_end is None:
+            return True
+        lag = (opcf_date - dt.date.fromisoformat(capex_end)).days
+        return lag > _CAPEX_MISSING_LAG_DAYS
+    except Exception:
+        return False
+
+
+def _augment_with_extension_capex(
+    edgar_client: EdgarClient,
+    cik: str,
+    submissions: dict,
+    companyfacts: dict,
+    *,
+    max_filings: int = 10,
+    lookback_days: int = 1100,
+) -> int:
+    """Merge extension-concept CapEx facts from recent filings (batch 303).
+
+    Companion to ``_augment_with_class_eps`` for the CapEx leg: the
+    filings ARE ingested (OpCF present) but their CapEx line is tagged
+    under a filer-extension concept, which companyfacts never carries.
+    No accession gate — every recent 10-Q/10-K is parsed — but the
+    merge is gap-only under the canonical CapEx tag, so a consolidated
+    us-gaap fact for the same period always wins. Same 1100-day /
+    10-filing window as batch 301 (CapEx history must cover the stored
+    quarter window; filing HTML is disk-cached). Any failure leaves
+    companyfacts untouched. Returns how many filings contributed facts.
+    """
+    try:
+        recent = (submissions.get("filings") or {}).get("recent") or {}
+        forms = recent.get("form") or []
+        dates = recent.get("filingDate") or []
+        accns = recent.get("accessionNumber") or []
+        docs = recent.get("primaryDocument") or []
+        cutoff = (dt.date.today() - dt.timedelta(days=lookback_days)).isoformat()
+        merged = 0
+        for i, form in enumerate(forms):
+            if merged >= max_filings:
+                break
+            if form not in ("10-Q", "10-K"):
+                continue
+            accn = accns[i] if i < len(accns) else None
+            filed = dates[i] if i < len(dates) else None
+            doc = docs[i] if i < len(docs) else None
+            if not accn or not filed or not doc:
+                continue
+            if filed < cutoff:
+                continue
+            base_url = (
+                "https://www.sec.gov/Archives/edgar/data/"
+                f"{int(normalize_cik(cik))}/{accn.replace('-', '')}/"
+            )
+            html = edgar_client.fetch_text(base_url + doc)
+            stem = doc.rsplit(".", 1)[0] if "." in doc else doc
+            for n in range(2, 7):
+                try:
+                    html += edgar_client.fetch_text(f"{base_url}{stem}_d{n}.htm")
+                except Exception:
+                    break
+            filing_facts = parse_extension_capex_facts(
+                html, form=form, filed=filed, accn=accn
+            )
+            if filing_facts:
+                count = merge_filing_facts_gap_only(companyfacts, filing_facts)
+                if count:
+                    merged += 1
+                    logger.info(
+                        "merged %d extension-CapEx facts from %s (%s filed %s) for CIK %s",
+                        count,
+                        accn,
+                        form,
+                        filed,
+                        cik,
+                    )
+        return merged
+    except Exception:
+        logger.warning(
+            "extension-CapEx augment failed for CIK %s", cik, exc_info=True
+        )
+        return 0
 
 
 def _read_skipped_quarters(value: str | None) -> set[str]:
@@ -904,6 +1251,30 @@ class FinancialsService:
         # freshness check suspects new data, so it must see the current feed.
         submissions = self.edgar_client.submissions(cik, fresh=True)
         companyfacts = companyfacts_with_predecessors(self.edgar_client, cik, fresh=True)
+        # Batch 293: recover quarters from filings SEC hasn't aggregated
+        # into companyfacts yet (accession-gated; no-op when ingested).
+        _augment_with_uningested_filings(
+            self.edgar_client, cik, submissions, companyfacts
+        )
+        # Batch 301: multi-class filers tag EPS only per share class
+        # (dimensional), which companyfacts never carries — recover the
+        # traded class's EPS from the filings when EPS is missing for
+        # recent ends. Gap-only merge; consolidated facts always win.
+        if _eps_missing_for_recent_ends(companyfacts):
+            _augment_with_class_eps(
+                self.edgar_client, cik, ticker, submissions, companyfacts
+            )
+        # Batch 303: some filers tag CapEx under an extension concept
+        # (LYFT, Dominion), which companyfacts never carries — recover
+        # the cash-flow line from the filings when CapEx is missing for
+        # recent ends. Finance SICs are skipped: FCF is suppressed for
+        # them by design, so the recovery could never render.
+        if not _is_finance_sic(submissions.get("sic")) and (
+            _capex_missing_for_recent_ends(companyfacts)
+        ):
+            _augment_with_extension_capex(
+                self.edgar_client, cik, submissions, companyfacts
+            )
         latest_filing = _latest_quarterly_filing_date(submissions)
 
         rows = extract_recent_quarterly_financials(

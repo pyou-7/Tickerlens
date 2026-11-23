@@ -1095,6 +1095,34 @@ def test_dedupe_period_labels_collision_without_sequence_context_walks_earlier_b
     assert by_end[dt.date(2026, 6, 30)] == (2026, "Q2")
 
 
+def test_dedupe_period_labels_stale_fy_later_end_relabels_not_earlier() -> None:
+    """MTD's 8-quarter window (batch 291): the Q1/Q2-2025 rows carry the
+    stale-fy signature (fy=2024), so the correctly labeled Q3 FY2025 row
+    (end 2025-09-30) is not "grounded" — its claim cannot match the naive
+    successor expectation from a stale-fy predecessor. When the stale-fy
+    Q3 FY2026 row (tagged fy=2025) collided with it, the legacy branch
+    walked the correct row back to FY2024 Q3. A later end claiming exactly
+    one year behind its sequence expectation is itself the mislabeled one:
+    relabel it and leave the earlier row alone."""
+    from tickerlens.data.xbrl import _dedupe_period_labels
+
+    rows = [
+        _xbrl_row(2024, "Q4", dt.date(2024, 12, 31)),
+        _xbrl_row(2024, "Q1", dt.date(2025, 3, 31)),  # stale fy
+        _xbrl_row(2024, "Q2", dt.date(2025, 6, 30)),  # stale fy
+        _xbrl_row(2025, "Q3", dt.date(2025, 9, 30)),  # correct, ungrounded
+        _xbrl_row(2025, "Q4", dt.date(2025, 12, 31)),
+        _xbrl_row(2026, "Q1", dt.date(2026, 3, 31)),
+        _xbrl_row(2026, "Q2", dt.date(2026, 6, 30)),
+        _xbrl_row(2025, "Q3", dt.date(2026, 9, 30)),  # stale fy, collides
+    ]
+    fixed = _dedupe_period_labels(rows)
+    by_end = {r.end: (r.fy, r.fp) for r in fixed}
+    assert by_end[dt.date(2025, 9, 30)] == (2025, "Q3")
+    assert by_end[dt.date(2026, 9, 30)] == (2026, "Q3")
+    assert len({(r.fy, r.fp) for r in fixed}) == len(fixed)
+
+
 def test_repair_sequence_breaks_fixes_filer_shifted_year() -> None:
     """CrowdStrike's FY2025 10-K and Q1-FY2026 10-Q tag their periods by the
     calendar year the fiscal year *began* (fy=2024/2025); later filings'
@@ -2148,6 +2176,21 @@ def test_reconcile_eps_equalizes_loss_quarter_pair() -> None:
     assert fixed[0].value == -17.18
 
 
+def test_reconcile_eps_clamps_more_negative_loss_diluted_to_basic() -> None:
+    # Batch 290: the mirror image of the DLTR case — a Q4-derived loss
+    # quarter whose diluted leg came out MORE negative than basic
+    # (CRWD FY2025Q4: −0.3953 basic / −0.4431 diluted). Diluted shares
+    # can never be fewer than basic shares, so a larger-magnitude loss
+    # per share is arithmetically impossible; clamp diluted to basic.
+    b, d = _eps_pair(dt.date(2025, 1, 31), -0.3953, -0.4431)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -0.3953
+    # A healthy loss pair (diluted == basic, as filers report) is untouched.
+    b, d = _eps_pair(dt.date(2025, 1, 31), -0.42, -0.42)
+    fixed = _reconcile_eps_basic_diluted([b], [d])
+    assert fixed[0].value == -0.42
+
+
 def test_reconcile_eps_ignores_unpaired_diluted() -> None:
     _, d = _eps_pair(dt.date(2026, 1, 31), 1.49, 1.50)
     fixed = _reconcile_eps_basic_diluted([], [d])
@@ -2184,6 +2227,58 @@ def test_q4_eps_flip_never_reaches_rows() -> None:
     q4 = next(r for r in rows if r.fp == "Q4")
     assert q4.eps_basic is not None and q4.eps_diluted is not None
     assert q4.eps_diluted <= q4.eps_basic
+
+
+def test_q4_loss_eps_flip_never_reaches_rows() -> None:
+    # Batch 290 end-to-end: a loss year (FY NI −100M after a +50M 9M)
+    # whose independent share-implied Q4 derivations invert the loss
+    # ranking — basic derives −1.50 while diluted derives ≈−5.17
+    # (implied Q4 diluted shares 29M < basic 100M, impossible). The
+    # stored row must equalize the pair (ASC 260 anti-dilution).
+    # Batch 302 layering: the diluted derivation's residual interval
+    # is ~23% wide, so the rounding-uncertainty guard now rejects it
+    # first and the diluted leg falls back to subtraction (−1.39);
+    # the clamp still equalizes the stored pair to −1.50.
+    companyfacts = make_companyfacts(
+        revenue_values=[
+            ("2025-01-01", "2025-09-30", 700_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", 1_000_000_000, 2025, "FY"),
+        ],
+        net_income_values=[
+            ("2025-01-01", "2025-09-30", 50_000_000, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -100_000_000, 2025, "FY"),
+        ],
+        basic_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.50, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -1.00, 2025, "FY"),
+        ],
+        diluted_eps_values=[
+            ("2025-01-01", "2025-09-30", 0.40, 2025, "Q3"),
+            ("2025-01-01", "2025-12-31", -0.99, 2025, "FY"),
+        ],
+        opcf_values=[],
+        capex_values=[],
+    )
+    # Pre-clamp legs: basic share-implies −1.50 (tight interval); the
+    # diluted share-implied leg (≈−5.17 pre-batch-302) is rejected by
+    # the rounding guard and falls back to −0.99 − 0.40 = −1.39.
+    end = dt.date(2025, 12, 31)
+    basic_leg = {
+        m.end: m.value
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_BASIC, "1231")
+    }[end]
+    diluted_leg = {
+        m.end: m.value
+        for m in quarterly_income_metric(companyfacts, Metric.EPS_DILUTED, "1231")
+    }[end]
+    assert basic_leg == -1.5
+    assert diluted_leg == -1.39
+    rows = extract_recent_quarterly_financials(
+        companyfacts, fiscal_year_end="1231", periods=4
+    )
+    q4 = next(r for r in rows if r.fp == "Q4")
+    assert q4.eps_basic == -1.5
+    assert q4.eps_diluted == q4.eps_basic
 
 
 def _hal_like_companyfacts(

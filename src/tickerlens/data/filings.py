@@ -119,7 +119,15 @@ _MAX_HEADLINE_CHARS = 300
 # Lines that mark the start of boilerplate we never want in highlights.
 _BOILERPLATE_RE = re.compile(
     r"^(about\s|forward-looking|safe harbor|contacts?(\s|:)|press\s+contacts?|"
-    r"investor\s+contacts?|note to editors|###)",
+    r"investor\s+contacts?|note to editors|###|"
+    # Batch 188: the safe-harbor intro itself — "This press release
+    # contains forward-looking statements that are intended to qualify
+    # for the safe-harbor provisions ..." (ED, AAPL, ADI, ADSK and
+    # 277 other distinct intros in the cache survey). The bare
+    # "forward-looking" alternative only matches when the line STARTS
+    # with it; the intro starts with "This press release contains",
+    # so ED's lede ran on into the safe-harbor paragraph.
+    r"this\s+(press\s+release|release|announcement)\s+contains\s+forward-looking)",
     re.IGNORECASE,
 )
 
@@ -212,7 +220,16 @@ _ADMIN_LINE_RE = re.compile(
     # the 48-char bound in _looks_like_masthead_residue and became the
     # headline). A headline never starts with a house number and ends with
     # a ZIP. Batch 107.
-    r"|^\d{1,6}\s+\S.*\b\d{5}(?:-\d{4})?\s*$",
+    r"|^\d{1,6}\s+\S.*\b\d{5}(?:-\d{4})?\s*$"
+    # All-caps title + page marker ("CON EDISON REPORTS 2026 FIRST QUARTER
+    # EARNINGS page 2" — Con Edison repeats the release title at the top of
+    # each page). The (?-i:...) scope matters: the regex is IGNORECASE, so
+    # the prefix class must be case-sensitive — a line with any lowercase
+    # letter in the prefix is prose, not a title (AJG's "…ratios using
+    # reported revenues on page 1" table labels, AAL's "Oct. 22, 2026 |
+    # Page 10" footers). A real headline never ends with a page marker.
+    # Batch 188. Survey: 14 distinct lines, all ED.
+    r"|^(?-i:[^a-z]+)\s+page\s+\d+$",
     re.IGNORECASE,
 )
 
@@ -312,6 +329,25 @@ _DATELINE_LEAD_RE = re.compile(
     r"(?:\s*[–—-]{1,2}\s*|\s+)(?:[A-Z][a-z]+\.? \d{1,2}, \d{4}\s*[–—-]{1,2}\s*)?"
 )
 
+# A dated dateline sentence lead ("ST. LOUIS, October 25, 2024 --
+# Centene Corporation ... announced ..."): a city + full month/day/year
+# + dash opening body prose. _DATELINE_LEAD_RE's location segments
+# allow no digits, so this dated form never matches it — and a dateline
+# sentence after the leading bullets was swallowed as a bullet
+# continuation, dragging the flattened earnings table behind it into
+# the block (Centene: the dateline paragraph plus 7 table rows served
+# as highlights in all 8 quarters). The shape is narrow by
+# construction — a city, a spelled-out month, a day and a year, then a
+# dash — so a bullet continuation (mid-sentence prose, never a
+# city/date/dash open) can never match it. Batch 228.
+_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+"
+    r"(?:January|February|March|April|May|June|July|August|September|"
+    r"October|November|December|Jan\.?|Feb\.?|Mar\.?|Apr\.?|Jun\.?|"
+    r"Jul\.?|Aug\.?|Sep\.?|Sept\.?|Oct\.?|Nov\.?|Dec\.?)"
+    r"\s+\d{1,2},\s+\d{4}\s+[–—-]{1,2}\s"
+)
+
 # Quarter-prefixed earnings-release document label ("FIRST QUARTER 2026
 # EARNINGS RELEASE" — Berkshire heads Q1 releases with it; the real
 # headline follows "FOR IMMEDIATE RELEASE" / the date line). Narrow: quarter
@@ -348,10 +384,103 @@ _FINANCIAL_LINE_RE = re.compile(
 # headings that way, and without it the leading-bullet block swallows the
 # heading plus the table-intro sentence as a bullet continuation.
 _HIGHLIGHTS_HEADING_RE = re.compile(
-    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$", re.IGNORECASE
+    # Batch 184: the leading-"Highlights" branch is narrowed to
+    # heading-shaped tails (of/from/for/include + unterminated rest).
+    # The old bare "^highlights?\b" matched ANY line starting with the
+    # word — including Chipotle's all-caps sub-headlines ("HIGHLIGHTS
+    # RETURN TO POSITIVE COMPARABLE SALES AND TRANSACTIONS IN JUNE",
+    # "HIGHLIGHTS POSITIVE COMPARABLE SALES"), which sit between the
+    # headline and the dateline and carry real news (June comps turned
+    # positive while the quarter was down 4%). The lede loop, the
+    # trailing trim, the block boundary and the section collector all
+    # treat a match as a heading, so the sub-headline was dropped
+    # everywhere. Attested heading shapes after a leading "Highlights"
+    # (full-cache survey, 17 distinct lines): bare, "OF SEGMENT
+    # RESULTS", "FROM THE QUARTER/YEAR", "from the report include:",
+    # "for the ... are listed below:". A prose sentence starting
+    # "Highlights of the March quarter, ... are on page five ..." is
+    # excluded by the terminator guard, and a flattened-prose fragment
+    # ("highlights based suggested destinations ...") by the tail-word
+    # guard. The trailing-word branch is unchanged ("Selected Revenue
+    # Highlights", "Q1 2025 Financial Highlights (unaudited)").
+    r"^highlights?\b[\s:–—-]+(?:of|from|for|include)\b[^.!?]*$"
+    r"|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$",
+    re.IGNORECASE,
 )
 
-# A "Highlights" section that is really a financial data table (Lilly's
+# Batch 184: the section collector keeps the BROAD anchor — a line
+# starting with "Highlights" anchors a Highlights section even when
+# it is content, not a heading. Chipotle's all-caps sub-headlines
+# ("HIGHLIGHTS RETURN TO POSITIVE COMPARABLE SALES AND TRANSACTIONS
+# IN JUNE") anchor the section that serves the dateline, the bullets,
+# the CEO quote and the prose after them; Delta's pointer sentence
+# ("Highlights of the March quarter, ... are on page five ...")
+# anchors the section that serves the CEO quotes after it. The
+# narrowed _HIGHLIGHTS_HEADING_RE above is the definition of a real
+# heading (used where a match means drop/break); this regex is only
+# the "a section starts here" signal, and _extract_highlights_sections
+# decides per anchor whether the line itself is content.
+# Batch 272: a Highlights heading carrying a short comparison tail
+# ("Second Quarter 2025 Financial Highlights, Comparisons Versus
+# Same Fiscal Quarter Last Year" — Darden Q1-Q3). The old trailing
+# branch required "highlights" at end-of-line, so these headings
+# never anchored and the releases fell to the lede, which drops the
+# same-restaurant-sales table under a dangling "Same-restaurant
+# sales:" opener. The tail is a comparisons-versus clause only,
+# short, and unterminated — prose that merely mentions highlights
+# (AIG's non-GAAP boilerplate, Airbnb's letter prose, Salesforce's
+# pointer sentence) is long or terminated and never anchors; the
+# 120-char bound at the use site keeps flattened mega-lines out.
+# The first form also covered Chipotle's "<period> highlights, year
+# over year:" headings, but the blast proved that a regression:
+# the CMG sections serve long prose and drop the all-caps summary
+# sub-headlines the lede served (batch 184: those sub-headlines
+# carry real news), so 8 of 9 stored CMG rows would newly refuse
+# the gates as loss — the year-over-year tail is NOT included.
+# Surveyed across the whole cache: the only newly-anchored lines
+# are the DRI heading shape.
+_HIGHLIGHTS_SECTION_ANCHOR_RE = re.compile(
+    r"^highlights?\b|\bhighlights?\b[\s:–—-]*(\([^)]*\))?\s*$"
+    r"|\bhighlights?\b,\s*comparisons?\s+versus\s+[^.!?]{1,80}\s*$",
+    re.IGNORECASE,
+)
+# Batch 244: scope words on a Highlights-section anchor. A Q4 release
+# often carries two financial Highlights sections — the quarter's and
+# the full year's (AGNC: "FOURTH QUARTER 2024 FINANCIAL HIGHLIGHTS"
+# then "2024 FULL YEAR HIGHLIGHTS"). The density ranking alone picks
+# the full-year section (more figure lines), but the row is a quarter,
+# so the quarter's figures are the right ones. A combined heading
+# ("FOURTH QUARTER AND FULL YEAR 2024 HIGHLIGHTS") names a quarter,
+# so the quarter word wins over the full-year word.
+# Batch 245: Autodesk heads its annual section with a bare "Fiscal
+# YYYY" ("Fiscal 2025 Financial Highlights") — no "year" word, no
+# "FY" prefix — so the batch-244 regex missed it, scope read "other",
+# and the full-year section (denser) won over the quarter section on
+# all 7 ADSK rows. A bare "Fiscal YYYY" on a Highlights heading is
+# the annual section: a quarter section always names its quarter
+# ("Fourth Quarter Fiscal 2025 ..."), and the quarter check runs
+# first, so a "Fiscal YYYY ... Quarter" heading still reads quarter.
+# The scope rule still only fires when a quarter candidate qualifies,
+# so a release whose only financial section is headed "Fiscal YYYY"
+# is untouched.
+_QUARTER_SCOPE_RE = re.compile(
+    r"\b(first|second|third|fourth)\s+quarter\b|\bQ[1-4]\b", re.IGNORECASE
+)
+_FULL_YEAR_SCOPE_RE = re.compile(
+    r"\b(full|fiscal)[\s\-]?year\b|\bFY\s*\d{4}\b|\bfiscal\s+\d{4}\b",
+    re.IGNORECASE,
+)
+
+
+def _highlights_section_scope(anchor: str) -> str:
+    """\"quarter\" / \"fullyear\" / \"other\" for a Highlights-section anchor."""
+    if _QUARTER_SCOPE_RE.search(anchor):
+        return "quarter"
+    if _FULL_YEAR_SCOPE_RE.search(anchor):
+        return "fullyear"
+    return "other"
+
+
 # "Selected Revenue Highlights" product table, Waste Management's "HIGHLIGHTS
 # FOR the fourth quarter" EBITDA table): units parentheticals ("(Dollars in
 # millions)"), "% Change" column headers, or data rows dense with $ and %.
@@ -397,17 +526,49 @@ _TABLE_UNITS_RE = re.compile(
 # (no English word is a lone "l"), so "l " is a bullet lead. The space
 # stays required: a line starting with the letter "l" glued to a word
 # ("lower revenue ...") is prose, not a bullet.
-_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—]\s?|-\s|l\s)")
+# Batch 253: the black-square bullet "◾" (U+25FE) — Digital Realty
+# renders its Highlights bullets with it, and it was missing from the
+# glyph class. Two $+%-carrying ◾ bullets plus the two $+%-carrying
+# "Financial Results" narrative lines tripped the data_rows >= 4
+# threshold in _looks_like_financial_table, so the genuine 7-bullet
+# "Highlights" section was rejected as a financial table and the lede
+# fallback served the supplement TOC instead (DLR 2026-03-31: live
+# 220 chars of TOC junk vs 1638 stored). The batch-154 defect class,
+# a new glyph: the bullet guard must see the same markers the
+# exhibits use, or figure-dense bullet lists read as tables.
+# Batch 261: the Wingdings "n" bullet — the same glyph family as
+# batch 175's "l", JPM's releases render their bullets as <font
+# face="Wingdings">n</font> (in Wingdings "n" is a small square, the
+# same mark CINF uses as the " n " separator between subsidiary
+# names in its masthead). A lone "n" plus a space is never prose
+# either (no English word is a lone "n"), so "n " joins the bullet
+# lead on the same argument. JPM's exhibits are not in the blast
+# cache, so this is verified by the predicate tests plus a zero-delta
+# blast (no "n "-starting line exists in the 1,699-exhibit cache),
+# not by a JPM exhibit.
+# Batch 262: the white-bullet "◦" (U+25E6) — the sub-bullet marker
+# Disney, AMD, Amgen, AGNC, NFLX and others use under their "•"
+# segment bullets ("◦ Direct-to-Consumer operating income increased
+# $431 million to $293 million"). It was missing from the glyph
+# class even though the rest of the file already treats it as a
+# bullet (the 81-120 band exclusion at _is_lede_data_row, the
+# _is_trailing_table_data_row guard, _strip_bullet), so the batch-175
+# top guard in _is_lede_data_row missed it and figure-dense ◦ lines
+# read as table rows — which tripped S4's added-table check and
+# blocked the DIS x4 re-sync (live adds 8 genuine ◦/• lines, stored
+# only loses its dateline). A lone "◦" plus a space is never prose,
+# so "◦" joins the bullet lead on the same argument as "•".
+_BULLET_LEAD_RE = re.compile(r"^(?:[•●–—◾◦]\s?|-\s|l\s|n\s)")
 
 
 def _is_inline_bullet_start(ln: str) -> bool:
     """True for a line that opens a bullet item with its marker attached
     to the text: "•Q2 was our best quarter ...".
 
-    The _BULLET_LEAD_RE glyphs (•/●/–/—, "- " with the space) plus the
-    flattened-list glyphs the lede already treats as bullets ("·"/"○"/
-    "▪"/"■" — batch 138/139/140) and "*" (a bullet start in
-    _leading_bullet_block). A lone marker line is NOT one — it is a
+    The _BULLET_LEAD_RE glyphs (•/●/–/—/◾/◦, "- " with the space,
+    "l "/"n ") plus the flattened-list glyphs the lede already treats
+    as bullets ("·"/"○"/"▪"/"■" — batch 138/139/140) and "*" (a bullet
+    start in _leading_bullet_block). A lone marker line is NOT one — it is a
     separator, handled by _is_lone_bullet_marker — so text must follow
     the marker. Batch 165.
     """
@@ -417,6 +578,72 @@ def _is_inline_bullet_start(ln: str) -> bool:
     if ln[:1] in "▪■·○*":
         return bool(ln[1:].strip())
     return False
+
+
+# A bullet whose first word(s) are orphaned on their own line (batch 230):
+# Dollar General's 2026 releases typeset each bullet as a table row
+# whose text cell wraps after the first word — "· Net" / "Sales
+# Increased 3.4% to $10.8 Billion" — and the flattener preserves the
+# break, so the served highlights read as a one-word bullet plus a
+# stray line. The shape is narrow by construction: the marker plus
+# one or two bare alphabetic words, no punctuation at all — a label
+# line ("• Same-restaurant sales:", "• Fiscal 2025:", "• Media:
+# media@danaher.com") always carries punctuation and never matches,
+# and a two-word fragment ("· Year-to-Date", "· Fourth") is the same
+# wrap with a hyphenated or two-word opener. A digit, figure, or
+# punctuation mark in the fragment means the line is already a
+# complete item or a label, not an orphaned opener.
+_FRAGMENTED_BULLET_RE = re.compile(
+    r"^(?:[•●–—]\s?|-\s|l\s|n\s|[▪■·○]\s?)"
+    r"([A-Za-z][A-Za-z\-']*(?:\s+[A-Za-z][A-Za-z\-']*)?)\s*$"
+)
+
+
+def _join_fragmented_bullet_starts(lines: list[str]) -> list[str]:
+    """Join a fragmented bullet opener with its continuation line.
+
+    A line matching _FRAGMENTED_BULLET_RE ("· Net", "· Same-Store",
+    "· The") is the first word(s) of a bullet whose remainder sits on
+    the next line; join the two with a space so the bullet reads as
+    one item ("· Net Sales Increased 3.4% to $10.8 Billion"). The
+    continuation must be a plain line — not another bullet (including
+    a "◦" sub-bullet: Equifax's "• Revenues" heads a sub-bullet list
+    whose "◦ $2.13 billion ..." line is its own item, and Carnival's
+    "• Pricing" is followed by another "•" bullet), not blank, not a
+    heading (all-caps), not a dateline, not admin/boilerplate, not a
+    footnote-definition or table-units line. A bullet that wraps after
+    a full clause is untouched — only the orphaned opener joins, so a
+    wrapped bullet keeps its normal second line exactly as before.
+    Applied post-collection (winning section, lede list), never
+    pre-selection, so qualification and density competition are
+    untouched. Batch 230.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        ln = lines[i]
+        nxt = lines[i + 1] if i + 1 < n else ""
+        if (
+            _FRAGMENTED_BULLET_RE.match(ln)
+            and nxt
+            and not _is_inline_bullet_start(nxt)
+            and nxt[:1] != "◦"
+            and not _ADMIN_LINE_RE.match(nxt)
+            and not _BOILERPLATE_RE.match(nxt)
+            and not (nxt.isupper() and len(nxt) <= 80)
+            and not _DATELINE_LEAD_RE.match(nxt)
+            and not _DATED_DATELINE_LEAD_RE.match(nxt)
+            and not _is_section_footnote_line(nxt)
+            and not _TABLE_UNITS_RE.match(nxt)
+            and not _TABLE_WORD_UNITS_RE.match(nxt)
+        ):
+            out.append(f"{ln.rstrip()} {nxt.strip()}")
+            i += 2
+            continue
+        out.append(ln)
+        i += 1
+    return out
 
 # A units parenthetical in words, anchored at line start (batch 143):
 # "(In millions, except earnings per share)" (FedEx), "(in thousands,
@@ -458,6 +685,18 @@ _LEDE_BARE_UNITS_LOWER_RE = re.compile(
     r"^in (millions|billions|thousands), except",
 )
 
+# A bare units declaration with no "except" tail (batch 182): CSX's
+# reconciliation table heads with "Dollars in millions," on its own
+# line and the "except per share amounts" continuation plus the column
+# labels on the next — the "Dollars in" form of _LEDE_BARE_UNITS_RE
+# requires ", except", so the split form escaped both it and the
+# paren-form units regexes. A line that IS just the declaration is
+# never prose: a sentence never consists solely of "Dollars in
+# millions,".
+_LEDE_BARE_UNITS_DOLLARS_RE = re.compile(
+    r"^dollars? in (millions|billions|thousands),?$", re.IGNORECASE
+)
+
 # A "% change" table footnote glued onto a quote attribution (batch 180):
 # Visa flattens its summary-table footnote ("% change is calculated over
 # the comparable prior-year period."), the table's period header ("Q3
@@ -476,6 +715,265 @@ _LEDE_QUOTE_ATTRIBUTION_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A quote attribution split across wrapped lines (Emerson Q4 FY2024):
+# the budget line ends "...said Emerson President and Chief Executive
+# Officer" and the speaker's name plus the quote's second half sit on
+# the next line ("Lal Karsanbhai. "We have done an exceptional job
+# ..."). The finish rule reads the budget line as a complete item —
+# it ends in a role noun, so neither the wrap-tail test (a function
+# word) nor the batch-180 attribution-tail test (a colon-ended
+# attribution) fires — and breaks, orphaning the quote continuation.
+# The shape: a quote verb followed by a role title at the line end,
+# with no comma between verb and role — a complete attribution names
+# the speaker on the same line ("said Jane Smith, President and CEO",
+# comma after the name), so the comma is the guard that keeps a
+# finished attribution finished. Batch 181.
+_LEDE_QUOTE_VERB_RE = re.compile(
+    r"\b(said|says|commented|noted|added|stated)\b", re.IGNORECASE
+)
+_LEDE_SPLIT_ATTRIBUTION_ROLE_RE = re.compile(
+    r"\b(?:(?:President|Chairman|Chair|Chair-Elect)\s+and\s+)?"
+    r"(?:Chief Executive Officer|Chief Financial Officer|"
+    r"Chief Operating Officer|CEO|CFO|COO|President|Chairman|Chair|"
+    r"Chief Executive|Chief Financial|Chief Operating)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_split_quote_attribution(ln: str) -> bool:
+    """True for a quote attribution whose speaker name sits on the
+    next line: a quote verb plus a role title at the line end, no comma
+    between verb and role. The quote it introduces continues past the
+    budget line, so the finish rule must treat the item as unfinished.
+    A complete attribution ("said Jane Smith, President and CEO") has
+    the comma and never qualifies; a bare role line has no verb and
+    never qualifies."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    verb = _LEDE_QUOTE_VERB_RE.search(s)
+    if not verb:
+        return False
+    if "," in s[verb.start() :]:
+        return False
+    return bool(_LEDE_SPLIT_ATTRIBUTION_ROLE_RE.search(s))
+
+
+def _lede_quote_is_open(lines: list[str]) -> bool:
+    """True when the lede's quotes are unbalanced — an opening quote
+    mark with no closing mark yet. A multi-sentence CEO quote closes
+    after its last sentence, not after its first: the finish rule's
+    sentence-terminated break must not fire while the quote that the
+    budget line opened is still open (Emerson Q4 FY2024: the second
+    quote sentence ends "…Emerson Management System." and the third
+    sentence "Emerson's leading technology … fiscal 2025." still
+    belongs to the same quote). The marks pair on a stack: a curly
+    open pushes, a curly close pops, and a straight quote pops when
+    one is open and pushes when none is — so a curly open closed by
+    a straight mark (Bristol Myers' "…to patients."" and Cintas'
+    "…professional manner."") counts as closed, not open. Without
+    the stack, the mixed style reads as an open quote and the finish
+    rule pulls the table chrome below it (BMY's "$ in millions,
+    except per share amounts" header, CTAS's guidance-table
+    fragments). The overrun cap (4 lines) still bounds the pull-in,
+    so a stray mark can cost at most a few lines. Batch 181;
+    stack pairing batch 188."""
+    depth = 0
+    for ln in lines:
+        for ch in ln:
+            if ch == "“":
+                depth += 1
+            elif ch == "”":
+                depth = max(0, depth - 1)
+            elif ch == '"':
+                depth = depth + 1 if depth == 0 else depth - 1
+    return depth > 0
+
+
+def _lede_tail_quote_open(lines: list[str]) -> bool:
+    """True when the lines' most recent quote activity is an opening
+    mark — the quote the tail belongs to is still open.
+
+    _lede_quote_is_open answers the whole-text question, which a stray
+    mark from an earlier quote pollutes: a first quote that never
+    closes (AJG's "“Looking ahead..." has no closing mark in the
+    source) keeps the whole-text depth above zero forever, so the
+    finish rule's allowance would keep pulling past a second quote
+    that DID close — into the pointer sentence after it (AJG: the
+    "reconciliation ... is shown on pages 14 and 15" line) and, in a
+    Highlights section, into the next section's heading and bullets
+    (GIS: "Fourth Quarter Results Summary" + results bullets). The
+    tail question is narrower: scan the marks in order and ask what
+    the LAST one did. A close after the last open means the tail's
+    quote closed, whatever an earlier quote did; an open after the
+    last close means the tail is still inside a quote. The marks pair
+    on the same stack as _lede_quote_is_open (curly open pushes,
+    curly close pops, straight toggles), so a curly open closed by a
+    straight mark counts as closed. Batch 222.
+    """
+    depth = 0
+    last_open = -1
+    last_close = -1
+    pos = 0
+    for ln in lines:
+        for ch in ln:
+            if ch == "“":
+                depth += 1
+                last_open = pos
+            elif ch == "”":
+                if depth > 0:
+                    last_close = pos
+                depth = max(0, depth - 1)
+            elif ch == '"':
+                if depth == 0:
+                    depth += 1
+                    last_open = pos
+                else:
+                    depth -= 1
+                    last_close = pos
+            pos += 1
+    return last_open > last_close
+
+
+def _lede_item_still_unfinished(lede: list[str]) -> bool:
+    """True when the lede's last collected item has not finished: its
+    last line is a wrap tail, a quote attribution (whose quote has not
+    arrived yet), a split attribution, or the tail's quote is still
+    open. The same signals the finish rule uses to decide the budget
+    item is unfinished (batches 165/180/181/188), re-read on the
+    current lede so the batch-222 completion allowance knows when to
+    keep pulling lines in — and when the item has finished and the cap
+    may fire. The quote test is the tail test (_lede_tail_quote_open),
+    not the whole-lede test: a stray mark from an earlier quote must
+    not keep the allowance pulling after the tail's own quote closed.
+    """
+    if not lede:
+        return False
+    last = lede[-1]
+    return (
+        bool(_LEDE_WRAP_TAIL_RE.search(last))
+        or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(last))
+        or _is_lede_split_quote_attribution(last)
+        or _lede_tail_quote_open(lede)
+    )
+
+
+def _lede_next_line_continues(tail: str, nxt: str) -> bool:
+    """True when `nxt` is a wrapped continuation of the sentence `tail`
+    ends mid-way: the tail line is unterminated (no sentence
+    punctuation) and `nxt` starts with a lowercase letter.
+
+    Batch 224: the noun/number-ending hole. A cut landing on a line
+    ending in a noun or figure ("Operating income was $746 million",
+    "... related to the store portfolio") carries no unfinished
+    signal — no wrap tail, no comma, no open quote — so the finish
+    rule treats the item as complete and the trim cannot see it
+    either (it has no next line to look at). But the sentence
+    continues on the next line, and a wrapped continuation starts
+    lowercase ("in the fourth quarter of 2025,", "optimization
+    review as discussed below ...", "reported 2024 results, ...").
+    A new item never starts lowercase: bullets carry markers,
+    headings and datelines are capitalized, table rows are caught by
+    the table checks, so the lowercase lead is a tight signal. A
+    digit- or $-led line is deliberately NOT a continuation — a table
+    row can start with a figure. All 9 attested rows continue
+    lowercase (ABNB, CI, DG x4, HAL x3); the blast proves the
+    radius.
+
+    The unterminated gate is load-bearing: a terminated tail (a
+    closed quote, "...long-term growth prospects!”") followed by a
+    lowercase-led line is NOT a continuation — AJG's pointer line
+    ("reconciliation of the 2023 and 2022 provision ... is shown on
+    pages 14 and 15.") starts lowercase because it is the wrapped
+    tail of its own pointer sentence, not a continuation of the
+    quote. Without the gate the lookahead pulls the pointer in —
+    batch 222's regression, re-introduced by the first cut of this
+    fix and caught by its pins.
+    """
+    if _is_sentence_terminated(tail):
+        return False
+    s = nxt.strip()
+    if not s:
+        return False
+    if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if _is_lede_table_line(s) or _is_bare_highlights_heading(s):
+        return False
+    if _LEDE_FOOTNOTE_RE.match(s):
+        return False
+    return s[0].islower()
+
+
+def _lede_termination_ahead(
+    collected: list[str], next_lines: list[str], limit: int = 4
+) -> bool:
+    """True when the sentence the cap just cut terminates within the next
+    `limit` raw lines, so pulling a few more lines ends it cleanly
+    instead of stranding it mid-sentence.
+
+    Batch 224: the hard caps (lede 8 past budget, section 16, block 18)
+    are absolute — Halliburton Q4 2025's sentence terminates ONE line
+    past the block's 18-line cap ("$748 million in the third quarter
+    of 2025."), so the cap strands it and the post-selection trim then
+    walks the highlights back two more lines. The scan walks forward
+    from the next line while each line is a continuation of the same
+    sentence (unfinished by the finish rule's own signals, or followed
+    by a lowercase-led line) and returns True as soon as a line ends
+    the sentence with its quote closed. It stops — False — at a bullet,
+    heading, table line or boilerplate (a new item, not a continuation),
+    and at a line that ends in a noun or figure with no continuation
+    signal (the sentence's end is not visible from here). A colon does
+    NOT terminate here: it introduces a quote or a table, so only
+    ".", "!", "?" and "…" count, with the same trailing-quote/paren
+    tolerance as _is_sentence_terminated. The quote state is tracked
+    over the collected lines plus the scanned ones, so a multi-sentence
+    quote's first terminated line does not count while the quote is
+    still open. Bounded at `limit` lines past the cap, mirroring the
+    +4 completion allowance — the pull can run at most `limit` lines
+    past the hard cap, and only while termination stays in sight.
+    """
+    seen = list(collected)
+    window = next_lines[:limit]
+    if not window or not collected:
+        return False
+    # Entry gate: the first scanned line must continue the collected
+    # tail — the tail is unfinished by the finish rule's own signals,
+    # or it is unterminated and the next line starts lowercase. A
+    # terminated tail followed by a lowercase-led line (AJG's pointer
+    # line after a closed quote) is a new sentence's wrap tail, not a
+    # continuation — without this gate the scan would count the
+    # pointer's own termination as the sentence's end and pull it in.
+    if not (
+        _lede_item_still_unfinished(collected)
+        or _lede_next_line_continues(collected[-1], window[0])
+    ):
+        return False
+    for k, ln in enumerate(window):
+        s = ln.strip()
+        if not s:
+            return False
+        if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+            return False
+        if _is_lede_table_line(s) or _is_bare_highlights_heading(s):
+            return False
+        if _BOILERPLATE_RE.match(s):
+            return False
+        seen.append(s)
+        stripped = s.rstrip().rstrip("”\"'’)]}\")")
+        if stripped.endswith((".", "!", "?", "…")) and not _lede_tail_quote_open(
+            seen
+        ):
+            return True
+        if k + 1 >= len(window):
+            return False
+        nxt = window[k + 1]
+        if _lede_item_still_unfinished(seen) or _lede_next_line_continues(
+            seen[-1], nxt
+        ):
+            continue
+        return False
+    return False
+
 # A "Percent Change" column header in words (batch 143): FedEx's tables
 # spell the header out, so the batch-97 "% change" check never fires.
 # Full-line (possibly repeated for multi-period headers) so a prose
@@ -483,11 +981,15 @@ _LEDE_QUOTE_ATTRIBUTION_TAIL_RE = re.compile(
 _PERCENT_CHANGE_WORDS_RE = re.compile(r"^(percent change\s*)+$", re.IGNORECASE)
 
 # One flattened table cell on its own line (batch 143): a lone "$", a
-# bare number ("1,757,093", "(1,371,420 )", "2024"), or a period header
-# ("Three Months Ended", "12 Weeks Ended 12 Weeks Ended"). Simon's
-# "Financial Highlights" table splits every cell across lines, so no
-# line carries both $ and % and no units line exists at all.
-_BARE_CELL_RE = re.compile(r"^(\$|\(?[\d,\s]+\)?)$")
+# bare number ("1,757,093", "(1,371,420 )", "2024"), a lone $ amount
+# ("$ 0.44" — a flattened table cell, not a metric value: a metric
+# value carries a scale word or suffix, "$50.2 billion" / "$1.2B",
+# which the number-only class never matches; batch 181, CSX's
+# recon-table EPS cell), or a period header ("Three Months Ended",
+# "12 Weeks Ended 12 Weeks Ended"). Simon's "Financial Highlights"
+# table splits every cell across lines, so no line carries both $ and
+# % and no units line exists at all.
+_BARE_CELL_RE = re.compile(r"^(\$|\(?[\d,\s]+\)?|\$\s?[\d,().]+)$")
 _PERIOD_HEADER_RE = re.compile(
     r"^(((three|six|nine|twelve)\s+months\s+ended\s*)+"
     r"|(\d+\s+weeks\s+ended\s*)+"
@@ -609,7 +1111,7 @@ _LEDE_HEADLINE_VERB_RE = re.compile(
     r"GUIDES?|RESETTING|"
     r"RESETS?|GROWS?|INCREASES?|DECREASES?|BEATS?|TOPS?|MISSES?|"
     r"LIFTS?|CUTS?|EXPANDS?|LAUNCHES?|INTRODUCES?|UNVEILS?|"
-    r"RETIRE|ASSUME|COMPLETES?)\b",
+    r"RETIRE|ASSUME|COMPLETES?|COMPLETED)\b",
     re.IGNORECASE,
 )
 
@@ -629,13 +1131,58 @@ def _is_lede_heading_fragment(ln: str) -> bool:
     release's sub-headline ("Q2 ORGANIC SALES AND ADJUSTED EPS EXCEED
     OUTLOOK", "AMERICAN WATER REPORTS SOLID SECOND QUARTER RESULTS"),
     and the verb is what tells a sub-headline from a table title.
+    Batch 252: the <=4-word branch gets the same guards — a short
+    sub-headline carries a $/% figure ("ANNOUNCES 4% DIVIDEND
+    INCREASE") or, at <=3 words, states a completed corporate event
+    ("TOUCHLAND ACQUISITION COMPLETED" — the verb list gains
+    COMPLETED for it). The verb guard is deliberately narrower than
+    the 5–8-word band's: a present-tense verb at <=3 words does not
+    distinguish a sub-headline from a section heading ("AFFIRMS
+    LONG-TERM TARGETS", "Q1 EPS EXCEEDS OUTLOOK", "UPDATES FULL YEAR
+    OUTLOOK" — all read as headings, and sparing them starves a real
+    bullet under the 6-line budget), while a completed-event statement
+    is news by construction — a heading names a topic (RESULTS,
+    OUTLOOK, TARGETS), it never states that an event is complete.
+    A heading fragment never carries a figure
+    ("QUARTER", "RESULTS FOR THE QUARTER", "Q4 2025 RESULTS" — a
+    bare year or quarter token is not a figure, so the $-less/%-less
+    digits in a period label do not spare it).
     """
     words = ln.split()
     if not words:
         return False
     if not ln.isupper() or not any(c.isalpha() for c in ln):
         return False
+    # Batch 184: an all-caps line leading with "Highlights" that is NOT
+    # a highlights heading (per _HIGHLIGHTS_HEADING_RE) is a sub-headline
+    # — Chipotle Q3 2025's "HIGHLIGHTS POSITIVE COMPARABLE SALES" sits
+    # between the headline and the dateline and carries the quarter's
+    # news — not a section-heading fragment. The regex is the single
+    # definition of a highlights heading, so its heading shapes
+    # ("HIGHLIGHTS", "HIGHLIGHTS OF SEGMENT RESULTS", "HIGHLIGHTS FROM
+    # THE QUARTER") still return True here; only the content shapes
+    # escape. Placed before the word-count branches so it covers the
+    # 5–8-word band too, where the verb veto would otherwise drop a
+    # verb-less sub-headline ("RETURN" is not a headline verb — and
+    # must not become one, or "Return on Equity" table labels escape
+    # the table-header predicate).
+    if re.match(r"highlights?\b", ln, re.IGNORECASE) and not (
+        _HIGHLIGHTS_HEADING_RE.search(ln)
+    ):
+        return False
     if len(words) <= 4:
+        # Batch 252: a short sub-headline carries a $/% figure, or —
+        # at <=3 words — states a completed corporate event
+        # ("ANNOUNCES 4% DIVIDEND INCREASE", "TOUCHLAND ACQUISITION
+        # COMPLETED"); a heading fragment never does ("QUARTER",
+        # "RESULTS FOR THE QUARTER", "Q4 2025 RESULTS" — bare years
+        # and quarter tokens are not figures; "AFFIRMS LONG-TERM
+        # TARGETS" stays a fragment — a present-tense stance, not a
+        # completed event).
+        if "$" in ln or "%" in ln:
+            return False
+        if len(words) <= 3 and re.search(r"\bCOMPLETED\b", ln):
+            return False
         return True
     if len(words) > 8:
         return False
@@ -726,7 +1273,7 @@ def _is_lede_colon_heading(ln: str) -> bool:
 # ("Non-GAAP1,2" -> "non-gaap", "EPS2" -> "eps"); "Earnings" joins the
 # metric list for the same pair of lines.
 _LEDE_TABLE_HEADER_METRIC_RE = re.compile(
-    r"\b(EPS|Revenue|Income|Margin|EBITDA|Sales|Cash|Profit|Dividend|Earnings)\b",
+    r"\b(EPS|Revenue|Income|Margin|EBITDA|EBITA|EBIT|Sales|Cash|Profit|Dividend|Earnings)\d?\b",
     re.IGNORECASE,
 )
 _LEDE_TABLE_HEADER_QUALIFIERS = frozenset(
@@ -743,14 +1290,34 @@ def _is_lede_table_header(ln: str) -> bool:
     if _is_sentence_terminated(s):
         return False
     words = s.split()
-    if not 4 <= len(words) <= 8:
+    # Batch 181: the floor moves 4 -> 3 — Emerson's "Adjusted Segment
+    # EBITA4" is a 3-word column label (metric + qualifier), and the
+    # capital-led + metric + qualifier guards already keep prose out.
+    # A bare year token is transparent in the capital-led check (FICO's
+    # "Fourth Quarter Fiscal 2024 GAAP Revenue" is a period phrase plus
+    # a metric label, not prose) — the year is already excluded from
+    # the repeated-word/qualifier list below, so only this loop needed
+    # the skip.
+    if not 3 <= len(words) <= 8:
         return False
     if not _LEDE_TABLE_HEADER_METRIC_RE.search(s):
         return False
     if _LEDE_HEADLINE_VERB_RE.search(s):
         return False  # sub-headline, not a column header
     for w in words:
-        w2 = re.sub(r"\d+$", "", w)
+        if _LEDE_YEAR_RE.fullmatch(w.strip(",")):
+            continue  # a bare year is a period token, not a word
+        if w.strip(",") in ("-", "–", "—"):
+            continue  # Batch 182: a bare dash token is a separator,
+            # not a word — Brown & Brown's "Diluted Net Income Per
+            # Share - Adjusted" is a column label, and the dash was
+            # the only thing keeping the capital-led check out.
+        # Batch 188: a parenthesized capital word ("(Loss)" — AJG's
+        # "Net Earnings (Loss) EBITDAC Diluted Net Earnings" column
+        # header) is capital-led: strip the parens before the check.
+        # A parenthesized lowercase word ("(in", "(loss") still fails,
+        # and a bare "(" is empty after the strip.
+        w2 = re.sub(r"\d+$", "", w).lstrip("(").rstrip(")")
         if not w2 or not w2[0].isupper():
             return False
     lowered = [
@@ -804,6 +1371,14 @@ _LEDE_PERIOD_TOKEN_RE = re.compile(
 # Lauder's summary table flattens "$0.44" as "$ .44"), so the optional
 # dot is part of the $ figure too.
 _LEDE_DATA_ROW_RE = re.compile(r"\$\s?\.?[\d(]")
+# Batch 183: a $-to-$ range ("$7.50 to $8.00") is a guidance statement,
+# never a table row — a row's values are separate columns. Batch 178
+# guarded only the 81-120 band with this; the <=80 branch and the
+# >=40% density branch still classified short ranges as rows (GPC's
+# 55-char "Reaffirms 2026 Outlook for Adjusted EPS of $7.50 to $8.00"
+# sub-headline; the dense "EPS $7.50 to $8.00"). Shared here so every
+# $-carrying branch uses the same exemption.
+_LEDE_DOLLAR_RANGE_RE = re.compile(r"\$\s?\.?[\d,().]+\s+to\s+\$", re.IGNORECASE)
 _LEDE_FOOTNOTE_TAIL_RE = re.compile(r"\(\w\)$")
 # A table's symbol legend ("NM = not meaningful" — Allstate defines the
 # NM cell value below its Consolidated Highlights table). A short
@@ -822,7 +1397,7 @@ _LEDE_SYMBOL_LEGEND_RE = re.compile(
 # purposes — a spaced "* Foo" is pinned as not-a-footnote-def there — but
 # in the lede a line leading with a footnote glyph is the table's legend,
 # never narrative: "*" is not a bullet lead in this extractor
-# (_BULLET_LEAD_RE is •●–—/-/l only), so no bullet is ever shaped this way.
+# (_BULLET_LEAD_RE is •●–—◾◦/-/l/n), so no bullet is ever shaped this way.
 # Batch 160.
 _LEDE_FOOTNOTE_GLYPH_RE = re.compile(r"^[*†‡]\s+\S")
 # A table-intro sentence (batch 156): "The following table summarizes ..."
@@ -977,6 +1552,38 @@ def _is_lede_asof_date(ln: str) -> bool:
     return bool(_LEDE_ASOF_DATE_RE.match(ln.strip()))
 
 
+_LEDE_SUMMARY_RESULTS_ANCHOR_RE = re.compile(
+    r"^Summary of Financial Results(?:\s*-\s*(.*))?$", re.IGNORECASE
+)
+
+
+def _is_lede_summary_results_title(ln: str) -> bool:
+    """True for AJG's summary-table title: "Summary of Financial
+    Results" plus an optional " - <period>" tail of period/date
+    tokens only ("First Quarter", "Six-Months ended June 30",
+    "Year Ended December 31", the wrapped "Fourth"). The anchor is
+    the guard — no narrative line starts with it, and the tail-token
+    gate keeps a prose continuation ("... for the first quarter")
+    out — so the dated forms are titles even though they carry
+    figures ("June 30", "December 31"). Batch 188."""
+    s = ln.strip()
+    m = _LEDE_SUMMARY_RESULTS_ANCHOR_RE.match(s)
+    if not m:
+        return False
+    tail = (m.group(1) or "").strip()
+    if not tail:
+        return True
+    words = [w.strip(",") for w in tail.split()]
+    if not words or len(words) > 8:
+        return False
+    return all(
+        _LEDE_DATE_TOKEN_RE.match(w)
+        or w.lower() in ("first", "second", "third", "fourth")
+        or re.fullmatch(r"(six|nine|twelve)-months?", w, re.IGNORECASE)
+        for w in words
+    )
+
+
 def _is_lede_table_title(ln: str) -> bool:
     """True for a table's title line: an unterminated, figure-less line
     that pairs a period phrase with table vocabulary ("Non-GAAP Financial
@@ -989,9 +1596,14 @@ def _is_lede_table_title(ln: str) -> bool:
     ("financial measures", "non-gaap", "financial summary"), so a prose
     fragment like "a summary of results for the three months ended"
     fails; bullet-led lines never qualify, so a bullet carrying a period
-    phrase is never mistaken for a title. Batch 159."""
+    phrase is never mistaken for a title. Batch 159. Batch 188: AJG's
+    "Summary of Financial Results - First Quarter" title carries no
+    "ended" period phrase, so the anchored shape above is checked
+    first, before the figure guard (its dated forms carry a day)."""
     if _BULLET_LEAD_RE.match(ln) or ln[:1] in "▪■·○":
         return False
+    if _is_lede_summary_results_title(ln):
+        return True
     if _is_sentence_terminated(ln):
         return False
     if _LEDE_FIGURE_RE.search(ln):
@@ -1017,6 +1629,104 @@ def _is_lede_table_title(ln: str) -> bool:
             "consolidated",
         )
     )
+
+
+def _is_lede_dollar_range_statement(ln: str) -> bool:
+    """True for a guidance-range STATEMENT: a $-to-$ range carried by a
+    label or subject (at least 4 alphabetic words besides "to"). Batch
+    183: GPC's "Reaffirms 2026 Outlook for Adjusted EPS of $7.50 to
+    $8.00" (6 words), AXP's FY2025 guidance line, BBY's "Expects FY25
+    Non-GAAP Diluted EPS of $5.75 to $6.20", Cencora's raised-guidance
+    line. A bare range fragment ("$10.40 to $11.00" — Moody's
+    outlook-table cell flattened onto its own line) has no words and
+    stays a data row: served, it would dangle in the lede as a bare
+    pair of numbers with no subject.
+    """
+    if not _LEDE_DOLLAR_RANGE_RE.search(ln):
+        return False
+    words = [
+        tok
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)?", ln)
+        if tok.lower() != "to"
+    ]
+    return len(words) >= 4
+
+
+_LEDE_PERCENT_RANGE_RE = re.compile(
+    r"\d[\d,.]*\s?%?(?:\s+to\s+|\s+[-–—]\s+|(?<=[\d%])[-–—](?=\d))"
+    r"\d[\d,.]*\s?%",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_percent_range_statement(ln: str) -> bool:
+    """True for a guidance-range STATEMENT in %: a %-to-% range carried
+    by a label or subject (at least 4 alphabetic words besides "to").
+    Batch 252: the %-range mirror of _is_lede_dollar_range_statement.
+    Church & Dwight's "2026 OUTLOOK OF ORGANIC SALES GROWTH OF 3-4%
+    and ADJUSTED EPS GROWTH OF 5-8%" was eaten by _is_lede_data_row's
+    25% branch — _LEDE_FIGURE_RE counts each hyphenated range as two
+    figures ("3", "4%"), so the line reads 4 figures over 14 tokens
+    and ends in a figure. A bare range fragment ("3% to 4%" on its own
+    line — a guidance-table cell) has no words and stays a data row,
+    and a short %-range table row ("Net Sales Growth (0.5%) - 0.5%
+    1.5% - 3.5%") has only 3 words and stays one too: a row's label is
+    short, a statement's subject is not. The range connector is "to",
+    a spaced dash, or a hyphen/dash between two digits (or a % and a
+    digit, "5%-7%") — never the minus of a negative value ("2.02
+    -0.6 %", Fastenal: the dash is spaced from the value on the left
+    and glued to the number on the right, so it is a sign, not a
+    range). A bullet is never a range statement — a bullet-led line
+    ("● ... 5%-7% ...", Edison) is a bullet, served on the budget
+    like any other bullet, not free like a headline-adjacent
+    sub-headline.
+    """
+    if _BULLET_LEAD_RE.match(ln):
+        return False
+    if not _LEDE_PERCENT_RANGE_RE.search(ln):
+        return False
+    words = [
+        tok
+        for tok in re.findall(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)?", ln)
+        if tok.lower() != "to"
+    ]
+    return len(words) >= 4
+
+
+_LEDE_DASH_TOKENS = frozenset({"—", "–", "-"})
+
+
+def _is_lede_dash_value_row(ln: str) -> bool:
+    """True for a flattened table value row whose cells are dash
+    placeholders and figures: "– – 65 33 87 44 0.25 0.13" (AJG 2026).
+    Batch 187: AJG's 2026 summary tables flatten each adjustment row
+    as a label line plus a values line, and the values line starts
+    with dash cells for the empty revenue columns — so _BULLET_LEAD_RE
+    matches it ("– " / "— " lead) and the batch-175 bullet guard in
+    _is_lede_data_row exempted the whole row, which in turn kept its
+    label from _is_lede_table_label (the next line was not a data
+    row). Both the label and the values then filled the 6-line lede
+    budget as fake bullets, starving the CEO quote. The shape is
+    wordless by construction — every token is a dash placeholder or a
+    figure token, the first token is a dash, at least one figure is
+    present — so it can never be a bullet: a bullet always carries
+    words. A dashes-only line (no figure) is a lone bullet marker,
+    not a value row; a terminated line is prose, not a row.
+    """
+    if _is_sentence_terminated(ln):
+        return False
+    tokens = ln.split()
+    if len(tokens) < 2 or tokens[0] not in _LEDE_DASH_TOKENS:
+        return False
+    figures = 0
+    for tok in tokens:
+        if tok in _LEDE_DASH_TOKENS:
+            continue
+        if _is_lede_figure_token(tok):
+            figures += 1
+            continue
+        return False
+    return figures >= 1
 
 
 def _is_lede_data_row(ln: str) -> bool:
@@ -1064,10 +1774,12 @@ def _is_lede_data_row(ln: str) -> bool:
     no $ figure is followed by a scale word, no $-to-$ range (Amex's
     "EPS OF $12.65 TO $13.15"; Cencora's "$17.45 to $17.75" — a range
     is a guidance statement, never a table row), and the line is not a
-    flattened-list bullet ("■"/"◦" are not in _BULLET_LEAD_RE, so the
-    top guard misses them — AIG's "■Net income per diluted share was
-    $0.12 ..." and AWK's "◦2023 weather-normalized earnings of $4.77
-    ..." are bullets). The plain 80-char branch is unchanged — short
+    flattened-list bullet ("■" is not in _BULLET_LEAD_RE, so the top
+    guard misses it — AIG's "■Net income per diluted share was $0.12
+    ..." is a bullet; "◦" joined _BULLET_LEAD_RE in batch 262, so the
+    top guard now catches AWK's "◦2023 weather-normalized earnings of
+    $4.77 ..." and the explicit exclusion below is belt-and-braces for
+    it). The plain 80-char branch is unchanged — short
     rows keep the old behavior, and the repair script's $-row guard
     already uses 120. The $-figure count also accepts the spaced-decimal
     form ("$ .44" — Estée Lauder's "$ .44 $ .91" row), via the optional
@@ -1079,16 +1791,86 @@ def _is_lede_data_row(ln: str) -> bool:
     Trane's Wingdings "l" EPS bullet ("l GAAP continuing EPS of $3.43;
     adjusted continuing EPS* of $3.37, up 21 percent") trips the
     $-figures branch (2 $ figures in 78 chars) without it.
+    Batch 183: the $-to-$ range exemption is hoisted out of the 81-120
+    band to the top of this predicate — a range is a guidance statement
+    at any length, so the <=80 branch and the >=40% density branch
+    (which both returned True for any 2-$ line) no longer eat short
+    guidance sub-headlines. GPC's 55-char "Reaffirms 2026 Outlook for
+    Adjusted EPS of $7.50 to $8.00" and the dense "EPS $7.50 to $8.00"
+    both classified as data rows before this fix. The exemption is a
+    STATEMENT, not any range: _is_lede_dollar_range_statement requires
+    >=4 alphabetic words, so a bare range fragment ("$10.40 to $11.00"
+    — Moody's outlook-table cell on its own line) stays a data row.
+    Batch 187: a dash-led WORDLESS line of dash placeholders and
+    figures ("– – 65 33 87 44 0.25 0.13" — AJG 2026) is a value row,
+    not a bullet, so it is exempt from the batch-175 bullet guard
+    below: _is_lede_dash_value_row runs first and returns True before
+    the guard can refuse it. A bullet always carries words, so the
+    exemption cannot catch a real bullet.
+    Batch 190: a compact period fragment ("4th Q 25", "9 Mths 25" —
+    AJG's flattened summary-table column headers) is not a data row:
+    its two "figures" are a quarter ordinal and a 2-digit year, period
+    labels, not values — but the density rule reads them as figures
+    (2 of 3 tokens) and the line qualifies, so a heading directly
+    above one ("Summary of Financial Results - Fourth Quarter") is
+    misread as a table label by _is_lede_table_label's next-line
+    check. The full-cache survey finds 109 such misfires, all AJG,
+    all table chrome the other rules drop anyway — the misfire is
+    latent today (the batch-188 summary-title branch drops the
+    heading first) — but the predicate is wrong on its face, and the
+    exemption keeps it wrong nowhere else: a fragment is still table
+    residue via the _is_lede_table_line branch added in this batch.
     """
+    if _is_lede_dash_value_row(ln):
+        return True
+    if _is_lede_compact_period_fragment(ln):
+        return False
     if _BULLET_LEAD_RE.match(ln):
         return False
     if _is_sentence_terminated(ln):
         return False
-    figures = _LEDE_FIGURE_RE.findall(ln)
-    if len(figures) < 2:
+    if _is_lede_dollar_range_statement(ln):
         return False
+    if _is_lede_percent_range_statement(ln):
+        return False  # Batch 252: %-range guidance statement (see
+        # _is_lede_percent_range_statement) — the %-range mirror of the
+        # batch-183 $-range exemption above.
+    figures = _LEDE_FIGURE_RE.findall(ln)
     tokens = ln.split()
-    if len(figures) / max(len(tokens), 1) >= 0.4:
+    # Batch 220: value figures exclude a leading bare year (a label
+    # token, not a value — "2024 PAYOUT RATIO OF 58% (3)") and a
+    # trailing parenthesized single-digit/letter footnote key (a footnote
+    # on the value, not a second value). A data row is a label plus
+    # values; a single-value metric line is not a row, so the density
+    # branches below count values, not figure tokens. The key exclusion
+    # is narrow: the key must occur once (a repeated "(2)" is a column
+    # value, not a footnote — batch 159's "Acquisition and Disposition
+    # Impacts — (2) — (2)") and the line must carry a % or $ value for
+    # the key to footnote. The raw count still gates the $-figure
+    # branches: a line with 2 $ figures always has 2 value figures
+    # (a $ figure is never a year or a key).
+    value_figures = len(figures)
+    # Batch 232: a spaced currency marker ("$ 490.0") is the value's
+    # currency, not a word — count a standalone "$" token as a figure
+    # for density. Fastenal's SG&A row reads 4 figures over 11 tokens
+    # (36%, under the 40% bar) and rides the lede; with the $ counted
+    # it reads 5/11 = 45% and is skipped as the data row it is. A "$"
+    # token is never a year or a footnote key, so the exclusions below
+    # still apply unchanged.
+    value_figures += sum(1 for t in tokens if t == "$")
+    if tokens and _LEDE_YEAR_RE.fullmatch(tokens[0].rstrip(",")):
+        value_figures -= 1
+    key = tokens[-1].rstrip(",") if tokens else ""
+    if (
+        re.fullmatch(r"\([0-9a-zA-Z]\)", key)
+        and sum(1 for t in tokens if t.rstrip(",") == key) == 1
+        and (re.search(r"\d[\d,.]*%", ln) or "$" in ln)
+    ):
+        value_figures -= 1
+    value_figures = max(value_figures, 0)
+    if value_figures < 2:
+        return False
+    if value_figures / max(len(tokens), 1) >= 0.4:
         if _LEDE_DATA_ROW_RE.search(ln):
             return True  # $-carrying: the pre-batch-157 behavior
         return len(ln) <= 120  # $-less: short rows only, never mega-lines
@@ -1107,10 +1889,14 @@ def _is_lede_data_row(ln: str) -> bool:
     # else — and a data row is a label plus values, never a "versus" /
     # "greater than" narration, so comparison phrases exempt the line.
     # Batch 160: the ending may be "NM" (see above) and the cap is 120.
+    # Batch 220: the density counts value figures (see above) — a
+    # single-value metric line ("2024 PAYOUT RATIO OF 58% (3)") reads
+    # 1 of 6, not 3 of 6.
     if (
         "$" not in ln
         and len(ln) <= 120
-        and len(figures) / max(len(tokens), 1) >= 0.25
+        and value_figures >= 2
+        and value_figures / max(len(tokens), 1) >= 0.25
         and (
             _LEDE_FIGURE_RE.search(tokens[-1])
             or re.fullmatch(r"\(?NM\)?", tokens[-1], re.IGNORECASE)
@@ -1130,10 +1916,11 @@ def _is_lede_data_row(ln: str) -> bool:
         # Batch 178, extended band (see docstring): bare-number table
         # values only — ends in a figure (never a bare year), no scaled
         # $ figure, no $-to-$ range, and never a flattened-list bullet
-        # ("■"/"◦" bullets are not in _BULLET_LEAD_RE, so the top guard
-        # misses them — AIG's "■Net income per diluted share was $0.12
-        # ..." and AWK's "◦2023 weather-normalized earnings of $4.77
-        # ..." are bullets, not rows). A bare-year ending is prose
+        # ("■" is not in _BULLET_LEAD_RE, so the top guard misses it —
+        # AIG's "■Net income per diluted share was $0.12 ..." is a
+        # bullet; "◦" joined _BULLET_LEAD_RE in batch 262, so the top
+        # guard catches it and the explicit exclusion below is
+        # belt-and-braces for it). A bare-year ending is prose
         # (Eaton's "Fourth quarter earnings per share of $2.35 and
         # record adjusted earnings per share of $2.55, up 24% over
         # 2022"), and a $-to-$ range is a guidance statement (Amex's
@@ -1145,11 +1932,7 @@ def _is_lede_data_row(ln: str) -> bool:
             and ln[:1] not in "▪■·○◦"
             and _is_lede_figure_token(tokens[-1])
             and not _LEDE_YEAR_RE.fullmatch(tokens[-1].rstrip(","))
-            and not re.search(
-                r"\$\s?\.?[\d,().]+\s+to\s+\$",
-                ln,
-                re.IGNORECASE,
-            )
+            and not _LEDE_DOLLAR_RANGE_RE.search(ln)
             and not re.search(
                 r"\$\s?\.?[\d,().]+\s+"
                 r"(?:billions?|millions?|thousands?|trillions?)\b",
@@ -1158,6 +1941,35 @@ def _is_lede_data_row(ln: str) -> bool:
             )
         ):
             return True
+    # Batch 207: a flattened range row — a label plus a bare-number range
+    # ("Straight-lined revenues (75) to (45) —", "Site rental revenues
+    # 3,828 to 3,873 —") with the change column flattened to a trailing
+    # dash. The density rule misses it (the label dilutes the figures
+    # below 40%, and the 25% branch needs a figure ending), and the
+    # trailing dash is the table's empty-change cell, not prose: a
+    # guidance range statement ends in a figure, never a dash, and the
+    # $-to-$ exemption above already keeps $ ranges out. No $ and no %
+    # (a % range is a margin row the density rule catches), at least one
+    # alphabetic word (a bare range fragment is a values line the
+    # density rule catches), exactly one standalone dash token (the
+    # trailing empty-change cell), and the range itself is bare numbers
+    # (optional parens/commas) joined by "to" or an unspaced dash — a
+    # spaced dash is a column separator, not a range connector (SRE's
+    # recon rows read "25 — 25 —", two dash cells, and stay recon rows
+    # under batch 161).
+    if (
+        "$" not in ln
+        and "%" not in ln
+        and len(ln) <= 120
+        and ln.rstrip().endswith(("—", "–", "-"))
+        and len([t for t in ln.split() if t in ("—", "–", "-")]) == 1
+        and re.search(r"[A-Za-z]", ln)
+        and re.search(
+            r"\(?\d[\d,]*\)?(?:\s+to\s+|[–—-])\(?\d[\d,]*\)?",
+            ln,
+        )
+    ):
+        return True
     return False
 
 
@@ -1266,17 +2078,143 @@ def _is_lede_recon_row(ln: str) -> bool:
     return False
 
 
+def _is_table_intro_only(ln: str) -> bool:
+    """True when a line IS a table-intro sentence, not a paragraph that
+    merely opens with one. Batch 181: Emerson's Q3 FY2025 guidance
+    paragraph opens "The following table summarizes the fiscal year
+    2025 guidance framework." and continues in the same flattened
+    line with real guidance prose ("Net and underlying sales guidance
+    of ~3.5% ... GAAP EPS is now expected to be ~$4.08 ...") — the
+    batch-156 branch dropped the whole paragraph as table residue,
+    and the guidance-table rows leaked into the freed budget instead.
+    The batch-157 trailing rule already knew this ("Emerson's guidance
+    paragraph ... must never be dropped") but only applied at the
+    tail; the lede-loop branch had no such guard. The guard is the
+    remainder after the intro sentence's first terminator: empty
+    (a standalone intro, terminated or not — Cigna's unterminated
+    "The following table summarizes The Cigna Group's medical
+    customers") means table-only; a remainder carrying a $ figure is
+    substantive prose. Measured over the cache: 219 of 220 intro
+    lines are single-sentence, exactly 1 (Emerson Q3 FY2025) carries
+    $ prose after the intro, 0 are multi-sentence without $. The
+    remainder test errs toward prose: a decimal inside the intro
+    sentence only lengthens the remainder, so a $ there still saves
+    the line."""
+    m = _TABLE_INTRO_RE.search(ln)
+    if not m:
+        return False
+    end = len(ln)
+    for punct in (".", "!", "?"):
+        idx = ln.find(punct, m.end())
+        if idx != -1:
+            end = min(end, idx)
+    rest = ln[end + 1 :].strip() if end < len(ln) else ""
+    return not rest or "$" not in rest
+
+
+_LEDE_SINGLE_VALUE_RE = re.compile(r"~?\(?\$\s?\.?[\d,().]+[BMK]?\)?$")
+_LEDE_SINGLE_VALUE_VERB_RE = re.compile(
+    r"\b(was|were|is|are|has|have|had|increased|decreased|rose|fell|"
+    r"grew|represents|represent|included|includes|generated|totaled|"
+    r"reached|amounted|delivered|came|declined|improved|reflects|"
+    r"reflected|remains|remained)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_single_value_row(ln: str) -> bool:
+    """True for a guidance/balance-sheet table row carrying exactly one
+    $ value: a metric label plus a single bare amount ("Operating Cash
+    Flow ~$3.6B", "Free Cash Flow ~$3.2B", "Discrete taxes related to
+    AspenTech transaction $0.09", "IEEPA tariff refunds - ~($0.11)").
+    The data-row predicate needs 2 figures, so these single-column rows
+    leaked into the lede once the batch-178 budget freeing reached
+    Emerson's guidance table (and American's cash-flow table the same
+    way). Guards: unterminated and bullet-free (a bullet is narrative);
+    the line must END in the bare $ value (a prose $ figure carries a
+    scale word — "$135.7 million" — or "per share" after it); the label
+    is 2-12 words with no mid-line sentence boundary; and the label
+    carries no finite verb and does not end in a preposition ("to",
+    "of") — the shapes that separate a table row from a wrapped
+    summary line ("FULL-YEAR EARNINGS PER SHARE INCREASED 14% TO
+    $11.21", "GAAP Diluted EPS Increased 2% to $1.13", "BOOK VALUE
+    PER SHARE OF $99.08", "Adjusted* Diluted EPS of $2.58",
+    "reported net income of $374.2", "Board of Directors Declares
+    Quarterly Cash Dividend of $0.59"). A table-row label ends in a
+    noun, never a preposition. Measured over the cache: 140
+    single-value candidates end in "of", every one sampled a prose
+    summary line; "at" and "for" have zero attested candidates, so
+    they are not in the guard. Participles common in
+    table labels ("provided", "reported", "related", "adjusted") are
+    deliberately NOT in the verb list, so "Net cash provided by
+    operating activities $ 3,803" and "Gross profit, as reported
+    $ 2,917" still drop. A lone value ("$50.2 billion", no label) is
+    not a row — the label floor keeps the batch-157 lone-value rule.
+    Batch 181."""
+    if _BULLET_LEAD_RE.match(ln) or _is_sentence_terminated(ln):
+        return False
+    if len(ln) > 120:
+        return False
+    if len(re.findall(r"\$\s?\.?[\d(]", ln)) != 1:
+        return False
+    m = _LEDE_SINGLE_VALUE_RE.search(ln)
+    if not m:
+        return False
+    label = ln[: m.start()].strip()
+    words = label.split()
+    if not 2 <= len(words) <= 12:
+        return False
+    if re.search(r"[.!?]\s", label):
+        return False
+    if _LEDE_SINGLE_VALUE_VERB_RE.search(label):
+        return False
+    if words[-1].lower() in {"to", "of"}:
+        return False
+    return True
+
+
+def _is_lede_caps_metric_line(ln: str) -> bool:
+    """True for an all-caps key-metric line ending in a footnote key:
+    "2024 PAYOUT RATIO OF 58% (3)". The line is a complete metric
+    statement — a multi-word all-caps label, exactly one digit-% value,
+    and a single-digit/letter footnote key on that value — not table
+    residue. The corpus attests exactly this shape and nothing else
+    like it (11 lines over 1,699 exhibits, all Citi payout ratios, all
+    with a (3)/(5) key); bare values ("20.9% (a)"), threshold labels
+    ("Less than 60% (5)"), and security descriptions ("Series J 8.375%
+    Cumulative Redeemable (4)") are mixed case and stay residue. No $
+    variant is attested, so a $ figure disqualifies the line. Batch 220.
+    """
+    words = ln.split()
+    if len(words) > 6 or "$" in ln:
+        return False
+    if not _LEDE_FOOTNOTE_TAIL_RE.search(ln):
+        return False
+    if len(re.findall(r"\d[\d,.]*%", ln)) != 1:
+        return False
+    letters = re.sub(r"[^A-Za-z ]", "", ln)
+    if not letters or letters != letters.upper():
+        return False
+    return len(letters.split()) >= 3
+
+
 def _is_lede_table_line(ln: str) -> bool:
     """True for a lede line that is table residue, not narrative."""
-    if _BULLET_LEAD_RE.match(ln):
+    # Batch 187: a dash-led wordless value row ("– – 65 33 87 44
+    # 0.25 0.13" — AJG 2026) is a table row, not a bullet, so it is
+    # exempt from this guard exactly as it is from the batch-175
+    # guard in _is_lede_data_row. A real bullet always carries words.
+    if _BULLET_LEAD_RE.match(ln) and not _is_lede_dash_value_row(ln):
         return False
-    # Batch 156: a table-intro sentence ("The following table summarizes
     # ...") is table residue even though it is a terminated sentence — it
     # is the table's own preamble, and without this it consumes a lede
     # line after a rejected table section. Only "summarizes" is matched:
     # "sets forth" is genuine prose in the wild (Crown Castle Q1 2026),
-    # so the verb is not generalized.
-    if _TABLE_INTRO_RE.search(ln):
+    # so the verb is not generalized. Batch 181: only when the intro
+    # sentence IS the line — a paragraph that opens with the intro and
+    # continues with real prose (Emerson's guidance paragraph) is
+    # content, not residue; _is_table_intro_only is the guard.
+    if _is_table_intro_only(ln):
         return True
     # Batch 162: a bare numbered footnote ("1) See Table A ...") is
     # table residue even though it is a terminated sentence — checked
@@ -1294,6 +2232,14 @@ def _is_lede_table_line(ln: str) -> bool:
         return True
     if _LEDE_BARE_UNITS_LOWER_RE.match(ln):
         return True
+    # Batch 182: a bare "Dollars in millions," units line (CSX's split
+    # declaration) and its "except per share amounts ..." continuation
+    # glued to the column labels — both are the table's own header,
+    # never narrative.
+    if _LEDE_BARE_UNITS_DOLLARS_RE.match(ln):
+        return True
+    if _is_lede_split_units_continuation(ln):
+        return True
     # Batch 180: a "% change" table footnote glued onto a quote
     # attribution (Visa) — the footnote and the period header are the
     # table's own text, and the attribution without its quote is a
@@ -1309,6 +2255,14 @@ def _is_lede_table_line(ln: str) -> bool:
         return True
     if _is_lede_table_heading(ln) or _is_lede_period_header(ln):
         return True
+    # Batch 190: a compact period fragment ("4th Q 25" — AJG's
+    # flattened summary-table column header) is table residue even
+    # though it is no longer a data row (batch 190 exempts fragments
+    # from _is_lede_data_row, which was the only branch catching it
+    # here: period_header and table-cell both read False on it). A
+    # whole line that is only the fragment is never prose.
+    if _is_lede_compact_period_fragment(ln):
+        return True
     if _is_lede_date_header(ln):
         return True
     if _is_lede_asof_date(ln):
@@ -1322,6 +2276,11 @@ def _is_lede_table_line(ln: str) -> bool:
     # runs long and its values are sparse, so it reads as prose to the
     # density rules but is still a table row.
     if _is_lede_recon_row(ln):
+        return True
+    # Batch 181: a single-value table row (one $ figure — Emerson's
+    # guidance table, American's cash-flow table) is residue too; the
+    # data-row predicate needs 2 figures, so these leaked.
+    if _is_lede_single_value_row(ln):
         return True
     if len(ln) > 60:
         return False
@@ -1340,8 +2299,10 @@ def _is_lede_table_line(ln: str) -> bool:
             return True
     if _looks_like_table_cell(ln):
         return True
+    # Batch 220: an all-caps key-metric line is content, not a footnote
+    # tail — see _is_lede_caps_metric_line.
     if len(words) <= 6 and _LEDE_FOOTNOTE_TAIL_RE.search(ln):
-        return True
+        return not _is_lede_caps_metric_line(ln)
     return False
 
 
@@ -1371,7 +2332,13 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
         return False
     if re.search(r"[.!?]\s", ln):
         return False
-    if _LEDE_FIGURE_RE.search(ln):
+    # Batch 207: a trailing footnote marker ("net(f)", "tax(g)") is not
+    # a figure — _LEDE_FIGURE_RE matches a parenthesized single char,
+    # so the marker alone blocked label recognition (CCI's outlook
+    # table: "Interest expense ... net(f)" above its values row). Strip
+    # single-char parenthesized markers before the figure test; real
+    # figures ($, %, bare numbers, multi-char parens) still refuse.
+    if _LEDE_FIGURE_RE.search(re.sub(r"\(\w\)", " ", ln)):
         return False
     words = ln.split()
     if not words or len(words) > 12 or len(ln) > 120:
@@ -1379,6 +2346,227 @@ def _is_lede_table_label(ln: str, next_ln: str) -> bool:
     return bool(next_ln) and (
         _is_lede_data_row(next_ln) or _is_lede_recon_row(next_ln)
     )
+
+
+def _is_lede_flat_table_label_shape(ln: str) -> bool:
+    """Shape-only half of _is_lede_flat_table_label: a flattened table
+    row's label line — figure-less and unterminated, 2-12 words. The
+    guards mirror _is_lede_table_label (terminated lines are prose; any
+    figure means a data row or a prose fragment; bullets are content; a
+    mid-line sentence boundary is prose), plus a quote-verb veto (a
+    wrapped quote attribution — \"X, Chief Executive Officer, said,\" —
+    is figure-less and unterminated too), a headline-verb veto (a
+    sub-headline, never a row label) and an all-caps veto (same). A
+    colon-ended line is a heading, not a label — the colon-heading skip
+    upstream already handles it, and _is_sentence_terminated counts
+    \":\" as a terminator. Batch 185.
+    """
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if re.search(r"[.!?]\s", s):
+        return False
+    # Batch 207: a footnote marker ("net(f)") is not a figure — same
+    # strip as _is_lede_table_label, so a marker-carrying label below a
+    # header block still reads as a label.
+    if _LEDE_FIGURE_RE.search(re.sub(r"\(\w\)", " ", s)):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 12 or len(s) > 120:
+        return False
+    if s.isupper():
+        return False
+    if _is_lede_table_header(s):
+        return False  # a capital-led metric header is a header, not a
+        # label — the loop's table-header skip handles it upstream.
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    return True
+
+
+_LEDE_COMPACT_PERIOD_FRAGMENT_RE = re.compile(
+    r"^(?:\d+(?:st|nd|rd|th)\s+Q|\d+\s+Mths?)\s+\d{2}(?:\d{2})?$",
+    re.IGNORECASE,
+)
+
+
+def _is_lede_compact_period_fragment(ln: str) -> bool:
+    """True for a compact flattened period fragment: AJG flattens its
+    summary-table column headers one cell per line — "3rd Q 25",
+    "9 Mths 25", "1st Q 26" (ordinal quarter or N months + a 2-digit
+    year; 4-digit years in the later tables). The bare-period and
+    period-header predicates never fire on these — "3rd"/"Q"/"25" are
+    not period words and the year is 2 digits — so a label directly
+    below one was not a flat table label (batch 185) and AJG's orphaned
+    labels ("Net (gains) losses on divestitures", "Effective income
+    tax rate impact") filled the lede budget in 10 quarters. A whole
+    line that is only the fragment is never prose: the full-line match
+    is the guard, and the cache survey attests the shape only in AJG
+    (370 occurrences, all AJG). Batch 186.
+    """
+    return bool(_LEDE_COMPACT_PERIOD_FRAGMENT_RE.match(ln.strip()))
+
+
+def _is_lede_flat_table_label(ln: str, prev_ln: str) -> bool:
+    """True for a flattened table row's label line directly below a table
+    header block. Brown & Brown flattens its reconciliation tables one
+    cell per line, so a label (\"Diluted net income per share\",
+    \"Change in estimated acquisition earn-out payables\") survives
+    _drop_table_fragment_runs — its $-value rows drop as a fragment run,
+    but the 5-6-word label is too long for the heading fold (4 words)
+    and too lowercase-led for the table-header predicate — and the lede
+    loop then collects it as its last budget lines (7 quarters). The
+    label sits directly below the table's header block (date/period
+    header, table header/title/heading, units line, recon heading,
+    bare period fragment, or compact period fragment — batch 186:
+    AJG's "3rd Q 25" / "9 Mths 25" column headers), which is what
+    separates it from a wrapped
+    prose fragment: prose follows prose, never a period header. The
+    previous line must be a header-block line, not another label — a
+    wrapped sub-headline (Apple's "Services revenue reaches new
+    all-time high" below "June quarter records for Revenue and EPS",
+    Estée Lauder's wrapped sub-headlines) looks exactly like a run of
+    labels, so a label-shaped previous line never qualifies. The
+    _is_lede_table_label next-line check cannot see these labels —
+    their values rows were already dropped by the fragment-run dropper,
+    so in lede_lines the next line is the next label, not a data row.
+    Batch 185.
+    """
+    if not _is_lede_flat_table_label_shape(ln):
+        return False
+    prev = prev_ln.strip()
+    if not prev:
+        return False
+    return (
+        _is_lede_date_header(prev)
+        or _is_lede_period_header(prev)
+        or _is_lede_table_heading(prev)
+        or _is_lede_table_header(prev)
+        or _is_lede_table_title(prev)
+        or bool(_TABLE_UNITS_RE.match(prev))
+        or bool(_TABLE_WORD_UNITS_RE.match(prev))
+        or _is_lede_recon_heading(prev)
+        or _is_bare_period_fragment(prev)
+        or _is_lede_compact_period_fragment(prev)
+    )
+
+
+def _is_lede_table_mode_residue(ln: str) -> bool:
+    """True for a line inside a table region the lede loop is skipping
+    past: anything that is not narrative prose. Once the loop has seen
+    a flattened table label (batch 185), the lines that follow are
+    table rows until real prose resumes — a terminated sentence, a
+    bullet, or the boilerplate break — so an unterminated or
+    colon-ended line is residue, however long (a wrapped balance-sheet
+    row, a cash-flow label); a "Note:" line is a footnote even when
+    terminated. Bullets and terminated prose are never residue: a
+    quote or paragraph after the table (CSX) is still collected, which
+    is why this is a skip-and-continue mode and not a break. Batch 185.
+    """
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if re.match(r"note\s*:", s, re.IGNORECASE):
+        return True
+    stripped = s.rstrip().rstrip("”\"'’)]}")
+    if stripped.endswith(":"):
+        return True  # a colon-ended line is a heading, not prose
+    if _is_sentence_terminated(s):
+        # A company-name line ("Brown & Brown, Inc.") ends in a period
+        # that is an abbreviation, not a sentence terminator — it is
+        # residue, not the prose that ends table mode.
+        last = stripped.rsplit(None, 1)[-1].lower().rstrip(".") if stripped else ""
+        if last in {"inc", "corp", "ltd", "co", "llc", "plc", "lp", "llp"}:
+            return True
+        # A flattened multi-column table row joined with "respectively"
+        # ("Treasury stock, at cost 20 shares at 2024, 20 shares at
+        # 2023, respectively.") is terminated but is not prose — the
+        # per-column values are the row, and collecting it leaks a
+        # balance-sheet row into the highlights (BRO 2024-03-31, blast
+        # 185). The year requirement keeps a plain narrative
+        # "..., respectively." sentence (no year) collectible.
+        if stripped.lower().endswith("respectively.") and re.search(
+            r"\b(?:19|20)\d{2}\b", s
+        ):
+            return True
+        return False
+    return True
+
+
+def _lede_wrapped_paragraph_head(run: list[str], ln: str) -> list[str]:
+    """Return the wrapped head lines of the paragraph whose tail is ln,
+    taken from the table-mode residue run — or [] when ln is not the
+    tail of such a paragraph (batch 191).
+
+    Arthur J. Gallagher's pretax paragraph sits inside the summary-table
+    region: its wrapped head lines are unterminated, so the lede loop
+    skips them as table-mode residue, and only the terminated tail is
+    served — a dangling fragment ("income taxes is shown on pages 14
+    and 15.") with no subject. The tail is a lowercase-led continuation
+    of the skipped paragraph, so the whole paragraph can be served by
+    prepending its head — budget-neutral, only the tail counts, so the
+    CEO quote after the paragraph keeps exactly the budget it had.
+
+    The naive alternative (treat lowercase-led terminated lines as
+    residue in table mode) is NOT what this does: that would eat the
+    CEO quote's own wrapped lines once the mode stays on past the
+    paragraph (batch 186 note). This only ever ADDS lines, never
+    removes, and only a coherent paragraph: the run is scanned back
+    from its end — continuations are lowercase-led (a year wrap,
+    "2024, the pretax impact ...", is the one digit-led continuation
+    allowed) — and the first capital-led line is the head. The run
+    usually opens with orphaned table labels ("Total Brokerage & Risk
+    Management, as adjusted *", the batch-185/186 label chains), which
+    the scan passes over because they sit before the head; a label can
+    never BE the head, because the head must end mid-sentence (a wrap
+    tail: trailing comma/dash or conjunction/preposition/article, per
+    _LEDE_WRAP_TAIL_RE) while a label ends in "*" or ")" or a noun.
+    A run with no capital-led head is a paragraph whose true head was
+    consumed by another branch — no join. A colon-ended line, a "Note:"
+    line, a company-name line or a "respectively." row anywhere in the
+    scanned suffix blocks the join, because _is_sentence_terminated
+    counts ":" as terminal and those lines are headings or table rows,
+    not paragraph wraps.
+    """
+    tail = ln.strip()
+    if len(tail) < 20 or not tail[0].islower():
+        return []  # a capital-led tail starts a new paragraph
+    if not _is_sentence_terminated(tail):
+        return []
+    if "“" in tail or "”" in tail or '"' in tail:
+        return []  # a quote tail belongs to a quote, not this paragraph
+    i = len(run) - 1
+    while i >= 0:
+        w = run[i].strip()
+        if len(w) < 40 or _is_sentence_terminated(w):
+            return []
+        if "“" in w or "”" in w or '"' in w:
+            return []
+        if w[0].islower() or re.match(r"\d{4},", w):
+            i -= 1
+            continue
+        break  # first capital-led line is the head candidate
+    if i < 0:
+        return []
+    head = run[i].strip()
+    if not head[0].isupper():
+        return []
+    if not _LEDE_WRAP_TAIL_RE.search(head):
+        return []  # a label ends in "*" or ")" or a noun, never mid-sentence
+    return run[i:]
+
+
+def _is_lede_nongaap_section_heading(ln: str) -> bool:
+    """True for a bare "Non-GAAP Financial Measures" section heading.
+    The definitions prose under it is boilerplate, never highlights —
+    a supplement packet (EOG) whose TOC and tables fill the lede would
+    otherwise serve the definitions once table mode skips the tables.
+    Only the bare heading qualifies (optional trailing colon): a
+    sentence that merely mentions non-GAAP measures is prose. Batch 185.
+    """
+    return ln.strip().rstrip(":").strip().lower() == "non-gaap financial measures"
 
 
 def _is_lede_table_tail_continuation(ln: str) -> bool:
@@ -1398,6 +2586,30 @@ def _is_lede_table_tail_continuation(ln: str) -> bool:
     )
 
 
+def _is_lede_caps_heading(ln: str) -> bool:
+    """True for an all-caps section heading ("BEAUTY GAINS AND
+    OPERATIONAL HIGHLIGHTS3") — the heading whose bullets the budget
+    never reached. A continuation of the unfinished item the overrun
+    exists to finish is a sentence or a quote, never an entirely
+    uppercase line: sentences and quotes in these releases are
+    mixed-case, and a figure line is content, not a heading. Guards:
+    short (a wrapped heading is a paragraph, not a label), not
+    sentence-terminated, no $/% figures, not bullet-led. Trailing
+    footnote digits ("HIGHLIGHTS3") do not disqualify — they ride the
+    heading the same way they ride the batch-177 table headers.
+    Batch 263."""
+    s = ln.strip()
+    if not s or len(s) > 90:
+        return False
+    if _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    return s.isupper() and any(c.isalpha() for c in s)
+
+
 def _is_bare_highlights_heading(ln: str) -> bool:
     """True for a dangling section heading at the lede tail ("Additional
     Financial Highlights:") — the heading whose bullets the budget never
@@ -1415,7 +2627,12 @@ def _is_bare_highlights_heading(ln: str) -> bool:
 # A horizontal-rule line: a flattened <hr> or a row of underscores/dashes
 # in the exhibit (Meta's releases carry a 36-underscore rule between the
 # Highlights bullets and the footnote). It is never content. Batch 157.
-_RULE_LINE_RE = re.compile(r"^([_\-*=])\1{7,}$")
+_RULE_LINE_RE = re.compile(r"^(?:([_\-*=])\1{7,}|#+(\s+#+)*)$")
+# Batch 182: the second alternative is a hash separator — Amex
+# flattens its "###" end-of-release marker as the line "# # #",
+# which was the tail of every Amex highlights block (5 quarters).
+# A line of nothing but "#" (spaced or not) is a separator, never
+# content; the final-assembly filter strips it for both paths.
 
 # A table-intro sentence standing alone as a line ("The following table
 # summarizes the key financial performance measures for the third quarter
@@ -1467,11 +2684,23 @@ _HEADING_END_WORDS = frozenset(
 )
 
 
-def _is_trailing_heading(ln: str) -> bool:
+def _is_trailing_heading(
+    ln: str,
+    *,
+    end_words: frozenset = _HEADING_END_WORDS,
+    small_words: frozenset = _HEADING_SMALL_WORDS,
+) -> bool:
     """True for a heading-shaped line: short, unterminated, every word
     capitalized (or a number / small word), no figures or currency,
     ending with a section word, and never bullet- or dash-led (a quote
-    attribution is not a heading)."""
+    attribution is not a heading).
+
+    The word sets are parameters so the batch-225 final trim can use
+    its extended sets without touching the shared ones: _is_lede_title_line
+    reads this predicate too, and widening the shared sets would make
+    mid-lede title lines out of table headers ("Fourth Quarter Full Year")
+    and change what the lede collects — a different mechanism from the
+    trailing trim. Batch 225."""
     s = ln.strip()
     if not s or _BULLET_LEAD_RE.match(s):
         return False
@@ -1482,7 +2711,7 @@ def _is_trailing_heading(ln: str) -> bool:
     words = s.split()
     if not words or len(words) > 8:
         return False
-    if words[-1].strip(",;:").lower() not in _HEADING_END_WORDS:
+    if words[-1].strip(",;:").lower() not in end_words:
         return False
     for w in words:
         clean = w.strip(",;:")
@@ -1490,12 +2719,955 @@ def _is_trailing_heading(ln: str) -> bool:
             return False
         if clean[0].isdigit():
             continue
-        if clean in _HEADING_SMALL_WORDS:
+        if clean in small_words:
             continue
         if clean[0].isupper():
             continue
         return False
     return True
+
+
+# Batch-225 extended word sets for the FINAL trailing trim only (see the
+# _is_trailing_heading docstring — the shared sets stay narrow because
+# _is_lede_title_line reads them). End words the attested heading-tail
+# family needs: "work" (Accenture "Revenues by Type of Work"), "year"
+# (Caterpillar "Fourth Quarter Full Year"), "operations" (Digital Realty
+# "Adjusted Funds From Operations"), "liquidity" (Welltower "Capital
+# Activity and Liquidity"), "area" (Autodesk "Net Revenue by Geographic
+# Area"), "metrics" (Expedia "Financial Summary & Operating Metrics")
+# and "share" (Best Buy "Diluted Earnings per Share"). Small words:
+# "by" ("Revenues by Type of Work") and "per" ("Diluted Earnings per
+# Share"). Batch 225.
+_TRAILING_HEADING_END_WORDS = _HEADING_END_WORDS | {
+    "work",
+    "year",
+    "operations",
+    "liquidity",
+    "area",
+    "metrics",
+    "share",
+}
+_TRAILING_HEADING_SMALL_WORDS = _HEADING_SMALL_WORDS | {"by", "per"}
+
+
+# A "Table N." caption ("Table 1. Summary Financial Results Third
+# Quarter Nine Months" — Boeing's tail, 6 quarters): the table's rows
+# never follow in highlights, so the caption dangles. The "Table N."
+# prefix is itself the heading signal, so the end-word requirement is
+# waived — the remainder only has to be heading-shaped (capitalized /
+# small words / numbers / period words, no figures or currency).
+# Batch 225.
+_TRAILING_TABLE_HEADING_RE = re.compile(r"^table\s+\d+[.:]\s+", re.IGNORECASE)
+
+
+def _is_trailing_table_heading(ln: str) -> bool:
+    """True for a "Table N. ..." caption line at the highlights tail."""
+    s = ln.strip()
+    if not s or s.endswith((".", "!", "?", "…")):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    m = _TRAILING_TABLE_HEADING_RE.match(s)
+    if not m:
+        return False
+    words = s.split()
+    if len(words) > 12:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _TRAILING_HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+# Words a lowercase-led table caption may consist of ("Preliminary,
+# unaudited results" — AEP's tail; "Overall financial results" —
+# J&J's). A closed set on attested data: a wrapped prose fragment
+# ending in "results" ("... delivered strong quarterly results")
+# is not in it, because it carries a verb or other words. Batch 225.
+_TRAILING_CAPTION_RESULTS_WORDS = frozenset(
+    {"preliminary", "unaudited", "overall", "financial", "results"}
+)
+
+
+def _is_trailing_caption_results(ln: str) -> bool:
+    """True for a short lowercase-led caption ending in "results"."""
+    s = ln.strip()
+    if not s or s.endswith((".", "!", "?", "…")):
+        return False
+    if "$" in s or "%" in s or any(ch.isdigit() for ch in s):
+        return False
+    words = [w.strip(",;:") for w in s.split()]
+    if not words or len(words) > 4:
+        return False
+    if words[-1].lower() != "results":
+        return False
+    return all(w.lower() in _TRAILING_CAPTION_RESULTS_WORDS for w in words)
+
+
+def _is_trailing_heading_tail(ln: str) -> bool:
+    """True for any trailing-heading shape the final cleanup drops.
+
+    Batch 225: the heading-tail family the batch-157 test missed —
+    the plain heading test (now with the batch-225 end/small words),
+    a "Table N." caption, a lowercase-led results caption, and a
+    heading carrying one trailing parenthetical: a GAAP marker
+    ("Third Quarter Total Company Results (GAAP)", Colgate), a units
+    note ("Financial Summary & Operating Metrics (In millions except
+    per share amounts)", Expedia) or a segment list ("Household
+    (Bags and Wraps; Cat Litter; Grilling)", Clorox — a bare label
+    plus a semicolon list). The parenthetical branch strips exactly
+    one trailing group and re-tests the base, so a quote attribution
+    or a prose line with parens never qualifies: the base must itself
+    be heading-shaped, or a single capitalized label word.
+
+    Batch 226: a trailing " - <period> <year>" suffix is stripped
+    first and the base re-tested ("Financial Summary & Operating
+    Metrics (In millions, except per share amounts) - Fourth Quarter
+    2023", Expedia — the title dangles once its table rows are
+    trimmed, and the suffix alone kept the heading test from firing).
+    """
+    s = ln.strip()
+    m = _TRAILING_PERIOD_SUFFIX_RE.match(s)
+    probe = m.group(1).strip() if m else s
+    if _is_trailing_heading(
+        probe,
+        end_words=_TRAILING_HEADING_END_WORDS,
+        small_words=_TRAILING_HEADING_SMALL_WORDS,
+    ):
+        return True
+    if _is_trailing_table_heading(probe):
+        return True
+    if _is_trailing_caption_results(probe):
+        return True
+    if not probe.endswith(")"):
+        return False
+    m = re.match(r"^(.*?)\s*\([^()]*\)\s*$", probe)
+    if not m:
+        return False
+    base = m.group(1).strip()
+    if not base:
+        return False
+    if _is_trailing_heading(
+        base,
+        end_words=_TRAILING_HEADING_END_WORDS,
+        small_words=_TRAILING_HEADING_SMALL_WORDS,
+    ):
+        return True
+    if ";" in probe and re.fullmatch(r"[A-Z][A-Za-z'&-]*", base):
+        return True
+    return False
+
+
+_TRAILING_COMPANY_SUFFIXES = frozenset(
+    {
+        "inc.",
+        "corp.",
+        "corporation",
+        "company",
+        "ltd.",
+        "co.",
+        "llc",
+        "group",
+        "holdings",
+        "n.v.",
+        "s.a.",
+    }
+)
+
+
+def _is_trailing_company_signature(ln: str) -> bool:
+    """True for a bare company-name signature at the tail of a highlights
+    body (batch 194): a short line of capitalized words ending in a
+    corporate suffix ("CarMax, Inc." — the page-2 header of CarMax's
+    release, pulled in when the "-more-" skip freed a section slot).
+    A prose sentence ending in a suffix ("... approved by Apple Inc.")
+    fails on its lowercase words; a quote attribution fails on length
+    and on its lowercase words too. The trim only ever pops the last
+    line, so a mid-text company name is untouched."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not words or len(words) > 6:
+        return False
+    if words[-1].strip(",;:").lower() not in _TRAILING_COMPANY_SUFFIXES:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+# Batch 226: the table-residue tail class — stored/live highlights
+# ending on a flattened table row or label with no heading shape
+# (BlackRock/Berkshire row labels, Aon's units+period header, AEP's
+# all-caps page footer, Expedia's metric rows). _clean_highlights_result's
+# trailing trim is the single final-assembly point, so the predicates
+# live here, not in the shared lede helpers: _is_lede_table_line itself
+# is NOT consulted — its 262 stored-tail matches include genuine
+# content (Cencora's "5% to 7% growth $285.0B" guidance fragment,
+# Centene's "GAAP diluted EPS $ 1.36" single-value row, JPMorgan's
+# truncated prose), because the lede loop skips a line to free budget
+# for later lines while the final trim drops it for good. Each
+# predicate below drops only furniture, and the full-cache blast is
+# the arbiter for every one of them.
+_TRAILING_ROW_LABEL_END_WORDS = frozenset(
+    {
+        "shareholders",
+        "interests",
+        "revenue",
+        "revenues",
+        "income",
+        "earnings",
+        "equity",
+        "assets",
+        "liabilities",
+        "expenses",
+        "costs",
+        "sales",
+        "profit",
+        "margin",
+        # Batch 226 re-blast: "Net earnings per average equivalent
+        # Class A Share" (Berkshire) — a per-share row label, not a
+        # prose tail; the $ veto still keeps figure-carrying lines
+        # ("...dividends per common share and $0.42...") out.
+        "share",
+    }
+)
+_TRAILING_HEADER_ORPHAN_WORDS = frozenset(
+    {
+        "revenues",
+        "stock",
+        "split",
+        "impact",
+        "margin",
+        "op",
+        "gaap",
+        "non-gaap",
+        "adj",
+        "adjusted",
+    }
+)
+_TRAILING_UNITS_PHRASE_RE = re.compile(
+    r"in\s+(millions|thousands|billions)|except\s+per\s+share|"
+    r"except\s+percentages|\(millions|\(in\s+millions",
+    re.IGNORECASE,
+)
+_TRAILING_FIGURE_RANGE_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*%\s+to\s+\d+|"
+    r"\$\s?[\d,]+(?:\.\d+)?\s*(?:billions?|millions?|thousands?)?\s+to\s+\$"
+)
+# A table title's trailing period suffix ("Financial Summary &
+# Operating Metrics (In millions, except per share amounts) - Fourth
+# Quarter 2023", Expedia): the suffix is stripped and the base is
+# re-tested as a heading. Batch 226.
+_TRAILING_PERIOD_SUFFIX_RE = re.compile(
+    r"^(.*?)\s+-\s+(?:(?:First|Second|Third|Fourth)\s+Quarter|Full\s+Year|Q[1-4])"
+    r"\s+(?:19|20)\d\d\s*$",
+    re.IGNORECASE,
+)
+# Period words the shared _LEDE_PERIOD_TOKEN_RE lacks ("nine",
+# "months", "ended"): the final trim's own period-header vocabulary
+# — kept local so the lede loop's period header stays narrow.
+# Batch 226. Month names, day numbers and "year-to-date" join in
+# the batch-226 re-blast: AEP's flattened earnings table ends on
+# "Fourth Quarter ended December 31 Year-to-date ended December 31"
+# once its rows are trimmed, and that line is a period header with
+# no year to anchor it — the year lives on the popped line below.
+_TRAILING_PERIOD_WORDS = frozenset(
+    {
+        "nine",
+        "three",
+        "six",
+        "twelve",
+        "month",
+        "months",
+        "ended",
+        "years",
+        "quarters",
+        "variance",
+        "year-to-date",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    }
+)
+# Bare ordinal/period fragments ("Third Quarter", "First Quarter"):
+# a table's period header flattened onto one line with no year or
+# month to anchor it. Every word must be a period word — a prose
+# tail ("Third Quarter ended September 30, 2025 ...") carries a
+# month and digits, so it never qualifies. Batch 226 re-blast.
+_TRAILING_FRAGMENT_WORDS = frozenset(
+    {
+        "first",
+        "second",
+        "third",
+        "fourth",
+        "three",
+        "six",
+        "nine",
+        "twelve",
+        "quarter",
+        "quarters",
+        "half",
+        "year",
+        "years",
+        "month",
+        "months",
+        "ended",
+        "full",
+    }
+)
+
+
+def _is_trailing_row_label(ln: str) -> bool:
+    """True for a verbless financial-statement row label at the tail
+    ("Net earnings attributable to Berkshire shareholders", Berkshire;
+    "...attributable TO noncontrolling interests", BlackRock — the
+    label's values row was already dropped, so the label dangles;
+    "Adjusted1 operating income as a % of revenue", Best Buy).
+    Guards: not bullet-led, not terminated, no $ (a value-carrying
+    line is content), 2-14 words, ends in a closed set of statement
+    nouns, no standalone figure (a footnote digit glued to a word,
+    "Adjusted1", and a bare "%" in "as a % of revenue" are not
+    figures), no headline/quote verb, no mid-line sentence boundary.
+    A genuine bullet is terminated or figure-carrying, so it never
+    qualifies; a wrap fragment ends on a function word, not a
+    statement noun. Batch 226. Batch 227: a row label glued to its
+    column qualifier ("...attributable TO noncontrolling interests -
+    Consolidated sponsored investment products", BlackRock) — a short
+    " - <qualifier>" (1-6 words, no digits/$/%) is stripped and the
+    base is re-tested; every guard below runs on the base.
+    """
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s:
+        return False
+    base = s
+    if " - " in s:
+        head, qual = s.rsplit(" - ", 1)
+        qwords = qual.split()
+        if 1 <= len(qwords) <= 6 and not re.search(r"[\d$%]", qual):
+            base = head
+    words = base.split()
+    if not 2 <= len(words) <= 14 or len(base) > 140:
+        return False
+    if words[-1].strip(",;:").lower() not in _TRAILING_ROW_LABEL_END_WORDS:
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if re.fullmatch(r"[\d,]+(?:\.\d+)?%?", clean):
+            return False
+        if "%" in clean and clean != "%":
+            return False
+        if re.search(r"\d", clean) and not re.fullmatch(r"[A-Za-z]+[0-9]", clean):
+            return False
+    if re.search(r"[.!?]\s", base):
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(base) or _LEDE_QUOTE_VERB_RE.search(base):
+        return False
+    return True
+
+
+def _is_trailing_units_period_header(ln: str) -> bool:
+    """True for a units declaration glued to its period columns
+    ("(millions, except percentages and per share data) 2026 2025
+    Change 2026 2025 Change", Aon; "In millions, except per share
+    amounts 2024 2023 Change", CVS; "In thousands, except per share
+    data (unaudited) 2025 2024 % Change", MSCI) or a bare units
+    declaration the bare-units regexes miss ("In millions" alone,
+    Kraft Heinz — the capital form needs ", except ... data";
+    "(Amounts in thousands, except per share data)", W.R. Berkley —
+    the parenthesized form; "In millions, except per share data
+    (unaudited)", MSCI — the "(unaudited)" suffix). Guards: not
+    bullet-led, not terminated, a units phrase must be present, and
+    either 2+ years/dates or a Change word follows it, or the line IS
+    only the declaration (any leftover words must be "amounts",
+    "data" or "information"). A prose sentence that merely mentions
+    units ("In billions, ... revenue grew 8%") carries other words
+    after the phrase, so both branches keep it out. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if not _TRAILING_UNITS_PHRASE_RE.search(s):
+        return False
+    years = re.findall(r"\b(?:19|20)\d\d\b", s)
+    dates = re.findall(
+        r"\b(?:January|February|March|April|May|June|July|August|September|"
+        r"October|November|December)\s+\d{1,2},\s*(?:19|20)\d\d\b",
+        s,
+    )
+    has_change = bool(re.search(r"\bchange\b|% chg|% change", s, re.IGNORECASE))
+    if len(years) >= 2 or len(dates) >= 2 or (years and has_change):
+        return True
+    rest = re.sub(r"\(unaudited\)", " ", s, flags=re.IGNORECASE)
+    rest = _TRAILING_UNITS_PHRASE_RE.sub("", rest)
+    rest = re.sub(r"[(),;]", " ", rest)
+    leftover = {w.lower() for w in rest.split()}
+    # An empty leftover is the bare declaration itself ("In millions").
+    return leftover <= {"amounts", "data", "information"}
+
+
+def _is_trailing_caps_line(ln: str) -> bool:
+    """True for a short all-caps verbless line at the tail ("AMERICAN
+    ELECTRIC POWER" — AEP's page footer, served after the bullets
+    when the table below it is cut). Guards: 2-5 words, no digits/$/%,
+    not terminated, not bullet-led, no headline/quote verb. A genuine
+    all-caps sub-headline carries a verb ("MAINTAINS FISCAL YEAR
+    SALES ..."), so the verb veto is load-bearing. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if re.search(r"[\d$%]", s):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 5:
+        return False
+    if not s.isupper():
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    return True
+
+
+def _is_trailing_table_data_row(ln: str) -> bool:
+    """True for a table data row at the tail: a label plus 2+ period
+    values ("Booked room nights 97.4 89.3 9%", Expedia; "Organic
+    Sales Growth +1.4 %", Colgate; "Enterprise $ 13,814 $ 13,948
+    $ 41,691 $ 41,528", Best Buy; "GAAP 0.64 1.01 (0.37) 2.55 1.78
+    0.77", AEP). _is_lede_data_row supplies the density rule; the
+    final trim adds three guards the lede loop does not need. (1) A
+    flattened-list bullet ("◦ US commercial customer count grew 37%
+    ... to 181 customers in Q3 2023", Palantir — a real bullet the
+    25%-density branch reads as a row) is never a row: "▪■·○◦" are
+    not in _BULLET_LEAD_RE, so the refusal is explicit here. (2) The
+    density floor is 40%, not the 25% branch: a $-less prose sentence
+    ending in a figure ("...from 132 customers in Q3 2022 to 181
+    customers in Q3 2023", 26%) is prose, while every attested row
+    is >=40% (Colgate's "Organic Sales Growth +1.4 %" sits exactly
+    on the floor); the 25%-branch shapes (3-4-word labels at 33%)
+    stay unhandled at the tail rather than risk eating prose.
+    (3) The line must carry a label word (a bare value row — "8.9 %
+    8.5 %", Centene; "$2.65 17% $9.73 17%", Visa — is a metric
+    value, not a row, and its figures appear nowhere else) and must
+    not be a range statement ("5% to 7% growth $285.0B", Cencora —
+    a guidance fragment; the $-to-$ range is already exempt inside
+    _is_lede_data_row). Batch 226."""
+    if not _is_lede_data_row(ln):
+        return False
+    if ln[:1] in "▪■·○◦":
+        return False
+    if _TRAILING_FIGURE_RANGE_RE.search(ln):
+        return False
+    figures = _LEDE_FIGURE_RE.findall(ln)
+    tokens = ln.split()
+    value_figures = len(figures)
+    if tokens and _LEDE_YEAR_RE.fullmatch(tokens[0].rstrip(",")):
+        value_figures -= 1
+    key = tokens[-1].rstrip(",") if tokens else ""
+    if (
+        re.fullmatch(r"\([0-9a-zA-Z]\)", key)
+        and sum(1 for t in tokens if t.rstrip(",") == key) == 1
+        and (re.search(r"\d[\d,.]*%", ln) or "$" in ln)
+    ):
+        value_figures -= 1
+    value_figures = max(value_figures, 0)
+    if value_figures < 2 or value_figures / max(len(tokens), 1) < 0.4:
+        return False
+    for tok in tokens:
+        clean = tok.strip(",;:")
+        if re.fullmatch(r"[A-Za-z]{2,}", clean):
+            return True
+    return False
+
+
+def _is_trailing_period_header(ln: str) -> bool:
+    """True for a flattened period header the shared predicate misses:
+    every word is a period token and a year is present ("First Nine
+    Months 2026", Aon — "nine"/"months" are not in
+    _LEDE_PERIOD_TOKEN_RE, so _is_lede_period_header reads False).
+    A month name plus a day number anchors the header instead of a
+    year ("Fourth Quarter ended December 31 Year-to-date ended
+    December 31", AEP — the year lives on the popped line below).
+    The widened vocabulary is LOCAL to the final trim: the lede
+    loop's period header stays narrow (batch 225). Batch 226."""
+    words = ln.split()
+    if not 2 <= len(words) <= 10:
+        return False
+    has_year = any(re.fullmatch(r"\d{4}", w.strip(",;:")) for w in words)
+    has_month_day = any(
+        w.strip(",;:").lower() in _TRAILING_PERIOD_WORDS
+        and w.strip(",;:").lower()
+        in {
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+        }
+        for w in words
+    ) and any(
+        re.fullmatch(r"\d{1,2}", w.strip(",;:")) for w in words
+    )
+    if not (has_year or has_month_day):
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if re.fullmatch(r"\d{4}", clean):
+            continue
+        if re.fullmatch(r"\d{1,2}", clean):
+            continue
+        if _LEDE_PERIOD_TOKEN_RE.match(clean):
+            continue
+        if clean.lower() in _TRAILING_PERIOD_WORDS:
+            continue
+        return False
+    return True
+
+
+def _is_trailing_table_header_orphan(ln: str) -> bool:
+    """True for a dangling table header at the tail: a period header
+    ("Full Year 2024", Boeing; "Fiscal 2026 Fiscal 2025", FedEx),
+    a table header ("Metric Q1 2025 Q1 2024 Δ Y/Y", Expedia), a bare
+    period fragment ("Six Months", "Ended", BlackRock — batch 174),
+    a short header orphan of closed vocabulary ("Revenues",
+    Accenture; "Stock Split", Arista; "Impact", eBay; "GAAP
+    Non-GAAP", Intuit), or a letter-less, digit-less junk line
+    ("\\\\", Comcast; "¹", General Mills; "◾", Goldman). Guards:
+    not bullet-led, not terminated, no $ or % in the orphan branch.
+    A bare value line ("7.6 %", Centene) carries a digit, so the junk
+    branch never eats it. Batch 226."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if _is_lede_period_header(s) or _is_lede_table_header(s):
+        return True
+    if _is_trailing_period_header(s):
+        return True
+    if _is_bare_period_fragment(s):
+        return True
+    words = s.split()
+    if len(words) <= 3 and all(
+        w.strip(",;:").lower() in _TRAILING_FRAGMENT_WORDS for w in words
+    ):
+        return True
+    if "$" in s or "%" in s:
+        return False
+    if len(words) <= 2 and not re.search(r"\d", s):
+        if all(w.strip(",;:").lower() in _TRAILING_HEADER_ORPHAN_WORDS for w in words):
+            return True
+    if not re.search(r"[A-Za-z0-9]", s):
+        return True
+    return False
+
+
+# Batch 227: the wrap-fragment tail class — stored/live highlights ending
+# mid-sentence on a wrapped continuation (General Mills' "market share
+# trends" — the sentence continues "improvement from fiscal 2024
+# levels." on the next source line; Nasdaq's "Annualized Recurring
+# Revenue (ARR)4 of"; Goldman's "...during the second quarter of";
+# Synopsys' "...at the midpoint, including"; Kroger's comma tails;
+# Coinbase's "...than any other company;" after a terminated sentence
+# in the same line; Genuine Parts' "...comparable sales. Segment";
+# Berkshire's "Other-than-temporary impairment of investments in Kraft
+# Heinz and in Occidental" under "Net earnings includes:"). The trim
+# drops the fragment back to the last terminated line (the batch-222
+# precedent: the highlights end clean, just shorter), or truncates
+# the tail line at its last sentence terminator when the fragment
+# follows one in the same line. Bullets without terminal periods are
+# the house style (AGNC's ◦ sub-bullets, AIG's ■ bullets, Palantir's
+# ◦ bullets, WTW's "Adjusted Operating Margin was ...") and are never
+# touched: the fragment tests require a strong unfinished signal
+# (comma/semicolon end, dangling function word, open quote, short
+# lowercase noun phrase) or a verb-less post-terminator fragment.
+# The full-cache blast is the arbiter for every predicate here.
+_TRAILING_DANGLE_WORDS = frozenset(
+    {
+        "of", "and", "to", "in", "for", "with", "per", "on", "as", "at",
+        "by", "the", "a", "an", "including", "that", "which", "who",
+        "from", "or", "into", "after", "before", "during", "through",
+        "under", "between", "while", "than", "then",
+    }
+)
+# Finite verbs a wrap fragment never carries — the headline/quote verb
+# regexes plus copulas and auxiliaries, for the verbless tests below.
+_TRAILING_VERB_WORDS = frozenset(
+    {
+        "is", "was", "were", "are", "be", "been", "being",
+        "has", "have", "had", "will", "would", "can", "could",
+        "may", "might", "must", "shall", "should", "do", "does", "did",
+    }
+)
+# Common finite verbs in highlights prose ("reduced", "increased",
+# "reflected") — the headline regex covers headline verbs only, so a
+# content line with an ordinary verb ("Impairment ... reduced fourth
+# quarter earnings") needs this list to read as verbed, not a label.
+# Adjectival past participles ("acquired", "consolidated") are
+# deliberately excluded: they modify labels, they do not verb them.
+_TRAILING_COMMON_VERBS = frozenset(
+    {
+        "reduced", "increased", "decreased", "grew", "drove", "led",
+        "improved", "declined", "rose", "fell", "reported", "announced",
+        "reflected", "resulted", "totaled", "reached", "exceeded",
+        "generated", "delivered", "achieved", "recorded", "recognized",
+        "incurred", "provided", "included", "represented", "contributed",
+        "benefited", "strengthened", "expanded", "dropped", "gained",
+        "sold", "comprised", "remains", "remain", "continues",
+        "continue", "reflects", "includes", "represents", "totals",
+        "stands", "ended", "grows", "falls", "rises",
+    }
+)
+# Imperatives a post-terminator fragment can legitimately start with
+# ("See page 5 for details") — a fragment starting with one is a
+# complete sentence, never truncated.
+_TRAILING_IMPERATIVE_WORDS = frozenset(
+    {
+        "see", "refer", "note", "contact", "visit", "call", "click",
+        "read", "find", "go", "check", "view", "access",
+    }
+)
+# Statement-label nouns for the colon-intro list-item rule (Berkshire's
+# impairment label under "Net earnings includes:").
+_TRAILING_LABEL_NOUNS = frozenset(
+    {
+        "impairment", "amortization", "depreciation", "accretion",
+        "divestiture", "acquisition", "restructuring", "settlement",
+        "litigation", "goodwill", "intangible", "intangibles",
+        "investment", "investments", "earnings", "income", "loss",
+        "expense", "expenses", "revenue", "revenues", "cost", "costs",
+        "charge", "charges", "gain", "gains", "proceeds", "liability",
+        "liabilities", "asset", "assets", "equity", "benefit",
+        "benefits", "obligation", "obligations", "reserve", "reserves",
+        "provision", "provisions", "writedown", "write-down",
+        "writeoff", "write-off", "disposal", "merger", "severance",
+        "pension", "dividend", "dividends", "repurchase", "issuance",
+        "redemption", "lease", "royalty", "franchise", "segment",
+        "subsidiary",
+    }
+)
+# Words that make the dot before them an abbreviation, not a sentence
+# terminator ("Inc.", "U.S.", "e.g.") — the truncate search skips
+# those dots, as it does dots preceded by a single initial.
+_TRAILING_ABBREV_WORDS = frozenset(
+    {
+        "inc", "ltd", "corp", "co", "u.s", "u.k", "e.g", "i.e", "vs",
+        "dr", "mr", "mrs", "ms", "st", "no", "jan", "feb", "mar",
+        "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+        "ave", "blvd", "rd", "fig", "approx", "etc", "ex",
+    }
+)
+# A sentence terminator followed by a space + capital/quote (or the
+# line end) — the split point for truncating a tail line at its last
+# terminated sentence. Decimals ("$1.50") fail the lookahead (a digit
+# follows the dot); the abbreviation guard above handles the rest.
+_TRAILING_FRAGMENT_TERMINATOR_RE = re.compile(
+    r"[.!?…][\"”'’\)\]]*(?=\s+[A-Z\"“\(]|$)"
+)
+
+
+def _strip_trailing_footnote_markers(s: str) -> str:
+    """Strip trailing footnote markers for tail-shape tests: asterisks,
+    daggers, a parenthesized letter/digit ("(a)", "(1)"), and a bare
+    footnote digit after a sentence terminator ("...performance. 9",
+    Instacart). A value figure ("11.7%") is never stripped — it is the
+    object of a trailing "of", so stripping it would fake a dangle."""
+    s = s.strip()
+    s = re.sub(r"[*†‡]+\s*$", "", s)
+    s = re.sub(r"\s*\([A-Za-z0-9]{1,2}\)\s*$", "", s)
+    s = re.sub(r"([.!?…])\s+\d{1,2}\s*$", r"\1", s)
+    return s.strip()
+
+
+def _has_trailing_verb(s: str) -> bool:
+    """True when `s` carries a finite verb by the headline/quote verb
+    regexes or the copula/auxiliary set — the verbless test for wrap
+    fragments and colon-intro list-item labels."""
+    if _LEDE_HEADLINE_VERB_RE.search(s) or _LEDE_QUOTE_VERB_RE.search(s):
+        return True
+    words = {w.strip(",;:()").lower() for w in s.split()}
+    return bool(words & (_TRAILING_VERB_WORDS | _TRAILING_COMMON_VERBS))
+
+
+def _prev_line_unfinished(prev: str) -> bool:
+    """True when the previous non-blank line ends mid-sentence (comma,
+    semicolon, or a dangling function word) — the tail line continues
+    a sentence that was already unfinished, so a short lowercase
+    fragment below it is a cut, not a completion. Without this gate
+    the short-fragment branch eats wrapped bullet completions (Cisco's
+    "Product orders ... for the fifth / consecutive quarter" — the
+    previous line ends "fifth", so the fragment stays)."""
+    p = _strip_trailing_footnote_markers(prev.strip())
+    if not p:
+        return False
+    if p.endswith((",", ";")):
+        return True
+    words = [w.strip(",;:()").lower() for w in p.split() if w.strip(",;:()")]
+    return bool(words) and words[-1] in _TRAILING_DANGLE_WORDS
+
+
+def _is_trailing_wrap_fragment(ln: str, prev: str = "") -> bool:
+    """True for an unfinished wrap fragment at the tail: the last line
+    is prose (never a bullet) that ends mid-sentence — on a comma or
+    semicolon, on a dangling function word, with an open quote, or as
+    a short lowercase noun phrase ("market share trends", General
+    Mills — the sentence continues on the next source line).
+    Guards: bullet-led lines are complete items; a terminated line
+    (after the footnote-marker strip — Instacart's "...performance.
+    9", Akamai's "...foreign exchange.*") is complete; a ";" after a
+    headline verb separates headline items, not a sentence ("Affirms
+    Fiscal 2027 Outlook ... 3% to 5%;", Estee Lauder); a trailing
+    value figure is the object of its "of" ("...ROE* of 11.7%", AIG),
+    so figures are never stripped before the dangle test; a lowercase
+    fragment must be short (<=4 words), verb-less and figure-free,
+    and must continue a line that already ends unfinished
+    (_prev_line_unfinished) — a wrapped bullet completion ("share of
+    incremental interest income ...", American Water, 12 words; "of
+    Directors Declares ... $0.59 per share", Dollar General,
+    figure-carrying; "consecutive quarter", Cisco, whose previous
+    line ends "fifth") is a complete item, not a fragment. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    clean = _strip_trailing_footnote_markers(s)
+    if _is_sentence_terminated(clean):
+        return False
+    if clean.endswith(","):
+        return True
+    if clean.endswith(";") and not _LEDE_HEADLINE_VERB_RE.match(clean):
+        # A ";" after a headline verb separates headline items
+        # ("Affirms Fiscal 2027 Outlook ... 3% to 5%;", Estee Lauder
+        # — the next line is another headline, not a continuation), so
+        # it is not a cut; a prose ";" is.
+        return True
+    if clean.count("“") > clean.count("”"):
+        return True
+    words = [w.strip(",;:()").lower() for w in clean.split() if w.strip(",;:()")]
+    if words and words[-1] in _TRAILING_DANGLE_WORDS:
+        return True
+    if (
+        s[:1].islower()
+        and len(words) <= 4
+        and not re.search(r"[\d$%]", s)
+        and not _has_trailing_verb(s)
+        and _prev_line_unfinished(prev)
+    ):
+        return True
+    return False
+
+
+def _truncate_trailing_fragment(ln: str) -> str | None:
+    """Truncate a tail line at its last sentence terminator when the
+    text after it is an unfinished fragment (Coinbase's "...on that
+    transition. Our customers trust us to store more crypto than any
+    other company;" — the ";"-ended clause follows a terminated
+    sentence in the same line; Genuine Parts' "...comparable sales.
+    Segment"). Returns the truncated line, or None when there is no
+    terminator or the post-terminator text is a complete item.
+    The fragment is unfinished when it ends on "," / ";" / a dangling
+    function word, has unbalanced quotes, or is short (<=2 words)
+    with no verb and no figure. A ";" after a headline verb separates
+    headline items, not a sentence (Estee Lauder), so it never
+    truncates. An imperative-led fragment ("See page 5 for details")
+    and a figure-carrying one are complete items and block the
+    truncate; abbreviation dots ("Inc.", "U.S.") are never split
+    points. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return None
+    matches = list(_TRAILING_FRAGMENT_TERMINATOR_RE.finditer(s))
+    if not matches:
+        return None
+    for m in reversed(matches):
+        before = s[: m.start()].rstrip()
+        prev_word = before.split()[-1].strip(",;:()").lower() if before.split() else ""
+        if len(prev_word) <= 1 or prev_word in _TRAILING_ABBREV_WORDS:
+            continue
+        head, frag = s[: m.end()], s[m.end() :].strip()
+        if not frag:
+            return None
+        if frag[:1] in "▪■·○◦•":
+            return None
+        frag_words = [
+            w.strip(",;:()").lower() for w in frag.split() if w.strip(",;:()")
+        ]
+        if not frag_words:
+            return None
+        unfinished = (
+            frag.rstrip().endswith(",")
+            or (
+                frag.rstrip().endswith(";")
+                and not _LEDE_HEADLINE_VERB_RE.match(frag)
+            )
+            or frag_words[-1] in _TRAILING_DANGLE_WORDS
+            or frag.count("“") > frag.count("”")
+            or (
+                len(frag_words) <= 2
+                and not _has_trailing_verb(frag)
+                and not re.search(r"[\d$%]", frag)
+                and frag_words[0] not in _TRAILING_IMPERATIVE_WORDS
+            )
+            # Batch 232: a post-terminator fragment that is itself a
+            # dangling table/list intro (Fastenal's "The DSR change
+            # when compared to the same period in the prior year and
+            # the percent of sales in the period were as follows:") —
+            # truncate at the terminator instead of dropping the whole
+            # line, preserving the terminated prose before it. A pure
+            # intro line has no terminator, returns None here, and is
+            # popped by the dangling-intro rule instead.
+            or _is_trailing_dangling_intro(frag)
+        )
+        if not unfinished:
+            return None
+        return head.strip()
+    return None
+
+
+def _truncate_trailing_dangling_intro(ln: str) -> str | None:
+    """Truncate a line at its last sentence terminator when the text
+    after it is a dangling table/list intro (batch 232) — the tail
+    trim only sees the last line, but a freed lede budget can strand
+    the same shape mid-body (Fastenal's product paragraph ends "The
+    DSR change when compared to the same period in the prior year
+    and the percent of sales in the period were as follows:" ahead of
+    the end-market paragraph). Only the dangling-intro test applies
+    here: a comma/semicolon fragment mid-body continues on the next
+    line, so the general fragment truncate must never run mid-body.
+    A bullet-led line never qualifies (its fragment is the bullet's
+    own text), and a pure intro line has no terminator, so it
+    returns None and the tail rule pops it instead."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return None
+    matches = list(_TRAILING_FRAGMENT_TERMINATOR_RE.finditer(s))
+    if not matches:
+        return None
+    for m in reversed(matches):
+        before = s[: m.start()].rstrip()
+        prev_word = before.split()[-1].strip(",;:()").lower() if before.split() else ""
+        if len(prev_word) <= 1 or prev_word in _TRAILING_ABBREV_WORDS:
+            continue
+        head, frag = s[: m.end()], s[m.end() :].strip()
+        if not frag:
+            return None
+        if _is_trailing_dangling_intro(frag):
+            return head.strip()
+        return None
+    return None
+
+
+def _is_trailing_list_item_label(ln: str, prev: str) -> bool:
+    """True for a table/list row label sitting under a colon-ended
+    list intro ("Net earnings includes:" / "Other-than-temporary
+    impairment of investments in Kraft Heinz and in Occidental",
+    Berkshire — the intro's items are row labels, and the tail one
+    reads truncated). Guards: the intro is short (<=8 words) and ends
+    ":"; the label is long (>=8 words), verbless, figure-free (a
+    guidance line under an intro carries figures), not bullet-led,
+    not terminated, and carries a statement-label noun. The batch-226
+    colon rule then pops the intro itself, and the row-label
+    predicate pops the line above it — the cascade clears the whole
+    residue block. Batch 227."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    p = prev.strip()
+    if not p.endswith(":") or len(p.split()) > 8:
+        return False
+    words = [w.strip(",;:()").lower() for w in s.split() if w.strip(",;:()")]
+    if len(words) < 8:
+        return False
+    if re.search(r"[\d$%]", s):
+        return False
+    if not (set(words) & _TRAILING_LABEL_NOUNS):
+        return False
+    if _has_trailing_verb(s):
+        return False
+    return True
+
+
+# Batch 232: the tail of a dangling table/list intro — the line ends
+# on an intro phrase whose items are absent from the served text
+# ("...were as follows:", "...have been adjusted for:",
+# "...primarily driven by:", "Net earnings includes:",
+# "consist of:", "set forth below:"). A trailing colon-ended line
+# is dangling by construction: whatever it introduces is not in the
+# result. The quote-verb veto keeps a quote intro ("...commented on
+# the results:") safe; a heading-shaped line never reaches here (the
+# heading-tail rules run first in the trim loop).
+_DANGLING_INTRO_TAIL_RE = re.compile(
+    r"\b(?:as follows|adjusted for|driven by|includes?|consist of|"
+    r"comprised of|composed of|set forth below|summarized below|"
+    r"described below|shown below|listed below|follows|below):\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_trailing_dangling_intro(ln: str) -> bool:
+    """True for a trailing line that only introduces content that is
+    not served: it ends with ":" and is either short (a bare list
+    intro — the batch-226 shape, now without the residue-cascade
+    gate: a short colon line at the very tail has nothing after it,
+    so the cascade gate only protected the defect) or ends on a
+    dangling-intro tail phrase (Fastenal's "were as follows:",
+    FedEx's "have been adjusted for:", Gilead's bullet "primarily
+    driven by:"). A bullet-led line qualifies on the same terms —
+    its sub-items are absent, so the bullet dangles. Guards: no
+    quote verb anywhere in the line (a quote intro is content, not
+    residue)."""
+    s = ln.strip()
+    if not s or not s.endswith(":"):
+        return False
+    if _LEDE_QUOTE_VERB_RE.search(s):
+        return False
+    body = re.sub(r"^[•\-\*▪■·○◦]\s*", "", s)
+    if len(body.split()) <= 6:
+        return True
+    return bool(_DANGLING_INTRO_TAIL_RE.search(body))
 
 
 def _is_lede_title_line(ln: str) -> bool:
@@ -1512,6 +3684,310 @@ def _is_lede_title_line(ln: str) -> bool:
     load-bearing — without it the batch-177 keeps all drop. Batch 178.
     """
     return _is_trailing_heading(ln) and not _LEDE_HEADLINE_VERB_RE.search(ln)
+
+
+def _is_lede_conf_call_heading(ln: str) -> bool:
+    """True for a conference-call section heading in the lede
+    ("Conference Call and Upcoming Events" — Emerson; "Webcast and
+    Conference Calls" — AppLovin). It heads the boilerplate section
+    (call notice, investor-conference notice, About, forward-looking
+    statements), so it is never highlights — but the batch-178 budget
+    freeing lets the lede loop reach it once the rows above it are
+    skipped, and it consumes a budget line. Guards: short (2-8
+    words), capital-led (small connector words allowed), unterminated,
+    figure-free, no headline verb, and it must name the section
+    ("conference call" / "upcoming events"). An announcement names
+    the quarter or the results ("Company to Host Conference Call to
+    Discuss Q3 Results") and is kept — a bare section heading never
+    does. Batch 181."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 8:
+        return False
+    low = s.lower()
+    if "conference call" not in low and "upcoming events" not in low:
+        return False
+    if re.search(r"\bq[1-4]\b", low) or "results" in low or "earnings" in low:
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s):
+        return False
+    for w in words:
+        clean = w.strip(",;:")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_lede_recon_heading(ln: str) -> bool:
+    """True for a reconciliation-table section heading in the lede
+    ("GAAP/Adjusted (non-GAAP) Operating Earnings Reconciliation" —
+    Constellation, 5 cache quarters; "Reconciliation of Commissions
+    and Fees" — Brown & Brown, 7; "Reconciliation of GAAP to Non-GAAP
+    Measures1" — CSX). It heads the reconciliation table, so it is
+    never highlights — but the batch-178 budget freeing lets the loop
+    reach it, and it consumes a budget line (and in the Highlights
+    section path it is collected as content, with its boilerplate
+    intro paragraph behind it). Guards: short (1-10 words),
+    capital-led (small connector words allowed; a parenthesized
+    qualifier like "(non-GAAP)" is transparent), unterminated,
+    figure-free, no headline verb, and it must carry "reconcil".
+    A sub-headline naming a reconciliation ("Company Provides
+    Reconciliation of ...") is kept by the verb veto; a prose
+    mention is terminated ("Please see a reconciliation ...") or
+    lowercase-led, so neither qualifies. Batch 182. Batch 188:
+    AJG's segment recon headings end with a units parenthetical
+    and a colon ("Brokerage Segment Reported GAAP to Adjusted
+    Non-GAAP Reconciliations (dollars in millions):",
+    "Reconciliations (continued) (dollars in millions):") — the
+    trailing parenthetical groups and colon are stripped before
+    the guards, so the heading shape is judged on the heading
+    itself; a bare "Reconciliations" is a heading too, so the
+    floor is 1 word."""
+    s = ln.strip()
+    # Batch 188: strip trailing parenthetical groups and a colon —
+    # a colon-ended recon heading is still a heading, and the units
+    # parenthetical is not part of the heading shape.
+    s = re.sub(r"(\s*\([^)]*\))+\s*:?$", "", s).strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    words = s.split()
+    if not 1 <= len(words) <= 10:
+        return False
+    if "reconcil" not in s.lower():
+        return False
+    if _LEDE_HEADLINE_VERB_RE.search(s):
+        return False
+    for w in words:
+        if w.startswith("("):
+            continue  # parenthesized qualifier, e.g. "(non-GAAP)"
+        clean = w.strip(",;:()\"'")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_recon_heading_wrap(ln: str) -> bool:
+    """True for the wrapped continuation of a reconciliation heading
+    (Brown & Brown: "Reconciliation of Commissions and Fees" / "to
+    Organic Revenue" — one heading split across two lines). Only
+    consulted immediately after a skipped recon heading, so the
+    position is the evidence: a short lowercase-led fragment there is
+    the heading's wrap tail, never prose. Guards: short (1-6 words),
+    unterminated, figure-free, no $/%, first word lowercase.
+    Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if _LEDE_FIGURE_RE.search(s):
+        return False
+    words = s.split()
+    if not 1 <= len(words) <= 6:
+        return False
+    return words[0][0].islower()
+
+
+def _is_lede_segment_heading(ln: str) -> bool:
+    """True for a business-segment section heading in the lede
+    ("North America Automotive Parts Group (\"North America
+    Automotive\")" — Genuine Parts, 2 cache quarters; the 4-word
+    form "Automotive Parts Group (\"Automotive\")" is already caught
+    by the table-line short-label rule, the 8-word form escapes it).
+    The heading introduces the segment paragraph below it, which is
+    real content — so the heading itself is skipped and the paragraph
+    is kept, freeing the budget line the dangling heading consumed.
+    Guards: ends with Group ("<alias>"), short (3-10 words),
+    capital-led (small connector words allowed; the parenthesized
+    alias words are heading words too), unterminated, figure-free.
+    A prose line ending in a group name is terminated or
+    lowercase-led, so it never qualifies. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if not re.search(r"\bGroup\s*\(\"[^\"]+\"\)$", s):
+        return False
+    words = s.split()
+    if not 3 <= len(words) <= 10:
+        return False
+    for w in words:
+        if w.startswith("("):
+            continue  # alias opener, e.g. '("North'
+        clean = w.strip(",;:()\"'")
+        if not clean:
+            return False
+        if clean[0].isdigit():
+            continue
+        if clean.lower() in _HEADING_SMALL_WORDS:
+            continue
+        if clean[0].isupper():
+            continue
+        return False
+    return True
+
+
+def _is_lede_call_announcement(ln: str) -> bool:
+    """True for a conference-call announcement line that the batch-166
+    notice regex misses (CSX, 6 quarters: "CSX executives will conduct
+    a conference call with the investment community this afternoon,
+    October 16, at 4:30 p.m. Eastern Time. Investors, media and the
+    public may listen to the conference call by dialing 1-888-510-2008.
+    ..."). The batch-166 regex needs "conference call" AND "webcast" /
+    "replay" on one line; CSX splits the notice — the announcement
+    line carries the call + time + dial-in but no webcast, and the
+    webcast lives on the next line. Guards: a future-tense scheduling
+    verb ("will conduct/host/hold") before "conference call", plus a
+    time or dial-in detail — a prose mention ("on the conference call,
+    management said ...") has neither, and a bare heading-shaped
+    announcement ("Company to Host Conference Call to Discuss Q3
+    Results") has no time/dial-in, so the conf-call-heading guard's
+    kept announcements stay kept. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if not re.search(
+        r"will (?:conduct|host|hold)\b[^.]*\bconference call\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(
+        re.search(r"\d{1,2}:\d{2}\s*[ap]\.?m\.?|dial", s, re.IGNORECASE)
+    )
+
+
+def _is_lede_webcast_continuation(ln: str) -> bool:
+    """True for the webcast second half of a split conference-call
+    notice (CSX: "In conjunction with the call, a live webcast will
+    be accessible and presentation materials will be posted ... .
+    Following the earnings call, a webcast replay ... will be
+    archived ..."). Only consulted immediately after a skipped call
+    notice, so the position is the evidence: the line opens "In
+    conjunction with the call" and carries "webcast" — a real prose
+    sentence never opens that way right after a call announcement.
+    Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    return bool(
+        re.match(
+            r"in conjunction with the call\b.*\bwebcast\b",
+            s,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _is_lede_report_pointer(ln: str) -> bool:
+    """True for a pointer sentence to where the full announcement
+    lives (CSX, 12 cache quarters: "This earnings announcement, as
+    well as additional detailed financial information, is contained
+    in the CSX Quarterly Financial Report available through the
+    company's website ... and on Form 8-K ..."; American Express, 12
+    quarters: "This earnings release should be read in conjunction
+    with the company's statistical tables ..."). It is a document-tail
+    pointer, never highlights — but the freed lede budget reaches it
+    once the notice above it drops, and it consumes a budget line.
+    Guards: opens "This earnings announcement / press release /
+    earnings release" and contains "is contained in" or "should be
+    read in conjunction with", or opens "See information regarding"
+    and contains "presented later in this press release" (Brown &
+    Brown, 12 quarters: "See information regarding non-GAAP measures
+    presented later in this press release."). A highlights sentence
+    never opens either way. The opener is load-bearing: Charter's
+    "The information in this press release should be read in
+    conjunction with ..." is mid-paragraph boilerplate, not a
+    line-opener, so it never qualifies. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    low = s.lower()
+    if re.match(
+        r"this (?:earnings announcement|press release|earnings release)\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return (
+            "is contained in" in low
+            or "should be read in conjunction with" in low
+        )
+    if re.match(r"see information regarding\b", s, re.IGNORECASE):
+        return "presented later in this press release" in low
+    if re.match(r"see\b", s, re.IGNORECASE) and "beginning on page" in low:
+        # Batch 188: AJG's recon-table pointer ("See "Information
+        # Regarding Non-GAAP Measures" beginning on page 8 of 17.")
+        # — a document-tail pointer, never highlights. The "See"
+        # opener plus a page reference is load-bearing: a highlights
+        # sentence never opens with "See" and points at a page.
+        # Survey: 7 distinct lines, all AJG.
+        return True
+    if re.match(r"see attachment\b", s, re.IGNORECASE):
+        # Batch 188: Con Edison's attachment pointer ("See Attachment
+        # A to this press release for a reconciliation of ...") — the
+        # same document-tail pointer class. Survey: 10 distinct
+        # lines, all ED.
+        return "to this press release for" in low
+    if low.startswith(
+        "percentage comparisons throughout this press release "
+        "are calculated for"
+    ):
+        # Batch 188: Citigroup's methodology note ("Percentage
+        # comparisons throughout this press release are calculated
+        # for the first quarter 2026 versus the first quarter 2025,
+        # unless otherwise specified.") — boilerplate, never
+        # highlights. Survey: 11 distinct lines, all C.
+        return True
+    return False
+
+
+def _is_lede_split_units_continuation(ln: str) -> bool:
+    """True for the continuation of a split units declaration glued to
+    table column labels (CSX: "except per share amounts Operating
+    Income Operating Margin Net" — the second half of the "Dollars in
+    millions," units line, flattened with the recon table's column
+    headers). Guards: opens with "except per share (amounts|data)",
+    unterminated, and carries a table metric word after the units
+    phrase — a wrapped prose fragment starting "except ..." carries
+    no metric word. Batch 182."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if _is_sentence_terminated(s):
+        return False
+    m = re.match(r"except per share (?:amounts|data)\b", s, re.IGNORECASE)
+    if not m:
+        return False
+    return bool(_LEDE_TABLE_HEADER_METRIC_RE.search(s[m.end():]))
 
 
 def _is_lede_footnote_attribution(ln: str) -> bool:
@@ -1544,7 +4020,23 @@ def _clean_highlights_result(result: str) -> str:
     kept only when the result stays >=200 chars — below that the
     extractor would return None, and a wart is better than dropping
     the row (the batch-153 floor rule).
+
+    Batch 214: a "Cautionary Note on Forward-Looking Statements"
+    heading cuts the result there — everything from the heading on
+    is the safe-harbor risk list, never highlights (Ford Q1 2025:
+    the heading sits mid-line in a flattened footnote bullet and
+    the risk bullets follow it, 1,894 chars). The exact heading is
+    matched, not a bare "Forward-Looking Statements" line: that
+    heading appears in 519 cached exhibits and genuine outlook
+    prose mentions forward-looking figures, so a bare match would
+    eat real content. Cache survey: the exact string appears in
+    exactly one exhibit's highlights output (F 2025-03-31).
     """
+    idx = result.find("Cautionary Note on Forward-Looking Statements")
+    if idx >= 0:
+        candidate = result[:idx].rstrip()
+        if len(candidate) >= 200:
+            result = candidate
     lines = [ln for ln in result.split("\n") if not _RULE_LINE_RE.match(ln.strip())]
     head_end = 0
     for i, ln in enumerate(lines):
@@ -1555,6 +4047,7 @@ def _clean_highlights_result(result: str) -> str:
         return "\n".join(lines).strip()
     body = lines[head_end:]
     trimmed = list(body)
+    popped_residue = False
     while trimmed:
         last = trimmed[-1].strip()
         if not last:
@@ -1562,9 +4055,27 @@ def _clean_highlights_result(result: str) -> str:
             continue
         if _TRAILING_TABLE_INTRO_RE.match(last):
             trimmed.pop()
+            popped_residue = True
             continue
-        if _is_trailing_heading(last):
+        if _is_trailing_heading_tail(last):
+            # Batch 225: the full heading family (plain heading, "Table
+            # N." caption, results caption, parenthesized heading).
             trimmed.pop()
+            popped_residue = True
+            continue
+        if last == "-more-":
+            # Batch 194: a page-continuation marker at the very tail
+            # (a path that bypasses the lede/section loops, e.g. the
+            # shareholder-letter or flat-table modes) is never content.
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_company_signature(last):
+            # Batch 194: a bare company-name signature at the very tail
+            # (CarMax's "CarMax, Inc." page-2 header, pulled in when the
+            # "-more-" skip freed a section slot) is page furniture.
+            trimmed.pop()
+            popped_residue = True
             continue
         # Batch 178: a trailing bare units declaration (eBay's "in
         # millions, except per share data and percentages" — the next
@@ -1575,8 +4086,92 @@ def _clean_highlights_result(result: str) -> str:
         # assembled body and only this final trim can catch it.
         if _LEDE_BARE_UNITS_RE.match(last) or _LEDE_BARE_UNITS_LOWER_RE.match(last):
             trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 226: the table-residue tail class — a flattened table
+        # row or label with no heading shape (Berkshire/BlackRock row
+        # labels, Aon's units+period header, AEP's all-caps page
+        # footer, Expedia's metric rows, dangling period/table headers).
+        # _is_lede_table_line is deliberately NOT consulted here: it
+        # also matches genuine content tails (guidance fragments,
+        # single-value rows, truncated prose) — see the batch-226
+        # module comment above the predicates.
+        if _is_trailing_row_label(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_units_period_header(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_caps_line(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_table_data_row(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        if _is_trailing_table_header_orphan(last):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 227: a row label under a colon-ended list intro
+        # ("Net earnings includes:" / the impairment label, Berkshire).
+        # The intro is the previous non-blank line — blank lines
+        # separate the intro from its items in the stored text.
+        prev = ""
+        for _ln in reversed(trimmed[:-1]):
+            if _ln.strip():
+                prev = _ln.strip()
+                break
+        if _is_trailing_list_item_label(last, prev):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 227: a tail line whose last terminated sentence is
+        # followed by an unfinished fragment — truncate at the
+        # terminator instead of dropping the whole line (Coinbase,
+        # Genuine Parts, Kroger, ON Semiconductor).
+        trunc = _truncate_trailing_fragment(last)
+        if trunc is not None:
+            trimmed[-1] = trunc
+            break
+        # Batch 227: the wrap-fragment tail class — an unterminated
+        # prose tail ending mid-sentence (comma/semicolon, dangling
+        # function word, open quote, short lowercase noun phrase).
+        # `prev` is the previous non-blank line, computed above for
+        # the list-item-label check.
+        if _is_trailing_wrap_fragment(last, prev):
+            trimmed.pop()
+            popped_residue = True
+            continue
+        # Batch 232: a trailing dangling table/list intro — the
+        # batch-226 rule only popped a short colon line inside a
+        # residue cascade, but a colon-ended line at the very tail
+        # is dangling by construction (whatever it introduces is not
+        # served), so the cascade gate only protected the defect:
+        # Berkshire's "Net earnings includes:" sat below its row
+        # label with nothing popped above it, and the long intros
+        # ("...were as follows:", "...have been adjusted for:",
+        # "...primarily driven by:") never matched the 6-word cap.
+        # The quote-verb veto keeps quote intros safe, and the
+        # cascade still runs: once the intro pops, the row-label
+        # predicate pops the line above it on the next iteration.
+        if _is_trailing_dangling_intro(last):
+            trimmed.pop()
+            popped_residue = True
             continue
         break
+    # Batch 232: a dangling-intro fragment mid-body — the tail trim
+    # only sees the last line, but a freed lede budget can strand the
+    # same shape ahead of a later paragraph (Fastenal's product
+    # paragraph ends "The DSR change ... were as follows:" ahead of
+    # the end-market paragraph). Truncate any body line whose
+    # post-terminator fragment is a dangling intro; the general
+    # fragment truncate never runs here (a comma/semicolon fragment
+    # mid-body continues on the next line).
+    trimmed = [_truncate_trailing_dangling_intro(ln) or ln for ln in trimmed]
     candidate = "\n".join(lines[:head_end] + trimmed).strip()
     if len(candidate) < 200:
         return "\n".join(lines).strip()
@@ -1617,6 +4212,57 @@ def _trim_lede_table_tail(lede: list[str]) -> list[str]:
     return lede
 
 
+def _trim_unfinished_tail(lede: list[str]) -> list[str]:
+    """Drop a trailing mid-sentence fragment from collected highlights.
+
+    The finish rule's completion allowance (batch 222) lets a quote or
+    sentence run up to 8 lines past the lede budget, but a quote longer
+    than that (AJG's 12-line quotes) still strands the highlights
+    mid-sentence — the stored rows end "“We have excellent" or "said
+    David M. Cordani,". The Highlights-section collector's 12-line cap
+    strands the same way (GEV's CEO quote ends "and slot"). A dangling
+    fragment reads broken on the company page, so the tail is dropped
+    back to the last sentence-terminated line instead: the highlights
+    end clean, just shorter.
+
+    The walk-back fires only on a genuine mid-sentence cut — the last
+    line is prose, not sentence-terminated, and still unfinished by
+    the finish rule's own signals (wrap tail, quote attribution, split
+    attribution, open quote — _lede_item_still_unfinished). Bullets are
+    complete items without terminal punctuation (Nike's "•Diluted
+    earnings per share was $0.78") and are never touched; table residue
+    and headings belong to _trim_lede_table_tail /
+    _clean_highlights_result and are left alone. A colon-ended quote
+    attribution ("... commented on the results:") is unfinished even
+    though ":" counts as terminated elsewhere (batch 180), so the
+    terminated stop exempts it. The floor mirrors batch 153: the trim
+    is kept only when the remaining lines still hold a terminated line
+    and >=200 chars (measured on the "\\n" join, the shorter of the two
+    assemblies); otherwise the original is kept, since a wart is better
+    than dropping the row to None.
+    """
+    end = len(lede)
+    while end > 0:
+        last = lede[end - 1]
+        if _BULLET_LEAD_RE.match(last):
+            break
+        if _is_lede_table_line(last) or _is_bare_highlights_heading(last):
+            break
+        if _is_sentence_terminated(last) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(
+            last
+        ):
+            break
+        if not _lede_item_still_unfinished(lede[:end]):
+            break
+        end -= 1
+    if end == len(lede) or end == 0:
+        return lede
+    trimmed = lede[:end]
+    if len("\n".join(trimmed)) >= 200:
+        return trimmed
+    return lede
+
+
 def _is_lone_bullet_marker(ln: str) -> bool:
     """True for a line that is only a bullet glyph ("●", "•", "-", "*").
 
@@ -1636,8 +4282,13 @@ def _is_lone_bullet_marker(ln: str) -> bool:
     last two glyphs the DB audit found standing alone: the black small
     square ("▪", PNC's lists) and the en dash ("–", Simon's lists) —
     the hyphen-minus was already covered, the en dash was not.
+    Batch 185 adds the em dash ("—"): Brown & Brown's flattened
+    tables leave lone "—" empty cells standing on their own lines,
+    and _BULLET_LEAD_RE already treats "—" as a bullet marker — but
+    without this entry the lone dash was collected as a content line
+    (and cleared table mode), letting the next table's labels in.
     """
-    return ln in ("●", "•", "·", "○", "▪", "-", "–", "*")
+    return ln in ("●", "•", "·", "○", "▪", "-", "–", "—", "*")
 
 
 # Table footnotes in the lede ("(a) Represents ...", "(1) During the year ...")
@@ -1700,6 +4351,36 @@ def _is_paren_prose_continuation(ln: str) -> bool:
         return True
     return False
 
+
+def _is_labeled_value_line(ln: str) -> bool:
+    """True when a line opens with a parenthesized all-caps abbreviation
+    label followed immediately by a value figure — "(ETR) ~23% ...".
+
+    Batch 238: FedEx's guidance table splits its Effective Tax Rate row
+    as a label line plus an "(ETR) ~23% ..." value line, and
+    _LEDE_FOOTNOTE_RE matches the "(ETR)" marker, so _opens_footnote_def
+    treats the row as a footnote definition and both the guidance
+    collector and _clean_guidance_footnotes drop it, losing the ~23%
+    ETR figure (batch 237's repair gate already refused to credit such
+    a line as chrome; this moves the guard into the extractor, with the
+    label narrowed to an all-caps abbreviation). A genuine footnote
+    definition opens with a numeric key ("(1) ...") or a single-letter
+    key ("(a) ...") and prose, never with a bare value right after an
+    abbreviation label — so the label must be 2+ all-caps letters and
+    the next token must be value-shaped (starts with $ or (, "~$"/"≈$",
+    or ends with %). Mixed-case labels ("(Unaudited)", "(Loss)") never
+    fire, so table-header residue keeps dropping as before.
+    """
+    m = re.match(r"^\([A-Z]{2,}\)\s*(\S+)", ln.strip())
+    if not m:
+        return False
+    tok = m.group(1)
+    return (
+        tok[0] in "$("
+        or tok.startswith(("~$", "≈$"))
+        or tok.endswith("%")
+    )
+
 # An investor-conference-call notice ("Today, beginning at 3:30 p.m.
 # Central Time ... Emerson management will discuss the second quarter
 # results during an investor conference call. Participants can access a
@@ -1714,6 +4395,64 @@ def _is_paren_prose_continuation(ln: str) -> bool:
 # not a notice either.
 _CONFERENCE_CALL_NOTICE_RE = re.compile(
     r"conference call\b.*(webcast|replay)|(webcast|replay).*conference call\b",
+    re.IGNORECASE,
+)
+
+# Batch 211: a call pointer — content "will be provided / discussed on
+# the conference call" — is not a notice (Biogen's FX-assumption line,
+# 12 quarters in-cache: "Other modeling considerations will be
+# provided on the conference call and webcast."; DHI's guidance pointer
+# "The Company plans to also provide guidance ... on its conference
+# call today", batch 209). The bare regex is a tail-match hazard: it
+# fires on any line that mentions "conference call" before "webcast" /
+# "replay", so a genuine content sentence whose tail only points AT
+# the call is treated as a notice and dropped (lede) or ends the
+# section (Highlights collector). The pointer preposition is the
+# discriminator: a notice ANNOUNCES the call ("will host / hold /
+# discuss ... during ... a conference call", "a webcast of the ...
+# conference call to be held", "Text of the conference call's
+# prepared remarks ...") — it never says content will be provided ON
+# it. The sentence-start guard cannot separate them (Biogen's pointer
+# sentence is short, so the match sits 63 chars into it; CSCO's
+# notice sentence sits 18 chars in) and neither can a scheduling-verb
+# test (CSCO/FDX notices carry no host verb). The pointer shape occurs
+# in exactly the 12 Biogen lines across all 1,699 cached exhibits and
+# nowhere else, so the exemption is precise. Only the Highlights
+# collector uses this helper; the guidance collector keeps its own
+# batch-193 120-char line guard (which already keeps Biogen's line).
+_CALL_NOTICE_POINTER_RE = re.compile(
+    r"\bon (?:the|its|our) conference call\b",
+    re.IGNORECASE,
+)
+
+
+def _is_call_notice(line: str) -> bool:
+    """True when a line is a conference-call / webcast notice: the
+    batch-166 regex matches and the match is not a content pointer at
+    the call. Batch 211."""
+    m = _CONFERENCE_CALL_NOTICE_RE.search(line)
+    if m is None:
+        return False
+    return _CALL_NOTICE_POINTER_RE.search(line[: m.end()]) is None
+
+# An investor-conference notice (Emerson: "Emerson will hold an
+# in-person and virtual investor conference on Thursday, Nov. 20 in
+# New York City. A live webcast of the investor conference will begin
+# at 8:00 a.m. ..." and "Emerson also announces it will host an
+# investor conference on Nov. 20, 2025 in New York City. Event
+# details will be distributed closer to this date.") is the same
+# class as the conference-call notice — an event announcement, never
+# highlights — but it says "conference", not "conference call", so
+# the batch-166 regex never fires on it and the freed lede budget
+# serves it. Two shapes: "will hold/host an investor conference"
+# (both attested lines), or an investor conference tied to a webcast
+# in the same sentence. The "(?! call)" guard keeps a conference
+# CALL notice on the batch-166 regex (it already skips those) and
+# keeps "investor conference call" from matching this one. Batch 181.
+_INVESTOR_CONFERENCE_NOTICE_RE = re.compile(
+    r"\bwill\s+(?:hold|host)\b[^.]*?\binvestor conference\b(?! call)"
+    r"|\binvestor conference\b(?! call)[^.]*?\bwebcast\b"
+    r"|\bwebcast\b[^.]*?\binvestor conference\b(?! call)",
     re.IGNORECASE,
 )
 
@@ -1770,10 +4509,22 @@ _TOC_ENTRY_RE = re.compile(r"^.+ \d{1,3}$")
 #     text attached — a spaced "* Foo" or mid-line asterisk is prose
 #     punctuation, not a legend (bullet "•" is a different char and is
 #     unaffected).
+#   - Batch 192: the hash marker "#", attached or spaced — Air Products
+#     keys its per-share footnote "#" ("#Earnings per share is calculated
+#     ...", "#Per share amounts are calculated ...", "# Per share amounts
+#     are calculated ...") and Coinbase its variance legend ("# - Denotes
+#     a variance of 100 percent or more."). Unlike "*", "#" never opens
+#     a bullet or prose in these exhibits (the cache survey finds only
+#     footnote definitions, legends, table fragments like DLR's "# of"
+#     and decorations "###" / "# # #"), so the spaced form is safe here
+#     where it is not for "*". A bare "###" separator opens a block of
+#     length 1 in practice — the next line is a heading, never a
+#     plausible wrap continuation.
 _FOOTNOTE_DEF_RE = re.compile(
     r"^\d{1,3}\s+(defined as|represents|includes|excludes|reflects)\b"
     r"|^(?=.{0,300}$)\d{1,3}\s+\S.*\b(are|is)\s+(detailed|defined|described|calculated|reconciled|set forth)\b"
-    r"|^[*†‡]\S",
+    r"|^[*†‡]\S"
+    r"|^#\s*\S",
     re.IGNORECASE,
 )
 
@@ -1903,7 +4654,93 @@ _FOOTNOTE_DEF_SENTENCE_RE = re.compile(
 # Forecasted Data\u201d)") — a cross-reference wrapped in parens, never
 # narrative. Batch 173.
 _FOOTNOTE_POINTER_RE = re.compile(
-    r"^(?:\d{1,3}[.)]?\s+|\(+)(See|Refer to)\b", re.IGNORECASE
+    # Batch 182: the number may be GLUED to its word ("1See the
+    # Non-GAAP Measures section ..." — CSX's recon-table footnote,
+    # flattened without the space; Aflac's "1Refer to previously
+    # defined ..." is the same shape, terminated). The batch-178
+    # glued-number precedent: a digit glued to "See"/"Refer to" is a
+    # pointer by construction — no prose opens that way — so the space
+    # is optional. The verb is the guard, as before.
+    r"^(?:\d{1,3}[.)]?\s*|\(+)(See|Refer to)\b",
+    re.IGNORECASE,
+)
+
+
+# Batch 215: AJG's summary-table footnote — "For fourth quarter 2023,
+# the pretax impact of the Brokerage segment adjustments totals $559.5
+# million, ..." — three sentences (Brokerage / Risk Management /
+# Corporate), the "*" footnote's definition of the adjustment items,
+# sitting between the summary table and the CEO quote. It is table
+# footnote prose, not narrative: it fills the 6-line lede budget and
+# starves the quote (Q4 2023: the quote is lost entirely — the note
+# is 5 lines against a budget already spent on the dateline and the
+# CFO-Commentary pointer lines). Cache survey (1,699 exhibits): 11
+# opener lines, all AJG, all this exact shape — the Risk Management /
+# Corporate sentences usually start mid-line, so they ride the block's
+# continuation/chaining. The three segment names are AJG's actual
+# segments; the fixed "pretax impact of the ... segment adjustments
+# totals $" phrase is footnote language by construction, so no
+# narrative sentence can match. The full-year note ("For the year
+# ended ...") is a different sentence and is deliberately NOT matched
+# — it sits past the lede zone.
+# Batch 216: AJG changed the note's shape in 2026 — one combined
+# sentence for all three segments ("For first quarter 2026, the
+# pretax impact of adjustments for the Brokerage, Risk Management,
+# and Corporate Segments totals $431 million, $15 million and $30
+# million, respectively, ..."), and the same combined wording for the
+# six/nine-month period note ("For the six-month period ended June
+# 30, 2026, the pretax impact of adjustments for the Brokerage, Risk
+# Management, and Corporate Segments totals $936 million, ..."). The
+# combined quarterly note is served as a lede paragraph in both
+# cached 2026 exhibits (2026-03-31, 2026-06-30) and the combined
+# six-month note is served as the trailing paragraph of 2026-06-30,
+# so both shapes are matched now. The OLD per-segment period note
+# ("For the nine-month period ended ..., the pretax impact of the
+# Brokerage segment adjustments ...") stays deliberately UNMATCHED —
+# no stored row serves it (the lede loop stops in the quote before
+# reaching it), and the batch-215 test pins the exclusion.
+_PRETAX_ADJUSTMENT_NOTE_RE = re.compile(
+    r"^For (?:"
+    r"(first|second|third|fourth) quarter \d{4}, "
+    r"the pretax impact of (?:the (?:Brokerage|Risk Management|Corporate) "
+    r"segment adjustments|adjustments for the Brokerage, Risk Management, "
+    r"and Corporate Segments)"
+    r"|the (six|nine)-month period ended [A-Z][a-z]+ \d{1,2}, \d{4}, "
+    r"the pretax impact of adjustments for the Brokerage, Risk Management, "
+    r"and Corporate Segments"
+    r") totals \$"
+)
+
+
+# Batch 223: a bare-numbered EVENT ANNOUNCEMENT is narrative, not a
+# footnote definition — "1.The Company announced on September 5, 2024
+# that it has entered into definitive agreements ..." / "2.The Company
+# added two additional clusters ..." (APLD's Recent Operational
+# Highlights: the only genuine numbered list in the cache's Highlights
+# zones). The subject must be "The Company" and the verb an event verb:
+# cache survey of all 4,034 bare-numbered footnote lines shows the
+# "The Company / We" openers are otherwise definitions and disclaimers
+# ("We define Adjusted Net Income ...", "The Company does not provide
+# a reconciliation ...", "The Company declared and paid quarterly
+# dividends ...", "The Company had no outstanding borrowings ...",
+# "We have not provided the forward-looking GAAP equivalents ...",
+# "We calculate average revenue per subscriber ...") — none of those
+# verbs is in this list, and the two EL event-ish lines ("In fiscal
+# 2025, the Company expanded ...", "From the end of August 2024 ...,
+# the Company entered into agreements ...") do not start with the
+# subject, so the anchored subject keeps them out. "declared" is
+# deliberately NOT in the list: DKS's dividend footnote opens that
+# way. A company-name subject ("American Express received the highest
+# score ...", AXP's footnote-run item 6) is deliberately NOT exempted
+# either — it rides a footnote run, and naming every filer is not a
+# rule. The exemption returns False from _is_bare_numbered_footnote,
+# so the line never opens a footnote-definition block on any path
+# (headline, lede, leading-bullet block, Highlights section, guidance).
+_BARE_NUMBERED_EVENT_RE = re.compile(
+    r"^\d{1,3}\.?[ ]?The Company\s+"
+    r"(announced|added|launched|completed|entered into|signed|acquired"
+    r"|opened|appointed|expanded|introduced|received|began|closed"
+    r"|unveiled|named)\b"
 )
 
 
@@ -1916,17 +4753,25 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
       - Terminated sentence: a wrapped bullet continuation ("12 of them
         in Texas") is unterminated, so it never opens — the termination
         test is what keeps wrapped prose out.
-      - 500-char cap: a footnote definition is one or two short
-        sentences — attested bare-numbered footnotes run to 470 chars
-        (Amex's participating-award footnote). Two longer ones still
-        sit above the cap and survive as tails — Moody's 556-char
+      - 1000-char cap: a footnote definition is one or two short
+        sentences — attested bare-numbered footnotes run to 984 chars
+        (Comcast's pro-forma footnote; Emerson's 699-char Copeland
+        discontinued-operations footnote, Moody's 556-char
         medium-term-EPS disclaimer, Amex's 671-char FX-adjusted
-        footnote — carried as a follow-up (a higher cap needs its own
-        evidence). Page/table mega-lines start with a bare number too
-        (Affirm's page-flattened letter lines; Ford's flattened
-        highlights table, a 3000-char line) and are far longer — the
-        cap keeps them out, and the Affirm lines are unterminated
-        besides, so the termination test excludes them.
+        footnote). Batch 181 raised the cap from 500: the 500–1000
+        band is footnotes throughout (~190 attested lines, every one
+        sampled a definition), and the one non-footnote sampled is
+        Affirm's 913-char page-flattened chart title, which is
+        harmless to skip. Above 1000 the population is dominated by
+        page/table mega-lines (Affirm's shareholder-letter lines,
+        Ford's 3000-char flattened highlights table, BofA's
+        balance-sheet table) with only a few real footnotes
+        interspersed (Nike's 1071-char segment footnote, Ford's
+        1179-char guidance footnote), so the cap stays at 1000 and
+        those longer ones survive as tails. Page/table mega-lines
+        start with a bare number too and are far longer — the cap
+        keeps them out, and the Affirm lines are unterminated besides,
+        so the termination test excludes them.
       - Capital after the number: a footnote sentence starts capitalized
         ("1 Net debt is ...", "2 Comp sales ...", "3 Source: ..."). A
         wrapped bullet continuation starts with a lowercase quantity
@@ -1934,16 +4779,23 @@ def _is_bare_numbered_footnote(ln: str) -> bool:
         batch 164's mirror negative), and a bullet with a footnote key
         ("2 • Strategic acquisition ...") starts with a marker, not a
         capital — both stay continuations, not footnotes.
-      - Batch 178: the number may be GLUED to its word ("1See pages 17
-        and 18 for reconciliation ...", "2Adjusted Non-GAAP measures
-        are calculated ..." — Estée Lauder's summary-table footnotes,
-        flattened without the space). The glued form requires a capital
-        followed by a lowercase letter — "3M reports ..." is digit +
-        single capital + space, so a company name never opens a block.
+      - Batch 199: the number may carry a period ("1. Adjustment item
+        resides in the Corporate & Other reportable segment." — the
+        batch-198 carry-forward shape; "1.Assumes $2.10 billion ..." —
+        First Solar's 2026 footnote defs, flattened without the space).
+        The period is optional and the capital-after-number guard is
+        unchanged, so a decimal-led figure ("1.5 million shares ...",
+        "1.25 billion ...") still never opens — the char after the
+        period is a digit, not a capital.
+      - Batch 223: an event announcement ("1.The Company announced
+        ...", "2.The Company added ...") is narrative, never a
+        footnote — see _BARE_NUMBERED_EVENT_RE.
     """
-    if len(ln) > 500 or not _is_sentence_terminated(ln):
+    if _BARE_NUMBERED_EVENT_RE.match(ln):
         return False
-    return bool(re.match(r"^\d{1,3}(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
+    if len(ln) > 1000 or not _is_sentence_terminated(ln):
+        return False
+    return bool(re.match(r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))", ln))
 
 
 def _is_bare_term_def_opener(ln: str) -> bool:
@@ -1980,14 +4832,22 @@ def _opens_footnote_def(ln: str, nxt: str = "", include_paren: bool = True) -> b
     ("(MRC) protocol ...", "(QoQ) and ...", "(IV) KEYTRUDA. Merck
     ...") is not a footnote definition — see
     _is_paren_prose_continuation.
+    Batch 215: AJG's pretax-adjustment footnote note (see
+    _PRETAX_ADJUSTMENT_NOTE_RE) opens a footnote-definition block
+    too — the block skip consumes its wrapped continuations and
+    chains onto the following segment sentences.
+    Batch 238: a labeled value ("(ETR) ~23% ...") is not a footnote
+    definition either — see _is_labeled_value_line.
     """
     if (
         _FOOTNOTE_DEF_RE.match(ln)
+        or _PRETAX_ADJUSTMENT_NOTE_RE.match(ln)
         or _LEDE_FOOTNOTE_NUM_RE.match(ln)
         or (
             include_paren
             and _LEDE_FOOTNOTE_RE.match(ln)
             and not _is_paren_prose_continuation(ln)
+            and not _is_labeled_value_line(ln)
         )
         or _FOOTNOTE_BRACKET_RE.match(ln)
         or _FOOTNOTE_TERM_VERB_RE.match(ln)
@@ -2119,7 +4979,10 @@ def _is_def_second_sentence(ln: str, def_words: set[str]) -> bool:
 
 
 def _footnote_def_block_len(
-    lines: list[str], i: int, include_paren: bool = True
+    lines: list[str],
+    i: int,
+    include_paren: bool = True,
+    opens: object = None,
 ) -> int:
     """Length of the footnote-definition block starting at lines[i], or 0.
 
@@ -2129,8 +4992,15 @@ def _footnote_def_block_len(
     Capped at 60 lines: a real footnote block is far shorter, and the
     cap bounds any misfire to one block instead of the document.
     include_paren=False for the headline loop (see _opens_footnote_def).
+    Batch 233: opens is the opener predicate, defaulting to
+    _opens_footnote_def — the guidance clean step passes a relaxed
+    opener (see _guidance_footnote_opener) so AppLovin's glued-key and
+    unterminated-wrap footnotes drop there without touching the
+    highlights/lede paths, which keep the strict opener.
     """
-    if i >= len(lines) or not _opens_footnote_def(
+    if opens is None:
+        opens = _opens_footnote_def
+    if i >= len(lines) or not opens(
         lines[i], lines[i + 1] if i + 1 < len(lines) else "", include_paren
     ):
         return 0
@@ -2145,7 +5015,7 @@ def _footnote_def_block_len(
             # Definition finished — chain only onto another definition,
             # or onto its own anaphoric second sentence ("These losses
             # were $92 million ..." — batch 168).
-            if _opens_footnote_def(
+            if opens(
                 nxt,
                 lines[i + n + 1] if i + n + 1 < len(lines) else "",
                 include_paren,
@@ -2190,6 +5060,64 @@ def _footnote_def_block_len(
         cur = nxt
         def_words |= _def_words(nxt)
     return n
+
+
+# Batch 188: the adjustment-item glossary that follows the recon tables
+# in some releases — a run of "Term - definition" lines, e.g. AJG's
+# "Interest, banking costs and debt - At March 31, 2026, Gallagher had
+# $9,550 million of borrowings ..." / "Clean energy-related - For 2026,
+# this consists of ..." / "Acquisition costs - Consists mostly of ..."
+# (8 consecutive lines in AJG 2026 Q1/Q2), EFX's "Legal settlement - ... /
+# Antitrust litigation costs - ... / Adjusted EBITDA and EBITDA margin -
+# Management defines ...". Cache survey (1,699 exhibits): only 4 runs of
+# >=3 such lines exist, and all 4 are glossaries. A lone "Term -
+# sentence" line is never a glossary — datelines ("COLUMBUS, Ohio, July
+# 30, 2025 - American Electric Power ... today reported ...") share the
+# shape, so the term must carry no digits and no month name, and only a
+# run of 3+ counts. Bulleted definitions ("•Net gains (losses) on
+# divestitures, which are ...") are excluded: they live under the
+# "Information Regarding Non-GAAP Measures" heading, past the "About"
+# break, and never reach the lede loop.
+_GLOSSARY_TERM_RE = re.compile(r"^([A-Z][A-Za-z, '&()/-]{0,60}) - ([A-Z].*)$")
+_GLOSSARY_TERM_MONTH_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|"
+    r"October|November|December)\b"
+)
+
+
+def _is_glossary_def_line(ln: str) -> bool:
+    """One line of a definition glossary: "Term - definition sentence."
+
+    Term is a short (<=6 words) digit-free phrase; the definition is a
+    terminated sentence starting with a capital letter.
+    """
+    if ln[:1] in "•▪■·○◦◾":
+        return False
+    m = _GLOSSARY_TERM_RE.match(ln)
+    if not m:
+        return False
+    term = m.group(1)
+    if not 1 <= len(term.split()) <= 6:
+        return False
+    if re.search(r"\d", term) or _GLOSSARY_TERM_MONTH_RE.search(term):
+        return False
+    # A definition never opens with a bare month name — that is a
+    # dateline whose location split off as the term ("Bethesda, MD -
+    # April 20, 2026 - AGNC ... today announced ...").
+    if _GLOSSARY_TERM_MONTH_RE.match(m.group(2)):
+        return False
+    return _is_sentence_terminated(ln)
+
+
+def _glossary_def_block_len(lines: list[str], i: int) -> int:
+    """Length of a glossary-definition block starting at lines[i], or 0.
+
+    Counts consecutive glossary lines; returns 0 unless the run is >=3.
+    """
+    n = 0
+    while i + n < len(lines) and _is_glossary_def_line(lines[i + n]):
+        n += 1
+    return n if n >= 3 else 0
 
 
 # A rounding note (batch 167): Coinbase's shareholder letters carry a
@@ -2238,12 +5166,20 @@ _ROUNDING_NOTE_CHAIN_RE = re.compile(
 # lead list is deliberately note-shaped: a highlights bullet never opens
 # with "Based on" / "As of" / "Net of" / "Below" / "Measures used" — and
 # the batch-165 "* Revenue grew 12 percent." bullet stays a bullet.
+# Batch 192 adds "Certain results": Air Products' non-GAAP legend —
+# "* Certain results in this release include references to non-GAAP
+# financial measures ..." (spaced form, Q2 FY2026) and "*Certain results
+# in this release, including in the highlights above, include references
+# ..." (attached form, Q1 FY2025) — served as section content in Q2
+# FY2026 because the asterisk-note block is the one path that drops
+# spaced-"*" notes and its lead list never covered this opener. The
+# "\s*" already covers both forms.
 # Known limitation: the "During" form ("*During the first quarter of 2024,
 # we revised our definition of ...") and the quoted-term form ("*‘Major’
 # stablecoins include ...") are not covered — neither is served by any
 # path today.
 _ASTERISK_NOTE_LEAD_RE = re.compile(
-    r"^\*\s*(Based on|As of|Net of|Below|Measures used)\b",
+    r"^\*\s*(Based on|As of|Net of|Below|Measures used|Certain results)\b",
     re.IGNORECASE,
 )
 
@@ -2507,17 +5443,28 @@ _CONTACT_HEADER_RE = re.compile(
 # words) and at least one must be an anchor (Officer/President/...), so
 # a prose line that merely mentions a role ("Our Chief Financial Officer
 # said ...") never matches — it carries verbs and other words.
+# Batch 189: the abbreviations CEO/CFO/COO are role vocabulary too —
+# a wrapped attribution tail ("Chairman and CEO.", "President and
+# CEO.") is the same dangling fragment as the spelled-out form, and
+# without them the tail consumes a lede budget line and the finish
+# rule reads it as a complete item, orphaning the quote body that
+# follows (AJG Q4 FY2025). Full-cache survey: only 4 distinct lines
+# newly match ("CEO and Co-Founder" x9, "President and CEO." x3,
+# "CHAIR AND CEO" x2, "Chairman and CEO." x1) — all bare role lines.
+# The abbreviations join the anchor set as well, so a "Group CEO"
+# shape matches; the 2-word floor still keeps a lone "CEO" out.
 _ROLE_TITLE_WORDS = frozenset(
     "president and chief executive financial operating commercial legal "
     "technology information marketing strategy people risk accounting "
     "senior vice officer director chairman chairwoman chair founder "
     "co-founder cofounder group global managing head investor relations "
     "general counsel secretary treasurer principal corporate development "
-    "business human resources administrative".split()
+    "business human resources administrative ceo cfo coo".split()
 )
 _ROLE_ANCHOR_WORDS = frozenset(
     "officer president chairman chairwoman chair director founder "
-    "co-founder cofounder head counsel secretary treasurer principal".split()
+    "co-founder cofounder head counsel secretary treasurer principal "
+    "ceo cfo coo".split()
 )
 
 
@@ -2736,10 +5683,23 @@ def _skip_contact_block(lines: list[str], i: int) -> int:
             # stopped at the name line and the headline loop then picked
             # it as the headline. Skipping admin lines when gathering the
             # following lines finds the phone within two non-admin lines.
+            # Batch 243: a line that itself carries contact evidence is
+            # never skipped as admin — a bare "Telephone: (617) 375-7500"
+            # line matches _ADMIN_LINE_RE (the telephone alternative), so
+            # the old gather jumped over the only phone after American
+            # Tower's role line ("Senior Vice President, Investor
+            # Relations and FP&A"), the lookahead found no evidence, the
+            # block ended at the role line, and the role line became the
+            # headline of every AMT quarter. Phone/contact evidence
+            # counts as a following line wherever it sits.
             following: list[str] = []
             k = j + 1
             while k < len(lines) and len(following) < 2:
-                if not _ADMIN_LINE_RE.match(lines[k]):
+                if (
+                    not _ADMIN_LINE_RE.match(lines[k])
+                    or _PHONE_RE.search(lines[k])
+                    or _CONTACT_LINE_RE.search(lines[k])
+                ):
                     following.append(lines[k])
                 k += 1
             if not any(
@@ -3052,6 +6012,23 @@ _NARRATIVE_TAIL_RE = re.compile(
 )
 
 
+# An exhibit marker ("Exhibit 99.1" / "EXHIBIT-99.1" / the "ECHIBIT"
+# typo / a ticker-prefixed marker) is packet front-matter, not a
+# narrative marker: DLR's packet repeats it inside its table of
+# contents ("Table of Contents" / "Exhibit 99.1" / "Table of
+# Contents" / ...), and the admin-break below fired on it at once,
+# so the skip never ran and the TOC heading became the headline.
+# Consumed here as TOC material; the narrative markers that must
+# still break the scan (contacts, release banners, date lines) are
+# untouched. Batch 258.
+_TOC_EXHIBIT_MARKER_RE = re.compile(
+    r"^exhibit[\s\-]+99(\.1)?\b"
+    r"|^echibit\s+99(\.1)?\b"
+    r"|^[A-Z][\w.\-]*\s+exhibit[\s\-]+99(\.1)?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _skip_toc(lines: list[str], i: int) -> int:
     """Return the index of the first narrative line after a table of contents.
 
@@ -3085,6 +6062,12 @@ def _skip_toc(lines: list[str], i: int) -> int:
             pages += 1
             j += 1
             last_page_end = j
+            continue
+        if _TOC_EXHIBIT_MARKER_RE.match(ln):
+            # Exhibit marker inside the TOC (batch 258): packet
+            # front-matter, never the narrative start — consume it
+            # like a title instead of breaking the scan.
+            j += 1
             continue
         if (
             _CONTACT_HEADER_RE.match(ln)
@@ -3769,15 +6752,30 @@ def _cover_block_headline(lines: list[str], i: int) -> tuple[str, int] | None:
     return " ".join(parts), j
 
 # Guidance and Outlook section headings in earnings releases
+# Batch 229: "financial targets" joins the bare forms — Adobe heads its
+# guidance section "Financial Targets" (all 12 cached quarters), and the
+# old set could not see it: the guidance extractor returned None for
+# every ADBE quarter (its targets table was never anchored), and the
+# Highlights section collector ran past the heading into the targets
+# table, serving guidance rows as highlights in 6 quarters. A prose
+# line can only match when it starts with "Financial" and ends on the
+# targets tail, so no sentence qualifies.
 _GUIDANCE_HEADING_RE = re.compile(
-    r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|"
+    r"^(business\s+outlook|financial\s+guidance|financial\s+outlook|guidance\s+and\s+outlook|financial\s+targets|"
     # Quarter-prefixed long forms: "Fourth Quarter Fiscal Year 2026 Business
     # Outlook" (AVGO), "Full Year Fiscal 2027 Guidance" / "First Quarter Fiscal
     # 2027 Guidance" (INTU), "Full-year 2026 guidance:" (JNJ). Up to five
     # intervening words (quarter/fiscal/year/digits, hyphen- or space-separated)
     # are allowed between the prefix and the guidance/outlook tail.
+    # Batch 212: "financial" joins the intervening words — Dollar General
+    # heads its outlook section "Fiscal Year 2024 Financial Guidance (and
+    # Store Growth Outlook)", which the old set could not see ("Financial"
+    # is neither quarter/fiscal/year nor a digit). A prose line can only
+    # match when it starts with a quarter/fiscal/year prefix AND ends on
+    # the guidance/outlook tail, so the extra word adds headings, not
+    # sentences.
     r"(?:first|second|third|fourth|full|q[1-4]|fiscal|\d{4})"
-    r"(?:[\s\-]+(?:quarter|fiscal|year|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
+    r"(?:[\s\-]+(?:quarter|fiscal|year|financial|\d{4})){0,5}[\s\-]+(?:business\s+)?(?:guidance|outlook)|"
     # "Forward-Looking Guidance" section intros (INTU).
     r"forward[- ]looking\s+(?:business\s+)?(?:guidance|outlook)|"
     r"cfo\s+outlook(?: commentary)?|outlook\s+summary|guidance\s+summary|outlook|guidance)\b",
@@ -3788,9 +6786,1001 @@ _GUIDANCE_HEADING_RE = re.compile(
 _FINANCIAL_TABLE_START_RE = re.compile(
     r"^(condensed\s+consolidated|consolidated\s+statements|unaudited\s+condensed|"
     r"reconciliation\s+of|gaap\s+to\s+non-gaap|non-gaap\s+financial|conference\s+call|webcast|"
-    r"earnings\s+webcast|quarterly\s+highlights|product\s+releases)\b",
+    # Batch 193: Axon's "Quarterly conference call and webcast" section
+    # heading (its call notice was collected as guidance once the
+    # footnote skip freed the line budget) — the bare "conference call"
+    # alternative never matches it because of the "Quarterly" prefix.
+    r"quarterly\s+conference\s+call|"
+    r"earnings\s+webcast|quarterly\s+highlights|product\s+releases|"
+    # Batch 193 (repair spot-check): Applied Materials' guidance
+    # section is followed by its results segment table headed "First
+    # Quarter Reportable Segment Information" (and "Fourth Quarter and
+    # Fiscal 2025 Reportable Segment Information") — the period-label
+    # exemption let collection past the guidance table and into the
+    # segment actuals ("Net revenue $ 5,356 $ 4,909"). A
+    # reportable-segment-information heading is always the
+    # reported-quarter results table, never guidance, so it ends the
+    # section. Up to five words may precede it.
+    r"(?:[a-z0-9]+[\s\-]+){0,5}reportable\s+segment\s+information)\b",
     re.IGNORECASE,
 )
+
+# Batch 193 (repair spot-check): General Mills' guidance section is
+# followed by its earnings-call notice in a shape none of the
+# conference-call tests match — "General Mills will issue pre-recorded
+# management remarks today, December 17, 2025, at approximately 6:30
+# a.m. Central time ... and will hold a live, webcasted question and
+# answer session beginning at 8:00 a.m. ..." — no "conference call"
+# phrase ("will hold" + "question and answer session", not "will host"
+# + "conference call"), so _is_lede_call_announcement, the "will host
+# ... webcast" test and _CONFERENCE_CALL_NOTICE_RE all miss it, and
+# the notice (11 GIS quarters) was collected as guidance. The two
+# phrases are distinctive enough to search for, with the same
+# 120-char start guard as _CONFERENCE_CALL_NOTICE_RE: a guidance
+# sentence may point at the call in its tail, and the guard keeps that
+# shape (Biogen's FX line) from breaking. "pre-recorded remarks"
+# without "management" covers the notice's continuation line ("The
+# pre-recorded remarks and the webcast will be made available at ...").
+_CALL_QA_SESSION_RE = re.compile(
+    r"pre-recorded (?:management )?remarks|webcasted question and answer session",
+    re.IGNORECASE,
+)
+
+# Batch 209: a conference-call host notice ends the guidance section.
+# Cigna's outlook section is followed by its call notice in a shape
+# none of the batch-193 tests match — "Management will be hosting a
+# conference call to review ... results and discuss full year ...
+# outlook beginning today at 8:30 a.m. ET." (CI x6 quarters) — and
+# ConocoPhillips' is the same shape with the other verb form,
+# "ConocoPhillips will host a conference call today at noon Eastern
+# time to discuss this announcement." (COP x2). Neither line carries
+# "webcast"/"replay", so _CONFERENCE_CALL_NOTICE_RE never fires, and
+# the dial-in block after it (call-in numbers, Live Call, Passcode,
+# Replay, "dial in") is collected as guidance. "will host(ing) a
+# conference call" is the discriminator: a guidance sentence points
+# AT the call ("The Company plans to also provide guidance ... on its
+# conference call today" — DHI x11, kept; "... will be provided on
+# the conference call and webcast" — Biogen's FX line, kept) — it
+# never says the company will host one. The sentence-start guard
+# (_notice_starts_sentence, 120 chars from the sentence start) is
+# the batch-193 precedent, applied to the sentence instead of the
+# line: CI 2024-09-30's notice shares its line with the preceding
+# availability sentence, so the match starts ~180 chars into the
+# line but 11 chars into its own sentence. "will host its calls"
+# (GE 2023-12-31's earnings-call schedule line) never matches: no
+# "a conference call".
+_CALL_HOST_NOTICE_RE = re.compile(
+    r"will (?:be )?(?:host|hosting) a conference call\b",
+    re.IGNORECASE,
+)
+
+# Batch 209: the call-in-numbers line is the backstop for a dial-in
+# notice whose hosting paragraph is phrased differently or already
+# consumed — "The call-in numbers for the conference call are as
+# follows:" (CI x6) is never guidance: no guidance line announces
+# dial-in numbers. It fires only if the host-notice break above is
+# missed, so the dial-in block can never leak past it.
+_CALL_IN_NUMBERS_RE = re.compile(
+    r"call-in numbers for the conference call\b",
+    re.IGNORECASE,
+)
+
+
+def _notice_sentence_start(line: str, m: re.Match) -> int:
+    """Offset of the sentence containing a notice-regex match: the
+    char after the last ". "/"! "/"? " before the match (or the line
+    start). An abbreviation period before the match can only move the
+    computed start later, so it can only make the guard more
+    permissive, never less."""
+    before = line[: m.start()]
+    idx = max(before.rfind(". "), before.rfind("! "), before.rfind("? "))
+    return idx + 2 if idx >= 0 else 0
+
+
+def _notice_starts_sentence(line: str, m: re.Match) -> bool:
+    """True when a notice-regex match starts within 120 chars of its
+    own sentence start. Batch 209: CI 2024-09-30's call notice shares
+    its line with the preceding availability sentence ("... available
+    on The Cigna Group's website ... (URL). Management will be
+    hosting a conference call ..."), so the match starts ~180 chars
+    into the line and the batch-193 120-char LINE guard blocks it —
+    but only 11 chars into its own sentence. The 120-char number is
+    the batch-193 precedent, applied to the sentence instead of the
+    line."""
+    return m.start() - _notice_sentence_start(line, m) <= 120
+
+# Batch 193: a next-section heading inside a guidance collection — a
+# short unterminated title-case line that is not itself a guidance
+# heading and heads a prose or bullet block. Air Products' "Guidance"
+# section is two bullets followed by "News and Highlights", "Fiscal
+# ... Consolidated Results", "Fiscal ... Results by Business Segment"
+# and "Earnings Teleconference" — without this break the collector
+# runs 30 lines through the whole results narrative and the 4000-char
+# cap truncates it mid-segment-table, so the served "guidance" is
+# mostly results prose. The follower test is the precision guard: a
+# table header ("U.S. & Canada Property International Property(2)",
+# AMT's outlook table) is followed by figure-dense rows, not prose or
+# bullets, so it never breaks; a guidance sub-heading that carries
+# "Outlook"/"Guidance" is exempt by the vocabulary test. The
+# exemptions below are the blast-193 failure modes, each attested:
+#   - guidance vocabulary ("Consolidated Fiscal 2024 Outlook",
+#     "Long-Term Outlook", "AbbVie Raises 2024 EPS Guidance Floor" —
+#     ADP/ABBV's outlook sub-sections end in, or carry, the words);
+#   - period labels ("Second Quarter Fiscal 2024" — ACN's outlook
+#     period sub-heading);
+#   - datelines ("GOODLETTSVILLE, Tenn.--(BUSINESS WIRE)--" — DG's
+#     guidance heading precedes the dateline);
+#   - a line after a lone bullet marker ("Full year comparable
+#     restaurant sales growth ..." — CMG's flattened bullet list puts
+#     the "·" on its own line, so the item text follows a marker);
+#   - non-title-case metric sub-headings ("Bookings and revenue",
+#     "Gross margin", "Share count" — DUOL's outlook metric labels
+#     are sentence-case, not headings).
+# The follower must be a bullet, a dateline (the next section opens
+# with one), or a long terminated prose sentence without $ or %
+# (guidance prose almost always carries $ or % in its first line, so
+# a $-less terminated sentence after a heading is next-section prose,
+# not a wrapped guidance line — DUOL's "Bookings and revenue" is
+# followed by an unterminated wrap, so it never breaks).
+_GUIDANCE_SMALL_WORDS = frozenset(
+    ["a", "an", "the", "and", "or", "of", "for", "by", "in", "on", "to", "with", "vs", "at", "from", "per", "&"]
+)
+_GUIDANCE_PERIOD_TOKENS = frozenset(
+    ["first", "second", "third", "fourth", "full", "q1", "q2", "q3", "q4", "fiscal", "quarter", "year", "fy"]
+)
+
+
+def _is_guidance_period_label(ln: str) -> bool:
+    """True for a pure period label ("Second Quarter Fiscal 2024",
+    "Q3 FY2025", "Full Year Fiscal 2026") — an outlook period
+    sub-heading, never a next-section heading."""
+    toks = re.split(r"[\s\-]+", ln.strip())
+    if not toks:
+        return False
+    for tok in toks:
+        t = tok.lower()
+        if t in _GUIDANCE_PERIOD_TOKENS:
+            continue
+        if re.fullmatch(r"\d{4}", t) or re.fullmatch(r"fy\d{2,4}", t):
+            continue
+        return False
+    return True
+
+
+def _is_guidance_title_case(ln: str) -> bool:
+    """True when every content word is capitalized (small words excepted)
+    — the shape of a section heading. Sentence-case metric labels
+    ("Bookings and revenue", "Gross margin") fail it."""
+    for w in ln.split():
+        w = w.strip("(),:;")
+        if not w:
+            continue
+        if w.lower() in _GUIDANCE_SMALL_WORDS:
+            continue
+        if w[0].isupper() or w[0].isdigit():
+            continue
+        return False
+    return True
+
+
+# A dateline with a parenthesized date ("LEHIGH VALLEY, Pa. (November 6,
+# 2025) - ..." — APD's results sections open with one): _DATELINE_LEAD_RE
+# never matches it (its character class has no parens), so without this
+# shape "Fiscal ... Consolidated Results" never breaks and the whole
+# results narrative is collected as guidance (APD 2025-09-30 ran to the
+# 4000-char cap through full-year and Q4 results plus the CEO quote).
+_GUIDANCE_PAREN_DATELINE_RE = re.compile(
+    r"^[A-Z][A-Z .'\-]*,\s*[A-Z][A-Za-z.]*\s*\([A-Za-z]+ \d{1,2}, \d{4}\)"
+)
+
+
+# Batch 199: a horizontal rule never opens a section. First Solar's
+# guidance table ends with a rule line ("——————————") directly after
+# its last row ("Volume Sold 15.6GW to 16.3GW"); the follower test
+# treated the rule as a dash-led bullet, so the last table row read as
+# a next-section heading and the break dropped it (and the safe-harbor
+# paragraph after the footnote block). Rule lines are skipped when
+# advancing to the real follower, like admin lines.
+_GUIDANCE_RULE_LINE_RE = re.compile(r"^[-–—_=*]{3,}$")
+
+
+# Batch 212: page-continuation marker in its spaced / upper-case
+# variants ("- more -", "-MORE-") — the guidance paths only ever
+# matched the exact "-more-" spelling, so the variants were collected
+# as content (FDX's guidance carries four "- more -" blocks) and one
+# killed the section-end follower run (it is a short non-admin line
+# inside the run). Full-cache survey: "-MORE-" 106 lines, "- more -"
+# 66 lines, all page markers. The Highlights collector keeps its own
+# exact-match handling (separate blast, separate batch).
+_MORE_MARKER_RE = re.compile(r"^-\s*more\s*-$", re.IGNORECASE)
+
+
+# Batch 206: a bare-domain line ("CrownCastle.com") — CCI prints a page
+# footer on every page of its releases: "The pathway to possible." /
+# "CrownCastle.com" / "News Release continued: Page N". The "News
+# Release continued" line is already skipped by _ADMIN_LINE_RE (its
+# "news release" prefix), but the tagline and the domain land inside the
+# guidance section — the OUTLOOK section spans pages, so footers fall
+# mid-table (8 stored CCI rows carry 11 such pairs). A line that IS a
+# domain, nothing else, is never guidance content: it is a URL pointer,
+# page furniture. The no-spaces shape keeps prose that merely mentions
+# a domain ("available at www.crowncastle.com") out of the match.
+_BARE_DOMAIN_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)*\."
+    r"(com|net|org|io|co|ai|gov|edu|us|uk|ca|au|de|fr|jp|in|br|mx|nl|se|ch|es|it)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_page_footer_furniture(lines: list[str], j: int) -> bool:
+    """True when lines[j] is page-footer furniture (batch 207).
+
+    The same two shapes batch 206 skips in the guidance collector, now
+    for the highlights collectors: a bare-domain line (\"CrownCastle.com\"
+    — the domain itself is dropped in the lede loop only because
+    _is_lede_table_line reads a no-space line as table residue, so the
+    section path and the leading-bullet block serve it), and the short
+    terminated sentence-case tagline immediately before one (\"The
+    pathway to possible.\" before \"CrownCastle.com\" — CCI's page
+    footer). The lookahead keeps the tagline skip narrow: a genuine
+    short sentence is skipped only when the very next line is a bare
+    domain — the footer signature. Figure lines ($/%/digits) and
+    title-case lines never match, so a table row or a heading before a
+    domain pointer survives. The conditions are byte-identical to the
+    batch-206 guidance rule so the two collectors agree on what
+    furniture is.
+    """
+    ln = lines[j]
+    if _BARE_DOMAIN_RE.match(ln):
+        return True
+    return (
+        j + 1 < len(lines)
+        and _BARE_DOMAIN_RE.match(lines[j + 1])
+        and len(ln) <= 60
+        and ln.rstrip().endswith((".", "!", "?"))
+        and not re.search(r"[$%\d]", ln)
+        and not ln.startswith("•")
+        and ln[0].isupper()
+        and not _is_guidance_title_case(ln)
+    )
+
+
+# Batch 200: a results-table period header ("Three months ended
+# September 30", doubled "Three months ended ... Nine months ended
+# ...") after a heading opens the condensed results table, never
+# guidance — GE Vernova's outlook section runs past "Total Company
+# Results" into its results table because the follower is a period
+# header, not a bullet, dateline or long prose line.
+# Batch 205: a results-table period header — the header row of the reported
+# results table that follows a guidance section. The old shape only matched
+# the dated lowercase form ("Three months ended January 31"), so it missed
+# the three shapes the bleed cohort actually carries: the dateless/combined
+# form ("Three Months Ended Fiscal Year Ended" — DELL; "Three Months Ended
+# Y/Y % Change Q/Q % Change" — DASH), the quarter form ("First Quarter Ended
+# March 31" — ECL, whose bullets run straight into the results table with no
+# heading line before it), and the standalone fiscal-year form. A forward
+# guidance period says "Ending", never "Ended", so the past tense is the
+# discriminator. The one false-positive shape is a guidance table's own
+# header (AKAM's "Three Months Ended / June 30, 2024 / Low End High End"):
+# the direct break guards it twice (signal must already be delivered, and
+# _is_results_table_ahead refuses when a range label follows), and as a
+# follower it only fires after a heading candidate, which AKAM's intro
+# sentence is not.
+_GUIDANCE_RESULTS_PERIOD_RE = re.compile(
+    r"^((Three|Six|Nine|Twelve) months ended|"
+    r"(First|Second|Third|Fourth) quarter ended|"
+    r"Fiscal year ended)\b",
+    re.IGNORECASE,
+)
+
+
+_RESULTS_TABLE_UNIT_RE = re.compile(
+    r"^\(.*(million|billion|thousand|unaudited)", re.IGNORECASE
+)
+_RESULTS_RANGE_LABEL_RE = re.compile(r"\b(low|high)\s+end\b", re.IGNORECASE)
+
+
+def _is_results_table_ahead(lines: list[str], j: int) -> bool:
+    """True when the lines after a results-period header (line j) confirm a
+    reported-results table follows, rather than a guidance-range table.
+
+    A results table's header block carries a unit line ("(in millions,
+    except per share amounts and percentages; unaudited)"), standalone
+    column labels ("Change", "Reported", "Adjusted"), or change columns
+    inline in the header itself (DASH's "Y/Y % Change Q/Q % Change"). A
+    guidance-range table carries "Low End High End" instead (AKAM). Two
+    passes over the next 8 lines: any range label anywhere in the window
+    refuses first (a guidance table that also prints a unit line must not
+    be cut), then any positive confirms. No positive in the window means
+    no break — a miss keeps the old behavior, never a false cut.
+    """
+    if re.search(r"Y/Y|Q/Q", lines[j]):
+        return True
+    window = lines[j + 1 : j + 9]
+    for ln in window:
+        if _ADMIN_LINE_RE.match(ln) or _MORE_MARKER_RE.match(ln) or _GUIDANCE_RULE_LINE_RE.match(ln):
+            continue
+        if _RESULTS_RANGE_LABEL_RE.search(ln):
+            return False
+    for ln in window:
+        if _ADMIN_LINE_RE.match(ln) or _MORE_MARKER_RE.match(ln) or _GUIDANCE_RULE_LINE_RE.match(ln):
+            continue
+        if ln.strip() in ("Change", "Reported", "Adjusted"):
+            return True
+        if _RESULTS_TABLE_UNIT_RE.match(ln):
+            return True
+        if re.search(r"Y/Y|Q/Q", ln):
+            return True
+    return False
+
+
+# Batch 202: a results-narrative heading ("Revenue Environment and
+# Outlook", "Cost Performance and Outlook" — DAL; "Revenue Results
+# and Outlook:" — LUV) names a results topic and appends "Outlook",
+# but it opens the results commentary that FOLLOWS the guidance
+# table, not the guidance section itself. The vocabulary exemption in
+# _is_guidance_next_section_heading ("outlook"/"guidance" anywhere in
+# the line) kept these from ever qualifying as section-end headings,
+# so the stored guidance ran through the narrative to the 4000-char
+# cap. A heading whose final conjunct is "and Outlook" and whose
+# topic word is a results noun (Environment/Performance/Results) is
+# a narrative heading: it may end the section, subject to the usual
+# title-case + follower + has-signal gates. Pure outlook headings
+# never match — "Guidance and Outlook" (no results noun), "2025
+# Outlook" / "Financial Outlook" (no "and Outlook" tail), "DICK'S
+# Business: Full Year 2025 Outlook" (colon prefix, period label) —
+# and neither does DKS's "Foot Locker Business: Q4 2025 Commentary
+# & Outlook" (colon prefix, "Commentary", "&"), whose section is
+# genuine outlook content.
+_GUIDANCE_NARRATIVE_OUTLOOK_RE = re.compile(
+    r"^(?:[A-Z][A-Za-z]* )+(Environment|Performance|Results) and Outlook:?$"
+)
+
+# Batch 208: the results-led sibling of the narrative-outlook shape —
+# a heading that LEADS with a results noun and mentions Guidance/Outlook
+# after "&"/"and" ("Results & Guidance by Reporting Segment", "Results
+# and Guidance by Reporting Segment", "Results and Outlook by Reporting
+# Segment" — GE, 5 occurrences in the full-cache survey) is the
+# segment-results section, not a guidance section: the guidance table
+# ends at it ("Segment guidance included below." points forward to it).
+# The connector is what distinguishes it from a headline: "Results,
+# Reaffirms 2025 Adjusted EPS Outlook" (comma, verb) and "Results and
+# Provides Fiscal 2026 Outlook" (verb after "and") never match, and
+# prose ("Revenue of $43.1 billion ... prior guidance ...", "Revenue
+# growth in upper half of guidance range ...") fails on the lead word
+# or the connector. A bare "Results and Outlook" (no trailing phrase)
+# also matches — it is still a results commentary section, never the
+# guidance section itself (a genuine guidance heading leads with
+# Outlook/Guidance/Business, per _GUIDANCE_HEADING_RE).
+_GUIDANCE_RESULTS_LED_RE = re.compile(
+    r"^(?:Results|Revenue) (?:&|and) (?:Guidance|Outlook)\b"
+)
+
+
+def _wrapped_guidance_narrative_end(lines: list[str], j: int) -> int | None:
+    """Index of the second fragment when lines[j] is the first half of a
+    narrative heading wrapped across two flattened lines, else None.
+
+    Batch 217: DAL 2024-12-31 serves its results-narrative heading as
+    two lines — "Revenue Environment" / "and Outlook" (DAL 2025-06-30
+    wraps the other way, "Revenue Environment and" / "Outlook") — so
+    the single-line shapes above never match and the heading is
+    collected as guidance. A wrap is recognized only when the joined
+    line matches one of the two narrative patterns AND the second
+    fragment looks like a continuation, not a new sentence: short, not
+    sentence-terminated (a trailing colon is a heading label, not
+    termination), and starting with a lowercase word, "&", or the tail
+    word itself ("Outlook"/"Guidance"). A prose line that merely
+    mentions the outlook ("and Outlook for 2026 is strong") fails the
+    joined regex's end anchor; a table label ("Revenue") followed by a
+    prose line fails the continuation start. Returns the second
+    fragment's index so the caller can test the follower after it.
+    """
+    k = j + 1
+    while k < len(lines) and (
+        _ADMIN_LINE_RE.match(lines[k])
+        or _MORE_MARKER_RE.match(lines[k])
+        or _GUIDANCE_RULE_LINE_RE.match(lines[k])
+    ):
+        k += 1
+    if k >= len(lines):
+        return None
+    nxt = lines[k]
+    if len(nxt) > 40 or _is_sentence_terminated(nxt.rstrip(":")):
+        return None
+    if not (
+        nxt[0].islower()
+        or nxt[0] == "&"
+        or nxt.startswith(("Outlook", "Guidance"))
+    ):
+        return None
+    joined = lines[j] + " " + nxt
+    if _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(joined):
+        return k
+    _led = _GUIDANCE_RESULTS_LED_RE.match(joined)
+    if _led:
+        # The results-led regex is end-open (it allows "by Reporting
+        # Segment" tails), so a bare table label + prose ("Revenue" /
+        # "and Outlook for the quarter") would join-match it. For a
+        # wrapped heading the tail after Guidance/Outlook must be a
+        # heading tail — empty, a colon, or "by <Title Words>".
+        _tail = joined[_led.end() :]
+        if (
+            _tail == ""
+            or _tail == ":"
+            or re.fullmatch(r" by (?:[A-Z][A-Za-z]*)(?: [A-Z][A-Za-z]*)*", _tail)
+        ):
+            return k
+    return None
+
+
+def _is_guidance_section_end_follower(lines: list[str], j: int) -> bool:
+    """True when the line after a heading candidate opens a new section:
+    a bullet, a dateline, or a long terminated prose sentence with no $
+    or % (see _is_guidance_next_section_heading)."""
+    k = j + 1
+    while k < len(lines) and (
+        _ADMIN_LINE_RE.match(lines[k])
+        or _MORE_MARKER_RE.match(lines[k])
+        or _GUIDANCE_RULE_LINE_RE.match(lines[k])
+    ):
+        k += 1
+    if k >= len(lines):
+        return False
+    nxt = lines[k]
+    if _BULLET_LEAD_RE.match(nxt) or nxt.startswith("·"):
+        # An em/en-dash or hyphen lead carrying figures is a table row,
+        # not a bullet item ("— $(0.57)" — BMY's EPS-bridge figure line
+        # after the "BioNTech Acquired IPRD Charge" row label, not the
+        # next section's first bullet).
+        if nxt[0] in ("—", "–", "-") and ("$" in nxt or "%" in nxt):
+            pass
+        else:
+            return True
+    if _DATELINE_LEAD_RE.match(nxt) or _GUIDANCE_PAREN_DATELINE_RE.match(nxt):
+        return True
+    if _GUIDANCE_RESULTS_PERIOD_RE.match(nxt):
+        return True
+    # Batch 200: a colon-ended label followed by a quotation is a
+    # speaker/section label ("Message From Our CEO:" + the CEO quote)
+    # — the quote's first flattened line is a wrapped fragment, so
+    # the terminated-prose test below never fires on it. The heading
+    # still has to be title-case and colon-ended, so a prose clause
+    # that happens to precede a quote never qualifies.
+    if (
+        lines[j].rstrip().rstrip("”\"'’)]}").endswith(":")
+        and nxt.lstrip().startswith(("“", '"', "‘", "'"))
+    ):
+        return True
+    # Batch 201: a quote-led follower ends the section even without a
+    # colon-ended heading — Carnival's "Financing and Capital Activity"
+    # is followed by the CFO quote, a complete 442-char paragraph
+    # carrying $ figures, so neither the terminated-prose test (needs
+    # $-less) nor the colon+quote rule fires. A quotation after a
+    # heading is a speaker statement, not guidance prose: the opening
+    # quote + uppercase first cased char + length >= 60 is the shape.
+    # The heading gate (title-case, no guidance vocabulary, no period
+    # label) still applies, so a guidance sub-heading followed by a
+    # quote never qualifies. Supersedes the batch-200 pinned negative
+    # (non-colon heading + wrapped quote).
+    if nxt.lstrip().startswith(("“", '"', "‘", "'")):
+        first_q = nxt.lstrip("“\"'‘’()[]")
+        if len(nxt) >= 60 and first_q[:1].isupper():
+            return True
+    # Batch 212: a follower that talks about guidance ("... raising our
+    # full-year Adjusted EBITDA margin guidance to 28.75% ..." — DUOL's
+    # "Adjusted EBITDA" sub-heading) is guidance commentary, not a new
+    # section's prose — a metric sub-heading inside the outlook section
+    # must not end it. The guard covers both prose tests below (the
+    # wrapped-prose branch and the terminated follower). It does not
+    # cover the bullet/dateline/quote tests above: those are structural,
+    # and a quote that mentions guidance is still a speaker statement
+    # ending the section. SKYD's post-table followers carry no "guid*"
+    # ("We ended the quarter with $3.3 billion ..." / "On February 24,
+    # WBD's Board ... could reasonably be expected to lead to ..."), so
+    # the "expected" in the WBD follower does not trip it — only the
+    # word guidance/guiding does. It reads only the first
+    # sentence: a long mega-line paragraph can mention guidance deep
+    # inside a later disclaimer sentence ("We do not provide
+    # forward-looking guidance for certain financial measures ..." —
+    # GPC's Non-GAAP mega-line, "guidance" at char 1511) while still
+    # being a new section's prose. And it exempts call notices:
+    # Micron's "Investor Webcast" follower ("... will host a
+    # conference call ... to ... provide forward-looking guidance for
+    # its third quarter") mentions guidance, but the sentence is a call
+    # notice, not guidance — the "conference call"/"webcast" in the
+    # first sentence lifts the guard. "guided" alone does not count
+    # (ACN's results sentence "... at the top end of the company's
+    # guided range ..." is a results sentence, not guidance
+    # commentary) — only the noun/verb "guidance"/"guiding".
+    _first_sentence = nxt
+    _boundary = re.search(r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", nxt)
+    if _boundary:
+        _first_sentence = nxt[: _boundary.start() + 2]
+    if re.search(r"guidance|guiding", _first_sentence, re.IGNORECASE) and not re.search(
+        r"conference call|webcast", _first_sentence, re.IGNORECASE
+    ):
+        return False
+    # Batch 203: a section-tagline follower — a heading followed by a
+    # short sentence-case fragment ("Building the future of finance,
+    # step by step" — COIN's "Product Update" tagline) and then wrapped
+    # prose that terminates within a few lines. The immediate follower
+    # is too short and unterminated for the prose test below, and the
+    # prose's first flattened line is a wrapped fragment, so neither
+    # test fires today and the heading is collected as guidance (COIN
+    # 2025-12-31 ends on the bare "Product Update" line — the 30-line
+    # budget's last slot).
+    # Batch 212: the same shape with a LONG follower — a heading
+    # followed by a long unterminated sentence-case line that wraps
+    # into terminating prose (GPC's "Plan to Separate Automotive and
+    # Industrial Businesses" / "Non-GAAP Information" / "Comparable
+    # Sales", FDX's "Corporate Overview", SKYD's "Capital Structure &
+    # Capital Allocation" / "Our Proposal to Acquire Warner Bros.
+    # Discovery"). The terminated-prose test never fires on a wrapped
+    # first line, so the post-table sections were collected as guidance
+    # up to the 4000-char cap. The branch is therefore generalized
+    # from taglines to wrapped-prose followers — BUT only at the two
+    # ends of the length scale: a short tagline (< 60 chars, batch 203)
+    # or a long wrapped line (>= 150 chars). The middle (60-149) is
+    # where a guidance section's own sub-headings live: COIN's outlook
+    # commentary sub-headings ("Transaction Revenue", "Subscription and
+    # Services Revenue", "Expenses") are followed by column-wrapped
+    # commentary lines of 97-126 chars, and breaking on them would cut
+    # the outlook commentary (batch 203/204 pins: "USDC rewards.", the
+    # Deribit note). GPC's post-table followers run 163+ chars (its
+    # column width) and FDX's is a 482-char mega-line, so 150 sits
+    # between the attested commentary maxima (126) and the attested
+    # post-table minima (163); the blast is the check that no other
+    # exhibit's commentary falls above it. The first line may carry
+    # sparse figures (a results sentence after a new-section heading —
+    # "We ended the quarter with $3.3 billion in cash ..." — is prose,
+    # not a table row), but it must be figure-sparse (at most one $/%
+    # per 25 chars, the same guard the run lines carry) so a
+    # figure-dense table row never qualifies.
+    # A tagline is short (< 60), unterminated, carries no $/% (a figure
+    # line is a table row, not a tagline), is not a bullet/dateline/
+    # period header/quote (those are handled above), and is
+    # sentence-case, not title-case — a second heading/label is
+    # title-case ("Investor Relations", "CEO Comment", "BB+",
+    # "Diluted 360.5 361.4"), and a bare page number is title-case by
+    # the digit rule. The prose run joins up to 6 following lines
+    # (admin lines skipped) until sentence termination; it must
+    # terminate and total >= 100 chars with an uppercase first cased
+    # char. The run may carry $ ("... over $100 million in annualized
+    # revenue.") — a 100+ char terminated sentence is prose, not a
+    # table row. The 100-char floor keeps short colon-terminated
+    # pointers ("The following reconciles the drivers of projected MCO
+    # Operating Expense growth:", 82 chars) from firing. Two run
+    # guards keep the join from crossing a guidance table to a distant
+    # disclaimer paragraph: every NON-terminating run line must be
+    # >= 50 chars (a wrapped prose line is near column width; a table
+    # row is short — BMY's "Other income/(expense) ~($250M) ~($50M)"
+    # is 38) and figure-sparse — at most one $/% character per 25
+    # chars (ordinary prose runs about one figure per 50+ chars —
+    # GPC's "Global Automotive sales were $3.5 billion, up 0.8% ...
+    # with a 2.9% benefit ..." is 3 tokens in 110 chars; a table row
+    # is figure-dense — EL's "Forecasted/Adjusted EPS - Non-GAAP
+    # $3.10 - $3.35 $ 2.51 24% - 34%" is 4 tokens in 68 chars). A line
+    # failing either guard kills the run: the join is not prose, it is
+    # a table. The terminating line is exempt from both guards — it is
+    # the sentence tail ("revenue.") and may be short or carry the
+    # sentence's figures.
+    if (
+        not _is_sentence_terminated(nxt)
+        and (len(nxt) < 60 or len(nxt) >= _GUIDANCE_WRAPPED_FOLLOWER_MIN_LEN)
+        and (nxt.count("$") + nxt.count("%")) * 25 <= len(nxt)
+        and not _BULLET_LEAD_RE.match(nxt)
+        and not nxt.startswith("·")
+        and not nxt.lstrip().startswith(("“", '"', "‘", "'"))
+        and not _DATELINE_LEAD_RE.match(nxt)
+        and not _GUIDANCE_PAREN_DATELINE_RE.match(nxt)
+        and not _GUIDANCE_RESULTS_PERIOD_RE.match(nxt)
+        and not _is_guidance_title_case(nxt)
+    ):
+        run: list[str] = []
+        m = k + 1
+        terminated = False
+        while m < len(lines) and len(run) < 6:
+            if (
+                _ADMIN_LINE_RE.match(lines[m])
+                or _MORE_MARKER_RE.match(lines[m])
+                or _GUIDANCE_RULE_LINE_RE.match(lines[m])
+            ):
+                m += 1
+                continue
+            run.append(lines[m])
+            if _is_sentence_terminated(lines[m]):
+                terminated = True
+                break
+            if len(lines[m]) < 50 or (
+                lines[m].count("$") + lines[m].count("%")
+            ) * 25 > len(lines[m]):
+                # Not wrapped prose: a short or figure-dense line is a
+                # table row, and the run has crossed into a table.
+                terminated = False
+                run = []
+                break
+            # Batch 204: a wrapped prose sentence can end mid-line
+            # ("... rich app ecosystem. Coinbase is building ..." —
+            # COIN 2025-09-30's Product Update prose wraps so the
+            # sentence boundary lands mid-line and the line-end test
+            # never fires; the 6-line run then expires unterminated
+            # and the heading is collected as guidance). A mid-line
+            # boundary is a lowercase letter + terminal punctuation +
+            # space + uppercase — abbreviations ("U.S. GAAP", "No. 1")
+            # never match, so a table label cannot false-terminate.
+            # It runs after the guards, so a figure-dense line is
+            # still killed as a table row instead of terminating.
+            if re.search(r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", lines[m]):
+                terminated = True
+                break
+            m += 1
+        if terminated:
+            # Batch 212: the 100-char floor measures the RUN alone,
+            # not the follower + run — the follower is the heading's
+            # first prose line, not part of the joined sentence, so
+            # a 48-char tagline must not top a 82-char pointer run
+            # up over the floor (MCO's "The following reconciles
+            # the drivers of projected MCO Operating Expense
+            # growth:", 82 chars, batch 203 pin). The uppercase
+            # read is from the FOLLOWER, though: a wrapped
+            # sentence's capital is on its first line ("This
+            # release contains ..." / "B" tagline), while the run's
+            # first line may be a lowercase continuation ("... with
+            # a 2.9% benefit ...").
+            first_run = nxt.lstrip("“\"'‘’()[]")
+            if len(" ".join(run)) >= 100 and first_run[:1].isupper():
+                return True
+    # Batch 200: a quote-led paragraph ("“This was another year ..." —
+    # Disney's CEO quote after "Message From Our CEO:") opens with a
+    # curly quote, so the uppercase test reads the first cased char.
+    # Batch 212: the terminated prose sentence may carry sparse figures
+    # ("We ended the quarter with $3.3 billion in cash and cash
+    # equivalents and $13.7 billion in gross debt." — SKYD's "Capital
+    # Structure & Capital Allocation" follower, 5 figures in 462 chars)
+    # — a results/capital sentence after a new-section heading is prose,
+    # not a table row, so the no-$/% rule becomes the same figure-sparse
+    # guard the wrapped-prose run carries (at most one $/% per 25
+    # chars) PLUS a lead-value guard: a flattened table value row leads
+    # with its value (its first $/% token sits within the first few
+    # tokens, after an optional parenthesized qualifier — FDX's
+    # "(Continuing Operations) $35.30 to $35.90 ..." and "Revenue Growth
+    # ~12% YoY ..." put their first figure at token 2-3), while a prose
+    # sentence states its subject first and buries figures later (SKYD's
+    # followers put theirs at token 6 and 12). The threshold is 4:
+    # attested prose minima 5/11, attested table maxima 1-2. A
+    # figure-dense line (a table row) still never qualifies. And a
+    # figure-carrying follower must contain an internal sentence
+    # boundary — a single sentence ("... declared a quarterly cash
+    # dividend of $0.60 per common share.") is a declaration, not the
+    # start of a prose paragraph (batch 199 pin: the dividend
+    # declaration after "Dividend Policy" — 90 chars, one figure, no
+    # internal boundary — must not end the section); SKYD's capital-
+    # structure and WBD followers carry 2 and 1 internal boundaries.
+    first = nxt.lstrip("“\"'‘’()[]")
+    _first_fig = next(
+        (k for k, _tok in enumerate(nxt.split()) if "$" in _tok or "%" in _tok),
+        None,
+    )
+    if _first_fig is not None and not re.search(
+        r"[a-z][.!?…]\s+[\"“‘(]*[A-Z]", nxt
+    ):
+        return False
+    return (
+        len(nxt) >= 60
+        and first[:1].isupper()
+        and (nxt.count("$") + nxt.count("%")) * 25 <= len(nxt)
+        and (_first_fig is None or _first_fig >= 4)
+        and _is_sentence_terminated(nxt)
+    )
+
+
+def _is_guidance_next_section_heading(lines: list[str], j: int) -> bool:
+    ln = lines[j]
+    if len(ln) > 90 or _GUIDANCE_HEADING_RE.match(ln):
+        return False
+    if re.search(r"\b(outlook|guidance)\b", ln, re.IGNORECASE):
+        # Batch 202: a results-narrative heading ("Revenue Environment
+        # and Outlook" — DAL) is exempted from the exemption: the
+        # "Outlook" tail names the commentary section after the
+        # guidance table, not the guidance section itself.
+        # Batch 208: the results-led sibling ("Results & Guidance by
+        # Reporting Segment" — GE) is exempted the same way.
+        if not _GUIDANCE_NARRATIVE_OUTLOOK_RE.match(ln) and not _GUIDANCE_RESULTS_LED_RE.match(ln):
+            return False
+    # Batch 200: a trailing colon is a heading label, not sentence
+    # termination — "Editor's Notes:", "Message From Our CEO:",
+    # "Caution Concerning Forward Looking Statements:" all introduce
+    # the content that follows them, and the colon is what kept the
+    # section-end test from firing on them. A colon-ended line still
+    # has to pass the title-case + follower tests below, so a
+    # sentence fragment ("We expect the following:") never qualifies.
+    _stripped = ln.rstrip().rstrip("”\"'’)]}")
+    if _is_sentence_terminated(ln) and not _stripped.endswith(":"):
+        return False
+    if not ln or not ln[0].isupper() or ln.isupper():
+        return False
+    if "$" in ln or "%" in ln:
+        return False
+    if re.search(r"\d+(?:\.\d+)?\s*x\b", ln):
+        # Batch 212: a ratio value fragment ("Approx. 2.2x" — DAL's
+        # Gross Leverage value, the last row of its guidance table) is
+        # a table value, not a section heading. The $/% check above
+        # catches money and percent values; a bare ratio needs its own
+        # test. A bare decimal without a unit ("Section 2.2") is still
+        # a heading, so only the x-suffixed form is excluded.
+        return False
+    if re.search(r"\.(com|net|org|io|co|biz|info)$", ln, re.IGNORECASE):
+        # A bare domain ("CrownCastle.com" — CCI's page footer between
+        # its outlook tagline and the outlook table's change notes) is
+        # page furniture, never a section heading.
+        return False
+    if _DATELINE_LEAD_RE.match(ln) or _is_guidance_period_label(ln):
+        return False
+    # A dateline wrapped across lines ("GOODLETTSVILLE, Tenn.--(BUSINESS"
+    # / "WIRE)-- ..." — DG's 2026-05-01 release): the candidate alone
+    # never matches the dateline regex, so test it joined with its next
+    # line, which is how the flattened dateline reads.
+    if j + 1 < len(lines) and _DATELINE_LEAD_RE.match(ln + " " + lines[j + 1]):
+        return False
+    if j > 0 and _is_lone_bullet_marker(lines[j - 1]):
+        return False
+    if not _is_guidance_title_case(ln):
+        return False
+    if re.search(
+        r"dividend\s+(declaration|payment)|^quarterly\s+dividend$",
+        ln,
+        re.IGNORECASE,
+    ):
+        # Batch 199: a dividend declaration ("Quarterly Dividend",
+        # "Dividend Declaration" — COR, EXPE) is always the next
+        # section, never guidance; its follower paragraph carries
+        # "$0.48 per share", so the $-less follower test never fires
+        # on it. A "Dividend Policy" sub-heading is not matched.
+        return True
+    # Batch 217: a narrative heading wrapped across two flattened
+    # lines ("Revenue Environment" / "and Outlook" — DAL 2024-12-31):
+    # the single-line shape never matches, so test the joined form
+    # and, when it matches, test the follower after the second
+    # fragment. The collector breaks at j without appending either
+    # fragment. The wrapped test runs after all the single-line
+    # gates above, so it inherits them (title-case, no figures,
+    # no period label, no lone-bullet predecessor).
+    _wrap = _wrapped_guidance_narrative_end(lines, j)
+    if _wrap is not None:
+        return _is_guidance_section_end_follower(lines, _wrap)
+    return _is_guidance_section_end_follower(lines, j)
+
+
+# Batch 193: whether the collected guidance lines (excluding the heading)
+# already carry guidance content — a bullet, a $ or % figure, or an
+# expectation verb. The safe-harbor intro that opens some outlook
+# sections ("This Outlook section contains forward-looking statements
+# ...") carries none of these, so a next-section heading before any
+# signal does not end the section: Crown Castle's OUTLOOK section
+# opens with the intro and a "Restructuring Plan Update" subsection
+# BEFORE its outlook table, and breaking there would keep the intro
+# and lose the table.
+_GUIDANCE_SIGNAL_RE = re.compile(r"expect\w*|anticipat\w*|forecast\w*", re.IGNORECASE)
+
+
+def _guidance_has_signal(collected: list[str]) -> bool:
+    for ln in collected[1:]:
+        if _BULLET_LEAD_RE.match(ln) or ln.startswith(("·", "●", "o ")):
+            return True
+        if "$" in ln or "%" in ln:
+            return True
+        if _GUIDANCE_SIGNAL_RE.search(ln):
+            return True
+    return False
+
+# Batch 193: the guidance-heading anchor test. Two attested gaps in
+# the bare _GUIDANCE_HEADING_RE match: (1) a quote fragment that
+# happens to start with "outlook" ("outlook at the start of the
+# year.”" — DAL's CEO-quote tail) is never a heading, so an anchor
+# line ending in sentence punctuation + a closing quote is rejected
+# — but a plain terminated line stays an anchor, because GEV's
+# wrapped "guidance of similar segment EBITDA losses to 2025." is the
+# (accidental but working) entry to its segment-outlook section;
+# (2) a footnote marker attached to the heading ("Financial
+# Guidance1" — DAL's real guidance heading) breaks the regex's \b,
+# so the match is also tried with trailing digits stripped. A trailing
+# ":" stays a heading (JNJ's "Full-year 2026 guidance:").
+# Batch 196: the digit-strip path no longer requires a compound heading.
+# Batch 193 required a space in the stripped line (\"Financial Guidance1\"
+# — DAL's real heading — vs \"Guidance5\" — CRM's guidance-table column
+# header, a table cell not a heading). But Cigna's outlook section is
+# headed by the BARE word with a superscript footnote digit (\"OUTLOOK2\"
+# in text — the HTML is OUTLOOK<sup>2</sup>), so CI's 2024-12-31,
+# 2025-03-31 and 2025-09-30 quarters extracted None while every other
+# CI quarter (\"2025 OUTLOOK2\", compound, already accepted) served
+# guidance. A census of the 1,699-exhibit cache finds exactly six
+# bare-word+digit guidance headings: CI's three OUTLOOK2 (all real
+# section headings, followed by outlook prose + metrics table),
+# CRM_2024-10-31's two Guidance5 (table column headers INSIDE the
+# guidance section — the extractor already anchors on the earlier
+# \"Guidance\" heading, so they can never become the anchor), and
+# EMR_2025-09-30's \"Guidance 2026\" (also after the earlier \"2026
+# Outlook\" anchor). A bare-word+digit line can only anchor when no
+# earlier guidance heading exists — i.e. when it IS the section
+# heading, as in CI — so accepting the stripped match is safe; the
+# full blast (batch 196) verifies only CI's three quarters change.
+# Batch 199: a guidance-intro sentence anchors the section when there
+# is no heading. First Solar's interim releases introduce the table
+# with prose — "Our 2024 guidance has been updated as follows:",
+# "Our 2024 guidance remains unchanged. The complete 2024 guidance is
+# as follows:", "Our 2026 guidance remains unchanged and is summarized
+# below:", "Our updated 2026 guidance is summarized below:" — and no
+# bare "2024 Guidance" heading, so 9 of 11 cached FSLR quarters
+# extracted None despite carrying a full guidance table. A census of
+# the 1,699-exhibit cache finds this shape only in FSLR, and no
+# serving exhibit has one before its real anchor, so accepting it is
+# safe. The year must follow "Our" (optionally "updated"/"revised")
+# and the sentence must close with "as follows" / "summarized below"
+# — a bare "Our 2024 guidance was strong." never anchors.
+# Batch 212: the second alternative is Akamai's intro sentence —
+# "Financial guidance: The Company reports the following financial
+# guidance for the fourth quarter and full-year 2023:" — the heading
+# and its intro are one 114-116-char line in 6 of 12 AKAM quarters
+# (the other 6 split them: bare "Financial guidance:" + the same
+# intro on the next line, which already anchors). The shape is the
+# same announcement as the first alternative — it states that the
+# guidance that follows is being reported ("reports the following")
+# and closes with a colon — never a claim about guidance, so it
+# anchors safely. The intro check runs before the 90-char cap in
+# _is_guidance_heading: the line is a heading by function, not by
+# length.
+_GUIDANCE_INTRO_RE = re.compile(
+    r"^our (?:updated |revised )?\d{4} guidance\b.*\b(as follows|summarized below)\s*:?\s*$"
+    r"|^financial guidance:\s+the company reports the following\b.*:\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_guidance_heading(ln: str) -> bool:
+    if _GUIDANCE_INTRO_RE.match(ln):
+        # Batch 212: an intro sentence anchors regardless of length
+        # (Akamai's combined heading+intro is 114-116 chars).
+        return True
+    if len(ln) > 90:
+        return False
+    # Batch 212: a colon followed by a guidance STATEMENT is not a
+    # heading — Biogen's highlights-area intro-statement ("Full year
+    # 2025 financial guidance: Non-GAAP diluted EPS expected between
+    # $15.25 and $16.25") matches the heading regex as a prefix once
+    # "financial" joined the intervening words, and anchoring on it
+    # collects the CEO quote and the results tables instead of the
+    # guidance section. But a colon followed by a LABEL is a heading —
+    # GE's "2026 GUIDANCE: 2026 OPERATING PROFIT (NON-GAAP)" anchors
+    # its outlook tables. The discriminator is the post-colon text: a
+    # statement carries a figure ($/%) or a signal verb (expected /
+    # anticipated / forecast); a label carries neither. The intro regex
+    # above already handles Akamai's "Financial guidance: The Company
+    # reports ..." shape, so a ": " here is either a label or a
+    # statement.
+    if ": " in ln:
+        _after_colon = ln.split(": ", 1)[1]
+        if (
+            "$" in _after_colon
+            or "%" in _after_colon
+            or _GUIDANCE_SIGNAL_RE.search(_after_colon)
+        ):
+            return False
+    if re.search(r"[.!?…][”\"]\s*$", ln):
+        return False
+    if _GUIDANCE_HEADING_RE.match(ln):
+        return True
+    stripped = ln.rstrip("0123456789").rstrip()
+    if _GUIDANCE_HEADING_RE.match(stripped):
+        return True
+    return False
+
+
+# Batch 212: a guidance heading wrapped across two flattened lines
+# ("Fiscal" / "Year 2024 Financial Guidance and Store Growth Outlook"
+# — DG 2024-11-01 and 2026-07-31): neither fragment matches alone,
+# but the joined line does. The join is attempted only when the single
+# line fails, the first fragment is short (<= 40 chars — a wrapped
+# fragment, not a sentence) and the second line is short (<= 60), so
+# a prose sentence is never joined into a heading: the joined form
+# still has to pass _is_guidance_heading, which requires a
+# quarter/fiscal/year prefix and a guidance/outlook tail. Returns the
+# anchor text (the single line, or the joined line) or None.
+def _guidance_anchor_text(lines: list[str], i: int) -> str | None:
+    ln = lines[i]
+    if _is_guidance_heading(ln):
+        return ln
+    if (
+        i + 1 < len(lines)
+        and len(ln) <= 40
+        and len(lines[i + 1]) <= 60
+        and not _is_guidance_heading(lines[i + 1])
+    ):
+        # Batch 212: never glue a heading onto its own page header —
+        # DLR's outlook page is headed "Second Quarter 2025" above the
+        # real "2025 Outlook" heading, and joining them would anchor on
+        # the page header. When the second line is itself a heading the
+        # scan anchors on it alone at the next index.
+        joined = ln + " " + lines[i + 1]
+        if _is_guidance_heading(joined):
+            return joined
+    return None
+
+
+def _is_toc_entry(lines: list[str], i: int) -> bool:
+    """True when the heading at lines[i] heads a table-of-contents run.
+
+    A TOC entry is a title line followed by a bare page-number line, and
+    the next entry follows the same shape (title, page number) right
+    after it. Two consecutive pairs are required: a single bare number
+    after a heading is often just a page footer — ELV's "Financial
+    Guidance Summary" is followed by "6" and then "Elevance Health"
+    (the next page's content), and SPG's "Guidance Reconciliation" by
+    "43" and then "(1)" — neither is a contents page, and neither may
+    be skipped.
+    """
+    if i + 3 >= len(lines):
+        return False
+    if not re.fullmatch(r"\d{1,3}", lines[i + 1]):
+        return False
+    if re.fullmatch(r"\d{1,3}", lines[i + 2]):
+        return False
+    return bool(re.fullmatch(r"\d{1,3}", lines[i + 3]))
+
+
+# Batch 212: a guidance-heading candidate is a highlights-area teaser,
+# not the guidance section, when the release dateline follows it within
+# the window — the body has not started yet, so the heading heads a
+# highlights teaser, a headline fragment, or a wrapped bullet, and the
+# real outlook section sits later in the release. Attested: GPC
+# 2024-12-31 ("2025 Outlook" + 3 teaser bullets, dateline 4 lines on),
+# AKAM 2023-09-30 ("Guidance increased for full-year revenue ..." —
+# a highlights bullet line, dateline 1 line on), DG 2024-08-02 and
+# 2025-05-02 (the headline's "Financial Guidance for Fiscal Year ..."
+# line, dateline 1 line on), CSCO 2024-10-26 / 2025-01-25 / 2025-07-26
+# (the wrapped-bullet fragment "guidance range", dateline 27/28/40
+# lines on; the real "Guidance" heading is ~120 lines later). The
+# window is 50 lines: the farthest attested teaser is CSCO 2025-07-26
+# at 40 lines, and the nearest true anchor with a (false) dateline
+# after it is FIS 2024-09-30 at 72 lines ("Exhibit I Supplemental
+# Financial Information of Worldpay Holdco, LLC - Unaudited ..." matches
+# the dateline regex). A real guidance heading never has the release
+# dateline after it — the dateline opens the body, the section follows.
+# The dateline test is _DATELINE_LEAD_RE plus the city-only shape
+# ("ATLANTA - Genuine Parts Company ... announced today ...", "DUBLIN
+# - February 2, 2024 - Aon plc ... today reported ..."): an all-caps
+# city lead + dash + "announced today" / "today reported|announced".
+# Full-cache survey: 86 lines match the city-only shape and every one
+# is a genuine release dateline (AON/APP/CB/CMCSA/ED/ETN/GPC/HAL/PLTR)
+# — the phrase keeps contact headers ("ADP - Investor Relations") and
+# table headings ("GENERAL INSURANCE - NORTH AMERICA ...") out.
+_GUIDANCE_TEASER_DATELINE_WINDOW = 50
+# Batch 212: the wrapped-prose follower branch fires only for a short
+# tagline (< 60 chars) or a long wrapped line (>= this). The middle
+# (60-149) is where a guidance section's own sub-headings live: COIN's
+# outlook commentary sub-headings ("Transaction Revenue", "Subscription
+# and Services Revenue", "Expenses") are followed by column-wrapped
+# commentary lines of 97-126 chars; GPC's post-table followers run
+# 163+ chars (its column width) and FDX's is a 482-char mega-line.
+_GUIDANCE_WRAPPED_FOLLOWER_MIN_LEN = 150
+_GUIDANCE_TEASER_CITY_DATELINE_RE = re.compile(
+    r"^[A-Z][A-Z]+(?: [A-Z]+)?\s+[–—-]\s+"
+    r".*\b(?:announced today|today (?:reported|announced))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_guidance_teaser_anchor(lines: list[str], i: int) -> bool:
+    """True when a dateline line follows the heading candidate at lines[i]
+    within _GUIDANCE_TEASER_DATELINE_WINDOW lines."""
+    end = min(len(lines), i + 1 + _GUIDANCE_TEASER_DATELINE_WINDOW)
+    for k in range(i + 1, end):
+        if _DATELINE_LEAD_RE.match(lines[k]) or (
+            _GUIDANCE_TEASER_CITY_DATELINE_RE.match(lines[k])
+        ):
+            return True
+    return False
+
 
 # Executive quote extraction pattern. Two common earnings-release formats:
 #   1. "Quote text…" said Jane Doe, Chief Executive Officer.   (quote first)
@@ -3895,7 +7885,7 @@ def extract_risk_factors(document_html: str, max_chars: int = 8000) -> str | Non
     return best_section
 
 
-_BULLET_RUN_SPLIT_RE = re.compile(r"\s+•\s+")
+_BULLET_RUN_SPLIT_RE = re.compile(r"\s+[•●○]\s+")
 
 
 def _split_bullet_runs(lines: list[str]) -> list[str]:
@@ -3910,10 +7900,20 @@ def _split_bullet_runs(lines: list[str]) -> list[str]:
     and single-bullet lines are untouched. Continuation pieces keep a "• "
     prefix so downstream bullet logic (the lede, the batch-115
     bullet-headline strip) treats them as bullets. Batch 125.
+
+    Batch 197: the separator is any of •/●/○, not just •. Instacart's
+    shareholder letter, Booking's release, and Affirm's letter join
+    their bullet runs with " ● " (Instacart also " ○ " for sub-bullets),
+    so the •-only split never fired and all 10 cached CART quarters, 7
+    BKNG quarters, and AFRM 2024-12-31 extracted None — the "Financial
+    Highlights" bullets sit mid-line in a mega-line no anchor ever sees.
+    The downstream glyph set already treats ●/○ as bullets
+    (_BULLET_LEAD_RE, the lone-marker test), so the split only extends
+    the batch-125 mechanism to the glyphs the documents actually use.
     """
     out: list[str] = []
     for ln in lines:
-        if len(ln) > _MAX_HEADLINE_CHARS and ln.count("•") >= 2 and " • " in ln:
+        if len(ln) > _MAX_HEADLINE_CHARS and len(_BULLET_RUN_SPLIT_RE.findall(ln)) >= 2:
             pieces = [p.strip() for p in _BULLET_RUN_SPLIT_RE.split(ln)]
             pieces = [p for p in pieces if p]
             if len(pieces) > 1:
@@ -4053,8 +8053,57 @@ def _salvage_page_line_lede(paragraph: str) -> str | None:
     return f"{headline}\n\n{text}".strip() if headline else text
 
 
+def _is_more_page_section_heading(ln: str) -> bool:
+    """True when a line right after a "-more-" page marker opens a new
+    section instead of continuing the lede (batch 194).
+
+    The shape mirrors the guidance collector's next-section heading
+    (batch 193) but without its follower check: the follower here is
+    usually a table, which that check does not accept. A paragraph
+    wrapped across the page break is never heading-shaped (its head is
+    sentence-case, or its previous line is unterminated — the caller
+    also requires the previously collected line to be terminated), and
+    a quote-attribution tail ends with a comma or colon, so both stay
+    collectable. All-caps lines are excluded the same way: a table
+    title after the break is caught by the loop's own table breaks.
+    """
+    s = ln.strip()
+    if not s or len(s) > 90:
+        return False
+    if _is_sentence_terminated(s) or s.endswith(","):
+        return False
+    if s.isupper() or _BULLET_LEAD_RE.match(s) or s.startswith("·"):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if _DATELINE_LEAD_RE.match(s) or _GUIDANCE_PAREN_DATELINE_RE.match(s):
+        return False
+    if _is_lone_bullet_marker(s):
+        return False
+    return _is_guidance_title_case(s)
+
+
+# Batch 214: the 4000-char cap is a guillotine on genuine long
+# highlights sections, the same defect class batch 213 fixed for
+# guidance. Survey over all 1,699 cached exhibits
+# (scripts/batch214_survey.py): 54 sections exceed 4000 chars
+# uncapped, max genuine 8797 (CART 2023-09-30, bullets + guidance +
+# footnotes ending at its natural close), p99 5791, median 1250 —
+# and 114 of 2489 stored rows end with the truncation "…". The
+# section/lede line budgets are the runaway bound; the char cap only
+# needs to cover the longest genuine section, so the default moves
+# 4000 -> 9000. Shareholder LETTERS are the exception: when the
+# metric-table mode (batch 94) fails to parse, the standard path
+# falls back to serving the letter body as highlights — an 18,949
+# char runaway for COIN 2023-12-31 — so a letter falling through
+# keeps the old 4000 cap (_LETTER_FALLBACK_MAX_CHARS). The cap is
+# the only bound on that fallback, and 4000 is the least-bad status
+# quo until the metric-table mode parses those letters.
+_LETTER_FALLBACK_MAX_CHARS = 4000
+
+
 def extract_press_release_highlights(
-    document_html: str, max_chars: int = 4000
+    document_html: str, max_chars: int = 9000
 ) -> str | None:
     """Best-effort extract headline + key highlights from an earnings-release exhibit.
 
@@ -4080,7 +8129,11 @@ def extract_press_release_highlights(
     # them before any headline/section/lede logic sees them.
     lines = _split_bullet_runs(lines)
 
-    if _is_shareholder_letter(lines):
+    # Batch 214: remember whether this is a shareholder letter — a
+    # letter that falls through to the standard path below keeps the
+    # old 4000-char cap (see _LETTER_FALLBACK_MAX_CHARS).
+    is_letter = _is_shareholder_letter(lines)
+    if is_letter:
         # Shareholder-letter mode (batch 94): metric-table "Highlights"
         # sections (Duolingo/Affirm/Coinbase style) parse as bullets.
         # Falls back to the standard path when no metric table parses, so
@@ -4097,6 +8150,11 @@ def extract_press_release_highlights(
 
     headline: str | None = None
     body_start = 0
+    # Batch 258: set when a TOC skip advances — the document is a
+    # release+supplement packet, so the supplement's front matter
+    # (section labels, addresses, tables) precedes the release section
+    # and the fall-through pick below must not take its titles.
+    after_toc = False
     i = 0
     while i < len(lines):
         ln = lines[i]
@@ -4195,6 +8253,7 @@ def extract_press_release_highlights(
             j = _skip_toc(lines, i)
             if j > i:
                 i = j
+                after_toc = True
                 continue
         if _is_subsidiary_list(ln):
             # Flattened subsidiary-list masthead (Cincinnati Financial):
@@ -4328,7 +8387,15 @@ def extract_press_release_highlights(
             # headline, not a separate element. Single-word only: a 2-word
             # line may be a contact name (American Water's "Aaron Musgrave"),
             # which the contact-block skip handles. Batch 105.
+            # Batch 258: after a TOC skip, a lone ticker symbol ("DLR")
+            # ahead of a headline-shaped table label ("Series J Preferred
+            # Stock:") is a supplement stock-listing line, not a wrapped
+            # headline — the join needs the verb+topic shape too, or the
+            # fragment is skipped and the scan continues.
             nxt = lines[i + 1]
+            if after_toc and not _NARRATIVE_TAIL_RE.search(f"{ln} {nxt}"):
+                i += 1
+                continue
             if len(ln) + 1 + len(nxt) <= _MAX_HEADLINE_CHARS:
                 # The joined fragment may itself be wrapped further ("Kroger"
                 # / "Reports Third Quarter 2025 Results and" / "Updates" /
@@ -4381,14 +8448,46 @@ def extract_press_release_highlights(
                     headline = joined
                     body_start = i + rel_next
                     break
+        if after_toc and len(ln) > _MAX_HEADLINE_CHARS:
+            # Batch 258: inside a release+supplement packet, a long line
+            # after the TOC skip is supplement body prose (DLR's
+            # corporate-profile paragraph) ahead of the release section,
+            # not a missing headline — keep scanning instead of breaking
+            # with headline=None.
+            i += 1
+            continue
         if len(ln) <= _MAX_HEADLINE_CHARS:
             if _DATELINE_RE.match(ln):
+                if after_toc:
+                    # Batch 258: after a TOC skip, a dateline-shaped
+                    # line inside the supplement's tables (EOG's
+                    # "Acquisition Costs ... (134) —" row, which trips
+                    # the city-dateline shape) is a table row, not the
+                    # release dateline — keep scanning. The real
+                    # dateline follows the real headline, which breaks
+                    # the loop first; a packet with no release section
+                    # ends with headline=None, as before.
+                    i += 1
+                    continue
                 # Dateline reached with no headline found (Berkshire's
                 # releases have no headline at all). A dateline is never a
                 # headline — stop here with headline=None; the lede starts
                 # after the dateline. Batch 112.
                 body_start = i + 1
                 break
+            if after_toc and not (
+                _looks_like_headline(ln) and _NARRATIVE_TAIL_RE.search(ln)
+            ):
+                # Batch 258: after a TOC skip, the supplement's front
+                # matter precedes the release section, and its titles
+                # are headline-shaped ("Key Quarterly Financial Data",
+                # the "Unaudited, Dollars ..." units line) — only a
+                # headline-verb + results-topic line is the release
+                # headline, so keep scanning past the rest. A packet
+                # whose headline never matches ends with headline=None,
+                # the pre-existing fallback.
+                i += 1
+                continue
             headline, next_i = _join_wrapped_headline(lines, i)
             body_start = next_i
         break
@@ -4429,6 +8528,30 @@ def extract_press_release_highlights(
         content_lines = 0
         overrun = 0
         marker_seen = False
+        # Batch 194: set when a "-more-" page marker is skipped — the
+        # next line is judged as a possible new-section heading (below).
+        after_more = False
+        # Batch 185: set when a flattened table label is skipped — the
+        # lines that follow are table rows until real prose (a terminated
+        # sentence or a bullet) resumes and clears it.
+        in_table = False
+        # Batch 191: consecutive lines skipped as table-mode residue
+        # since the last non-residue line, with a flag for whether the
+        # previous iteration ended in the residue branch. When a
+        # terminated line is collected in table mode, the run is the
+        # wrapped paragraph's head (batch 186's pretax-paragraph wart):
+        # the tail alone is a dangling fragment, so the head is
+        # prepended — budget-neutral, only the tail counts.
+        table_residue_run: list[str] = []
+        prev_was_residue = False
+        # Batch 185: set when a real table row (a _is_lede_table_line
+        # skip — a data row, unit line or period header) is seen while
+        # in table mode. Mode residue (labels, TOC entries) does not
+        # count: a TOC-only packet enters mode on its supplement title
+        # and skips nothing but residue, so prose reached with no
+        # table row seen is filler after a TOC, not narrative after a
+        # table (batch 126 guard — see the normal-append break below).
+        table_seen = False
         # Batch 165: decided once, at the first line past the budget —
         # whether the item at the budget is unfinished. finish_sentence
         # is the wrap-tail trigger: the unfinished item is a sentence,
@@ -4438,11 +8561,74 @@ def extract_press_release_highlights(
         i = 0
         while i < len(lede_lines):
             ln = lede_lines[i]
+            # Batch 191: the residue run only spans consecutive
+            # residue-skipped lines — any other branch (a table row, a
+            # header skip, a collected line) breaks it.
+            if not prev_was_residue:
+                table_residue_run = []
+            prev_was_residue = False
             if _ADMIN_LINE_RE.match(ln):
                 i += 1
                 continue  # stray exhibit headers / page numbers mid-document
+            if ln == "-more-":
+                # Batch 194: a page-continuation marker, never content
+                # (the guidance collector skips it since batch 193; the
+                # lede loop never did — APD Q2 FY2026 served it plus
+                # the next section's heading as highlights). It never
+                # consumes budget, and the line after it is judged as a
+                # possible new-section heading below.
+                after_more = True
+                i += 1
+                continue
+            if after_more:
+                # Consumed by the very next line, whatever branch takes
+                # it — except a bare company-name page header, which is
+                # skipped transparently so the line after IT is judged
+                # (CarMax: "CarMax, Inc." + "Page 2 of 13" head page 2).
+                if _is_trailing_company_signature(ln):
+                    i += 1
+                    continue
+                # A heading-shaped line after a page break ends the lede:
+                # the previous section is over and the heading's content
+                # belongs to the next section
+                # (APD: "Fiscal 2026 Second Quarter Results by Business
+                # Segment" after the CEO quote). Not in table mode — a
+                # table label after the break is residue, not a heading
+                # (batch 185: prose after a table is still collected).
+                after_more = False
+                if (
+                    not in_table
+                    and lede
+                    and _is_sentence_terminated(lede[-1])
+                    and _is_more_page_section_heading(ln)
+                ):
+                    break
+            if in_table and _is_lede_nongaap_section_heading(ln):
+                # Batch 185: the non-GAAP definitions section is
+                # boilerplate — nothing after it is highlights (EOG's
+                # supplement packet: the TOC + tables fill the lede, and
+                # the definitions prose would otherwise be served once
+                # table mode skips the tables). Only in table mode: a
+                # definitions heading ahead of the narrative is not a
+                # reason to stop. This sits at the top of the loop body
+                # because _is_lede_title_line (batch 178) also matches
+                # the bare heading and would skip it before the break
+                # below could run.
+                break
             block = _footnote_def_block_len(lede_lines, i)
             if block:
+                if _PRETAX_ADJUSTMENT_NOTE_RE.match(ln):
+                    # Batch 215: the pretax note is prose that ends the
+                    # summary-table region — the CEO quote follows it.
+                    # Skipping the block must clear table mode the way
+                    # collecting prose does: without this, the quote's
+                    # unterminated head lines are eaten as table-mode
+                    # residue (the batch-191 head-prepend refuses quote
+                    # heads), so the quote opens mid-sentence or is
+                    # lost and the freed budget walks on to the
+                    # nine-month note's tail instead.
+                    in_table = False
+                    table_seen = False
                 i += block
                 continue  # footnote-definition block ("1 Defined as ...",
                 # "*Non-GAAP Financial Measure", "1) See Table A ...",
@@ -4454,6 +8640,14 @@ def extract_press_release_highlights(
                 # item at the budget: the key line and its continuations
                 # are skipped before the budget logic ever sees them.
                 # Batch 162 (bare numbered form); batch 166 (the block).
+            block = _glossary_def_block_len(lede_lines, i)
+            if block:
+                i += block
+                continue  # Batch 188: a run of >=3 "Term - definition"
+                # glossary lines (AJG's adjustment-item definitions after
+                # the recon tables) is never lede content — without the
+                # skip, the freed budget from the batch-188 header fixes
+                # let the loop fill itself with glossary paragraphs.
             note = _rounding_note_block_len(lede_lines, i) or (
                 _asterisk_note_block_len(lede_lines, i)
             )
@@ -4473,14 +8667,40 @@ def extract_press_release_highlights(
                 # shareholders,", "Dear Shareholders," — or the split
                 # "Fellow" / "Shareholders," form) is a greeting, never
                 # lede content. Batch 169.
-            if _CONFERENCE_CALL_NOTICE_RE.search(ln):
+            if _is_call_notice(ln) or _is_lede_call_announcement(ln):
                 i += 1
+                # Batch 182: a split notice's webcast second half
+                # ("In conjunction with the call, a live webcast ...")
+                # is the same notice — consume it with the announcement
+                # so it never dangles as a lede line.
+                if i < len(lede_lines) and _is_lede_webcast_continuation(
+                    lede_lines[i]
+                ):
+                    i += 1
                 continue  # investor-conference-call notice (Emerson: the
                 # "Today, beginning at 3:30 p.m. ... will discuss the ...
                 # results during an investor conference call ... live
                 # webcast ... replay ..." line) is never highlights; it
                 # backfills the lede once the footnotes are dropped.
-                # Batch 166.
+                # Batch 166. Batch 211: the test is _is_call_notice,
+                # not the bare regex — a content sentence that only
+                # points at the call ("... will be provided on the
+                # conference call and webcast", Biogen) is kept.
+            if _INVESTOR_CONFERENCE_NOTICE_RE.search(ln):
+                i += 1
+                continue  # investor-conference notice (Emerson: "will
+                # hold an in-person and virtual investor conference on
+                # Thursday, Nov. 20 ..." / "will host an investor
+                # conference on Nov. 20, 2025 ...") — an event
+                # announcement, never highlights; the batch-166 regex
+                # needs "conference call", so this shape slipped
+                # through. Batch 181.
+            if _is_lede_report_pointer(ln):
+                i += 1
+                continue  # Batch 182: a pointer sentence to the full
+                # report ("This earnings announcement ... is contained
+                # in the CSX Quarterly Financial Report ...") is
+                # document-tail boilerplate, never highlights.
             if _CONTACT_HEADER_RE.match(ln):
                 # Trailing "Contacts:" section (bare or role-prefixed): skip
                 # the whole block rather than letting its detail lines pollute
@@ -4492,6 +8712,15 @@ def extract_press_release_highlights(
             if _CONTACT_LINE_RE.search(ln):
                 i += 1
                 continue  # contact blocks some filers put before the headline
+            if _is_page_footer_furniture(lede_lines, i):
+                # Batch 207: page-footer furniture mid-lede (CCI: \"The
+                # pathway to possible.\" / \"CrownCastle.com\" — the domain
+                # already drops via _is_lede_table_line, but the tagline
+                # is a terminated sentence, so it was collected as a
+                # lede paragraph in 2 stored rows). Skipped in-loop, so
+                # it never consumes a lede budget line.
+                i += 1
+                continue
             if _is_bare_role_line(ln):
                 i += 1
                 continue  # bare quote-attribution role line ("Chief
@@ -4538,6 +8767,55 @@ def extract_press_release_highlights(
                 # never highlights. The verb veto in the predicate keeps
                 # sub-headlines ("Q2 ORGANIC SALES AND ADJUSTED EPS
                 # EXCEED OUTLOOK") in the lede.
+            if _is_lede_conf_call_heading(ln):
+                i += 1
+                continue  # Batch 181: a conference-call section
+                # heading ("Conference Call and Upcoming Events") heads
+                # the boilerplate tail (call notice, investor-conference
+                # notice, About, forward-looking statements) — never
+                # highlights. The quarter/results guard in the
+                # predicate keeps call announcements in the lede.
+            if _is_lede_recon_heading(ln):
+                # Batch 182: a reconciliation-table section heading
+                # ("GAAP/Adjusted (non-GAAP) Operating Earnings
+                # Reconciliation", "Reconciliation of Commissions and
+                # Fees") — the table's own title, never highlights.
+                # SKIPPED, not a break: the table's rows are skipped
+                # below and real prose after the table is still
+                # collected (CSX's CEO quote and volume paragraph
+                # follow its recon table — a break would lose them).
+                # A wrapped heading's continuation ("to Organic
+                # Revenue") goes with it — at most two lines, only
+                # while the wrap shape holds.
+                # Batch 188: entering table mode — the recon table's
+                # row labels follow the heading, and a label whose
+                # next line is another label (AJG's nested "Base
+                # Commissions and Fees" / "Less supplemental
+                # revenues ..." chain) matches no table predicate, so
+                # without the mode it is served as content once the
+                # budget frees up. In table mode the unterminated
+                # labels are residue; terminated prose after the table
+                # still clears the mode and is collected.
+                in_table = True
+                table_seen = False
+                i += 1
+                wraps = 0
+                while (
+                    wraps < 2
+                    and i < len(lede_lines)
+                    and _is_recon_heading_wrap(lede_lines[i])
+                ):
+                    i += 1
+                    wraps += 1
+                continue
+            if _is_lede_segment_heading(ln):
+                i += 1
+                continue  # Batch 182: a business-segment section
+                # heading ("North America Automotive Parts Group
+                # (\"North America Automotive\")" — Genuine Parts) heads
+                # the segment paragraph below it, which is real content
+                # — so only the heading is skipped, freeing the budget
+                # line the dangling heading consumed.
             if _is_lede_table_title(ln):
                 # Batch 159: a table's title line means the narrative
                 # lede is over and a table begins (Southern Company:
@@ -4546,7 +8824,18 @@ def extract_press_release_highlights(
                 # content exists; before any content, skip the title
                 # and keep looking — the table's rows are skipped below
                 # and real bullets after the table are still collected.
-                if lede:
+                # Batch 188: AJG's "Summary of Financial Results"
+                # title is skipped, never a break — it heads the
+                # summary table at the top of the release (or the
+                # six-months table mid-release), and the narrative
+                # lede (pretax paragraphs, CEO quote) follows the
+                # table. The dateline paragraph's tail lines are
+                # collected as content ahead of the title in the older
+                # quarters, so the break-on-content rule would fire on
+                # boilerplate, not narrative, and lose the quote
+                # (blast 188: 10 quarters). The generic table-title
+                # break stays for titles that follow real prose.
+                if lede and not _is_lede_summary_results_title(ln):
                     break
                 i += 1
                 continue
@@ -4572,12 +8861,128 @@ def extract_press_release_highlights(
                 i += 1
                 continue  # a table row's label line (its values are the
                 # next line, itself a data row) — batch 160
+            if _is_lede_flat_table_label(
+                ln, lede_lines[i - 1] if i > 0 else ""
+            ):
+                # Batch 185: a flattened table row's label directly below
+                # a table header block (Brown & Brown: the label's
+                # $-values were already dropped as a fragment run, so the
+                # label is the only table line the loop can still see —
+                # skipping it alone just lets the next table's labels
+                # fill the budget instead). Skip it and enter table mode:
+                # the lines that follow are table rows until real prose
+                # resumes. NOT a break — a quote or paragraph after the
+                # table (CSX) is still collected; the batch-159
+                # table-title break would lose it, and the v1 break did
+                # (AAPL/AXP/CCI/COF/CSX/EL/FDX, blast 185).
+                in_table = True
+                table_seen = False
+                i += 1
+                continue
             if _is_lede_table_line(ln):
+                if in_table:
+                    table_seen = True
                 i += 1
                 continue  # table residue (unit lines, outlook-table
                 # headings/headers, data rows) never consumes lede budget
                 # and never gets stored — batch 153
+            if in_table and _is_lede_table_mode_residue(ln):
+                # Batch 185: inside a table region, an unterminated or
+                # colon-ended line is another table row, not narrative —
+                # skip it and stay in table mode. Terminated prose and
+                # bullets fall through below, are collected, and clear
+                # the mode.
+                # Batch 191: remember the skipped line — it may be the
+                # wrapped head of the paragraph whose terminated tail
+                # is collected below.
+                table_residue_run.append(ln)
+                prev_was_residue = True
+                i += 1
+                continue
+            if (
+                _is_lede_dollar_range_statement(ln)
+                or _is_lede_percent_range_statement(ln)
+            ) and not any(_is_sentence_terminated(x) for x in lede):
+                # Batch 183: a guidance-range sub-headline ("Reaffirms
+                # 2026 Outlook for Adjusted EPS of $7.50 to $8.00") is
+                # served but never consumes lede budget — it sits with
+                # the headline, and counting it starved the results
+                # paragraph (AXP's dateline), the CEO quote (BBY) or
+                # the final bullet (GPC). Batch 252: the %-range mirror
+                # ("2026 OUTLOOK OF ORGANIC SALES GROWTH OF 3-4% and
+                # ADJUSTED EPS GROWTH OF 5-8%" — Church & Dwight).
+                # Bounded to the pre-body zone (no terminated line
+                # collected yet): a range statement past the dateline
+                # is body prose, not a sub-headline.
+                lede.append(ln)
+                in_table = False  # Batch 185: narrative resumes.
+                table_seen = False
+                i += 1
+                continue
             if content_lines >= 6:
+                # Batch 259: a bullet-list lede (CHD) — the release's own
+                # summary is a bullet run under section labels, and the
+                # 6-line budget cuts it mid-list: the two caps
+                # sub-headlines spend 2 lines, so only 4 of 10 bullets
+                # survive and the whole FY-outlook group is lost. A
+                # bullet run is a sequence of discrete items, not a prose
+                # paragraph: while the next line is a bullet and the last
+                # collected line is one too, keep collecting up to the
+                # 12-line section cap. A non-bullet past the budget still
+                # falls through to the finish logic below, so prose ledes
+                # keep the hard 6-line cap and the run can never pull in
+                # the dateline or the CEO quote. The cap is on total
+                # content lines, so a lede with sub-headlines serves
+                # fewer bullets than a bare list — the same bound the
+                # section path uses.
+                if (
+                    content_lines < 12
+                    and lede
+                    and _is_inline_bullet_start(ln)
+                    and _is_inline_bullet_start(lede[-1])
+                    # A colon-ended bullet is a sub-list opener, not a
+                    # complete item ("• For the nine months ended March
+                    # 31, 2025:", "• ... Expand Profit Recovery and
+                    # Growth Plan to:") — batch 259 refused the opener
+                    # outright because its items sat on ◦ lines the
+                    # loop did not recognize as bullets, so collecting
+                    # it stranded the lede at an unfinished item and
+                    # the overrun path then pulled the sub-list plus
+                    # the next section heading (EL 2025-03-31 served
+                    # "BEAUTY GAINS AND OPERATIONAL HIGHLIGHTS3" as a
+                    # highlight; ABT/EL Q4 served the opener dangling
+                    # with nothing after it). Batch 262 made that
+                    # premise false: ◦ joins _BULLET_LEAD_RE, so the
+                    # sub-list items ARE bullets and the extension
+                    # collects them itself. Batch 263: collect the
+                    # opener exactly when its items are bullets — the
+                    # next content line is a bullet start — and keep
+                    # refusing it when they are not (a table intro
+                    # like Berkshire's "Net earnings includes:" whose
+                    # continuation is table label lines, not bullets).
+                    and (
+                        not ln.endswith(":")
+                        or (
+                            # Batch 263: the opener needs room for at
+                            # least one child — collecting it at the
+                            # cap (content 11 -> 12) strands it with
+                            # its sub-list unserved (ABT Q4 FY2025:
+                            # the Electrophysiology opener is the last
+                            # line, its two • children stranded), which
+                            # reads broken; refusing it ends the lede
+                            # cleanly at the previous complete bullet
+                            # instead, as batch 259 did.
+                            content_lines < 11
+                            and _next_content_line_is_bullet(lede_lines, i)
+                        )
+                    )
+                ):
+                    lede.append(ln)
+                    in_table = False  # Batch 185: narrative resumes.
+                    table_seen = False
+                    content_lines += 1
+                    i += 1
+                    continue
                 if finish_item is None:
                     # First line past the budget: decide once whether the
                     # item at the budget is unfinished. A lone-marker lede
@@ -4598,6 +9003,27 @@ def extract_press_release_highlights(
                         marker_seen
                         or bool(_LEDE_WRAP_TAIL_RE.search(lede[-1]))
                         or bool(_LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]))
+                        or _is_lede_split_quote_attribution(lede[-1])
+                        # Batch 188: an open quote is unfinished by
+                        # definition — the budget line opened a quote
+                        # that hasn't closed (AJG 2024: the budget
+                        # lands mid-quote once the title drops, and
+                        # without this the quote is cut at "bedrock
+                        # culture"). Batch 181 already suppresses the
+                        # sentence-terminated break while a quote is
+                        # open; this extends the same insight to the
+                        # finish decision. The 4-line overrun cap
+                        # still bounds the pull-in.
+                        or _lede_quote_is_open(lede)
+                        # Batch 224: the noun/number-ending hole — a
+                        # budget line ending in a noun or figure
+                        # ("Operating income was $746 million") looks
+                        # complete, but the sentence wraps onto the
+                        # next line. `ln` here IS that next line (the
+                        # first line past the budget): a lowercase
+                        # lead on an unterminated budget line means the
+                        # item is unfinished.
+                        or _lede_next_line_continues(lede[-1], ln)
                     )
                     finish_sentence = not marker_seen and finish_item
                 if not finish_item:
@@ -4607,7 +9033,7 @@ def extract_press_release_highlights(
                     break  # a new bullet starts past the budget — stop at
                     # the item boundary rather than starting a bullet we
                     # cannot finish. Batch 165.
-                if finish_sentence and _is_sentence_terminated(lede[-1]) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]):
+                if finish_sentence and _is_sentence_terminated(lede[-1]) and not _LEDE_QUOTE_ATTRIBUTION_TAIL_RE.search(lede[-1]) and not _lede_quote_is_open(lede):
                     break  # the unfinished sentence just terminated — the
                     # next line starts a new item, not a continuation.
                     # Batch 180: a quote attribution ("... commented on
@@ -4620,17 +9046,143 @@ def extract_press_release_highlights(
                     # (The _is_sentence_terminated ":" branch stays: for
                     # the table-line gate a colon-ended line is a complete
                     # heading unit.)
+                    # Batch 181: an open quote suppresses the stop too —
+                    # a multi-sentence quote's first sentence terminating
+                    # does not end the quote ("…Emerson Management
+                    # System." is followed by "Emerson's leading
+                    # technology … fiscal 2025." in the same quote), so
+                    # the next line still belongs to the item. The
+                    # overrun cap (4 lines) still bounds the pull-in.
                     # Batch 165.
                 if overrun >= 4:
-                    break  # finishing cap: at most 4 lines past the budget
+                    # Batch 222: completion allowance — the 4-line cap
+                    # can still strand a quote/sentence mid-item (the
+                    # stored rows end "“We have excellent" — AJG — or
+                    # "said David M. Cordani," — CI — because the
+                    # sentence needs 1-7 more lines to terminate). When
+                    # the last collected line is still unfinished (wrap
+                    # tail, quote attribution, open quote), allow up to
+                    # 4 more lines so the sentence can terminate and the
+                    # quote close; the finish_sentence break above stops
+                    # the pull-in as soon as it does. Bounded at 8 past
+                    # the budget: a quote that never closes (stray mark,
+                    # batch 181) can cost at most 8 lines, and the
+                    # post-loop trim drops the dangling tail when even 8
+                    # is not enough (AJG's 12-line quotes). Batch 224:
+                    # the same allowance fires on the lookahead — `ln`
+                    # is the next candidate line, and a lowercase lead
+                    # means the sentence the cap just cut is still
+                    # running, even when its tail line ends in a noun
+                    # or figure with no other unfinished signal. And the
+                    # 8-line cap itself yields when the sentence
+                    # terminates just ahead (_lede_termination_ahead):
+                    # Halliburton's sentence ends one line past the cap,
+                    # so an absolute cap would strand it and the trim
+                    # would walk it back further — the pull runs at most
+                    # 4 lines past the cap, only while termination stays
+                    # in sight. The termination lookahead is gated on the
+                    # sentence still being unfinished (or the next line
+                    # continuing it): once the tail terminates, the pull
+                    # stops even when another terminated line sits ahead
+                    # — otherwise the allowance would keep pulling past
+                    # a completed quote into the pointer sentence after
+                    # it (CI's "is provided on the following page", AJG's
+                    # "shown on pages 14 and 15").
+                    term_ahead = _lede_termination_ahead(lede, lede_lines[i : i + 4])
+                    if not (
+                        _lede_item_still_unfinished(lede)
+                        or _lede_next_line_continues(lede[-1], ln)
+                    ):
+                        break
+                    if overrun >= 8 and not term_ahead:
+                        break  # finishing cap: at most 8 lines past the budget
+                if _is_lede_caps_heading(ln):
+                    # Batch 263: a section heading is never the
+                    # continuation of the unfinished item — EL
+                    # 2025-03-31 served "BEAUTY GAINS AND OPERATIONAL
+                    # HIGHLIGHTS3" as a highlight because the CEO
+                    # quote's opening “ never closes (multi-paragraph
+                    # quote: the first paragraph opens “ and only the
+                    # last closes ”), so _lede_quote_is_open stays
+                    # true, the terminated-break is suppressed, and
+                    # the overrun pulls the heading as a "continuation".
+                    # The heading ends the lede instead; the bullets
+                    # under it belong to the next section, not to the
+                    # quote. The exception is a repeated page header
+                    # inside a wrapped item: AMGN 2023-12-31's ◦ bullet
+                    # wraps across the repeated headline, and the line
+                    # after the header ("the full year, GAAP operating
+                    # income ...") continues the bullet's sentence —
+                    # then the header is page furniture, skipped
+                    # transparently so the continuation is pulled
+                    # without the header riding mid-bullet (the
+                    # batch-262 wart, fixed here rather than merely
+                    # preserved). The lookahead is the batch-224
+                    # signal: a new item never starts lowercase.
+                    j = i + 1
+                    while j < len(lede_lines) and _ADMIN_LINE_RE.match(
+                        lede_lines[j]
+                    ):
+                        j += 1
+                    nxt = lede_lines[j] if j < len(lede_lines) else ""
+                    if _lede_next_line_continues(lede[-1], nxt):
+                        i += 1
+                        continue
+                    break
                 lede.append(ln)
+                in_table = False  # Batch 185: narrative resumes.
+                table_seen = False
                 overrun += 1
                 i += 1
                 continue
+            if (
+                in_table
+                and content_lines == 0
+                and not table_seen
+                and not _is_inline_bullet_start(ln)
+            ):
+                # Batch 185: prose reached in table mode with no content
+                # collected and no real table row seen since the mode
+                # started is filler after a TOC, not narrative after a
+                # table. A supplement packet enters mode on its
+                # supplement title ("Supplemental Financial and Operating
+                # Data Page"), skips its TOC entries as residue, and
+                # would otherwise serve the boilerplate/filler that
+                # follows (batch 126: a TOC-only packet must stay None).
+                # A real table leaves table rows behind (data rows, unit
+                # lines, period headers set table_seen), so a quote or
+                # paragraph after it is still collected (CSX); bullets
+                # are exempt — a bullet is a narrative item, never
+                # filler. Once any content exists the mode is a table
+                # inside a real lede, and prose after it is collected
+                # as before (BRO's pointer sentence).
+                break
+            if in_table:
+                # Batch 191: the line being collected may be the tail of
+                # a paragraph whose wrapped head lines were skipped as
+                # table-mode residue — serve the whole paragraph, not
+                # the dangling tail alone. Budget-neutral: only the
+                # tail counts against the 6-line budget, so the CEO
+                # quote after the paragraph keeps exactly the budget
+                # it had. (The TOC-filler break above already ran, so
+                # this only fires once real content exists.)
+                head_lines = _lede_wrapped_paragraph_head(table_residue_run, ln)
+                if head_lines:
+                    lede.extend(head_lines)
             lede.append(ln)
+            in_table = False  # Batch 185: narrative resumes.
+            table_seen = False
             content_lines += 1
             i += 1
         lede = _trim_lede_table_tail(lede)
+        # Batch 222: a quote/sentence longer than the completion
+        # allowance still strands the lede mid-sentence — drop the
+        # dangling tail back to the last complete sentence instead.
+        lede = _trim_unfinished_tail(lede)
+        # Batch 230: join fragmented bullet openers the same way as
+        # the section path — a lede-served bullet list wraps the same
+        # way ("· Net" / "Sales Increased ...").
+        lede = _join_fragmented_bullet_starts(lede)
         body = "\n\n".join(lede)
 
     # A trailing comma means the headline's continuation was too long to join
@@ -4656,6 +9208,9 @@ def extract_press_release_highlights(
         not headline
         and first_para
         and max(len(ln) for ln in first_para.split("\n")) > 1000
+        and not any(
+            _BULLET_LEAD_RE.match(ln) for ln in first_para.split("\n")
+        )
     ):
         # Page-image exhibit (Bank of America slide deck): the "lines" are
         # whole pages with no usable headline. A page-LINE is not a highlight;
@@ -4667,6 +9222,15 @@ def extract_press_release_highlights(
         # salutation fix stops the greeting becoming the headline, its
         # bullets were discarded as a "page-line"). A single line over
         # 1000 chars still trips the guard exactly as before.
+        # Batch 197: a bullet-led line exempts the paragraph — a real
+        # section's narrative paragraphs are flattened mega-lines too
+        # (Instacart's "Financial Update" prose runs 1200–2500 chars a
+        # line), so the guard discarded all 6 remaining CART quarters
+        # although their sections open with 8 genuine financial bullets.
+        # A page-line dump has no bullet lines (BAC's deck bullets became
+        # the headline via batch 125, so the guard never sees them; a
+        # risk-factor bullet run like Ford's early releases still returns
+        # None through the other gates, not this one).
         # Batch 163: a Workiva page-flattened release is the same shape but
         # carries real narrative behind a dateline — salvage its lede (and
         # an embedded title) instead of discarding it; a dateline-less page
@@ -4697,8 +9261,14 @@ def extract_press_release_highlights(
         ):
             logger.info("Press-release body is only a table of contents")
             return None
-    if len(result) > max_chars:
-        result = result[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
+    # Batch 214: a shareholder letter falling through to the standard
+    # path serves the letter body as highlights — cap it at the old
+    # 4000 so the runaway (COIN 2023-12-31: 18,949 chars uncapped)
+    # does not grow with the new 9000 default. min() keeps an
+    # explicitly smaller cap honored.
+    effective_max = min(max_chars, _LETTER_FALLBACK_MAX_CHARS) if is_letter else max_chars
+    if len(result) > effective_max:
+        result = result[:effective_max].rsplit(" ", 1)[0].rstrip() + "…"
     return result
 
 
@@ -4752,6 +9322,226 @@ def _current_leading_item_text(bullets: list[str]) -> str:
     return "\n".join(bullets[start:])
 
 
+_QUOTE_VERB_RE = re.compile(
+    r"\b(said|added|commented|noted|stated|remarked|observed|continued)\b",
+    re.IGNORECASE,
+)
+
+# A dated dateline sentence lead whose dashes are glued, not spaced
+# ("WILMINGTON, Mass.--November 26, 2024--Analog Devices, Inc. ..."
+# / "SAN FRANCISCO, MAY 22, 2025-- Autodesk, Inc. ..."). The
+# extractor's dateline regexes need a spaced dash (_DATELINE_LEAD_RE)
+# or a title-case bare month (_DATED_DATELINE_LEAD_RE), so neither
+# form matches them -- and widening those regexes is wrong: the
+# leading-bullet block breaks on a dated dateline mid-block, so a
+# glued dateline that matched would drop out of the block instead of
+# riding in as a continuation (Autodesk's dateline is live today only
+# because the regexes miss it). This narrow variant is used only by
+# the batch-246 quote pull-in, where the line is already collected
+# and only needs identifying. The month alternation covers title-case
+# and all-caps (Autodesk's MAY); the optional state segment covers
+# ADI's "Mass.--" before the month.
+_MONTHS_TITLE = (
+    "January|February|March|April|May|June|July|August|September|"
+    "October|November|December"
+)
+_MONTHS_ALLCAPS = (
+    "JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|"
+    "OCTOBER|NOVEMBER|DECEMBER"
+)
+_GLUED_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+"
+    r"(?:[A-Za-z .]+?\s*[\u2013\u2014-]{1,2}\s*)?"
+    r"(?:" + _MONTHS_TITLE + "|" + _MONTHS_ALLCAPS + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+# A dated dateline sentence lead with a two-comma city/state/date
+# ("SECAUCUS, N.J., October 22, 2024 - Quest Diagnostics ..."). The
+# same shape batch 241's probe-side _DATED_DATELINE_TWO_COMMA_RE
+# covers for the S3 dateline residue; the extractor's own
+# _DATED_DATELINE_LEAD_RE needs the month right after the first
+# comma, so this form matches nothing in the extractor. Used only
+# by the quote pull-in, like the glued and parenthesized forms.
+_TWO_COMMA_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+[A-Za-z .'\-]*,\s+"
+    r"(?:" + _MONTHS_TITLE + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+
+# A dated dateline sentence lead with a parenthesized date ("Goleta,
+# California (October 24, 2024) -- Deckers Brands ... today announced
+# ..."). Same standing as the glued form above: no existing dateline
+# predicate matches it, and it is used only by the quote pull-in.
+_PAREN_DATED_DATELINE_LEAD_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]*,\s+[A-Za-z .\-]*?\s*\(\s*"
+    r"(?:" + _MONTHS_TITLE + ")"
+    r"\s+\d{1,2},\s+\d{4}\s*\)\s*[\u2013\u2014-]{1,2}\s*"
+)
+
+
+def _is_quote_pull_dateline(ln: str) -> bool:
+    """True when ln is a dateline sentence that opens the body prose.
+
+    The extractor's own dateline predicates plus the glued-dash and
+    parenthesized-date forms above. Used only to anchor the batch-246
+    quote pull-in: the dateline is the line that closes the leading
+    bullet item, and the executive quote follows it immediately.
+    """
+    return bool(
+        _DATELINE_LEAD_RE.match(ln)
+        or _DATED_DATELINE_LEAD_RE.match(ln)
+        or _GLUED_DATED_DATELINE_LEAD_RE.match(ln)
+        or _PAREN_DATED_DATELINE_LEAD_RE.match(ln)
+        or _TWO_COMMA_DATED_DATELINE_LEAD_RE.match(ln)
+    )
+
+
+def _is_executive_quote_line(ln: str) -> bool:
+    """True when ln is (one line of) an executive quote.
+
+    Two shapes, both seen in the seed rows: quote-first (``“...,”
+    said Vincent Roche, CEO and Chair. “...”``) and attribution-first
+    (``CFO Richard Puccio added, “Second quarter bookings ...``). A
+    quote mark must open within the first 140 chars and close after
+    it, and the attribution-first form needs a quote verb in the
+    prefix. The 140-char bound is the Ford guard: a flattened
+    page-image mega-line carries quoted terms (``“adjusted”``) and
+    verbs (``continued``) deep inside it, but it never opens with a
+    quote and its first quote mark sits past the bound — so it never
+    qualifies. A wrapped quote whose opener never closes on its own
+    line does not qualify either; the pull-in only takes complete
+    quote lines.
+    """
+    s = ln.strip()
+    if not s:
+        return False
+    if s[0] in ("“", '"'):
+        return bool(re.search(r'[”"]', s[1:]))
+    m = re.search(r'[“"]', s)
+    if m is None or m.start() > 140:
+        return False
+    if not _QUOTE_VERB_RE.search(s[: m.start()]):
+        return False
+    return bool(re.search(r'[”"]', s[m.start() + 1 :]))
+
+
+# A financial-statement table title ("Income Statement Summary",
+# "Condensed Consolidated Statements of Operations", "Key Business
+# Drivers", "Results Summary", "Financial Summary"): short,
+# unterminated, every word capital-led (small connectors "of" /
+# "and" / "from" / "for" / "on" / "the" allowed; parenthesized
+# qualifiers, trailing footnote digits and bare-dash separators
+# transparent), carrying a statement / summary / balance-sheet /
+# cash-flow / operations / drivers keyword. A table title is never a bullet
+# continuation — the flattened statement behind it (units line, row
+# labels, data rows) is table residue, and without the stop the
+# leading-bullet block swallows it (Visa Q4 FY2025: the block ran
+# past "Income Statement Summary" into the units line, the quote
+# intro and the table rows, to the 18-line cap). Row labels are kept
+# out by the capital-led rule ("Income from operations", "Free cash
+# flow", "Accumulated other comprehensive loss" all carry lowercase
+# non-connector words) and by the keyword list ("Net Revenue",
+# "GAAP Net Income" carry no title keyword); boilerplate titles
+# ("Forward-Looking Statements", "Safe Harbor Statement") never
+# reach this predicate — _BOILERPLATE_RE breaks the block first.
+# Batch 271.
+_FINANCIAL_TABLE_TITLE_KW_RE = re.compile(
+    r"\b(statement|statements|summary|balance sheet|balance sheets|"
+    r"cash flow|cash flows|operations|drivers)\b",
+    re.IGNORECASE,
+)
+_FINANCIAL_TABLE_TITLE_CONNECTORS = frozenset(
+    {"of", "and", "from", "for", "on", "the"}
+)
+
+
+def _is_financial_table_title(ln: str) -> bool:
+    """True when ln is a financial-statement table title (see above)."""
+    s = ln.strip()
+    if not s or _BULLET_LEAD_RE.match(s):
+        return False
+    if "$" in s or "%" in s:
+        return False
+    if re.search(r"[.!?;]\s*$", s):
+        return False  # terminated: a sentence, not a title
+    if not _FINANCIAL_TABLE_TITLE_KW_RE.search(s):
+        return False
+    words = s.split()
+    if not 2 <= len(words) <= 8:
+        return False
+    for w in words:
+        if w in ("-", "–", "—"):
+            continue  # bare dash separator ("BALANCE SHEETS – ASSETS")
+        w2 = re.sub(r"\d+$", "", w.strip("()").rstrip(","))
+        if not w2:
+            continue
+        if w2.lower() in _FINANCIAL_TABLE_TITLE_CONNECTORS:
+            continue
+        if not w2[0].isupper():
+            return False
+    return True
+
+
+_PAGE_MARKER_RE = re.compile(r"^\d{1,2} [A-Z]")
+# Batch 274: section headings that end a leading-bullet block. The
+# Cautionary heading is the batch-214 cut string, applied at
+# collection instead of assembly: the safe-harbor risk bullets that
+# follow it are never highlights. The Conference Call Details
+# heading is the same class — call logistics, not results. Both
+# match only a heading-shaped line (optional bare page number +
+# heading); a bullet line merely mentioning a call, or a mega-line
+# with the Cautionary string glued inside a footnote bullet, never
+# matches, so genuine content is untouched.
+_CAUTIONARY_HEADING_RE = re.compile(
+    r"^(\d{1,2} )?Cautionary Note on Forward-Looking Statements"
+)
+_CONFERENCE_CALL_HEADING_RE = re.compile(
+    r"^(\d{1,2} )?Conference Call Details\b"
+)
+
+
+def _is_page_marker_page(lines: list[str], idx: int) -> bool:
+    """True when lines[idx + 1] is the next page of a flattened
+    page-image exhibit and lines[idx] is the page before it (batch 274).
+
+    Page-image exhibits (Ford) flatten each page into one mega-line
+    prefixed with its bare page number ("2 Total Company Highlights
+    ...", "3 Business Segment Highlights ...", "2 The company reported
+    ..."). The leading block's item-close rule treats a terminated
+    continuation line as the end of the bullet item — but here the
+    "next line" is the next page of the same body, not new prose, so
+    the close strands a whole page: the segment table, the segment
+    narrative, or the outlook page, each of which carries figures the
+    stored rows hold. lines[idx] must be a mega-line (>= 1000 chars,
+    the batch-105 page-line notion) so the rule only fires inside a
+    flattened exhibit; the next page must open with a capital letter
+    after its page number, so a data row ("9 4 971 193") or a
+    lowercase wrap tail ("3 percentage points ...") never qualifies
+    — and a period fragment ("3 Months Ended"), a footnote
+    definition, the Cautionary heading, or a conference-call heading
+    still ends the block through the break shapes on the next
+    iteration. The next page must carry figures: either a dollar
+    figure in the page itself, or a figure-carrying bullet on the
+    next content line — the outlook page's figures may live in the
+    bullets it introduces, not its opener (F 2026-06-30's 162-char
+    "4 Full-Year 2026 Outlook ..." opener, whose guidance bullets
+    carry the segment EBIT figures). A contacts page fails both —
+    its next line is a figure-free footnote bullet — so the block
+    still ends before it (F 2026-03-31), instead of running on into
+    the footnote bullets and truncating at the 9000-char cap.
+    """
+    prev = lines[idx]
+    nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
+    if len(prev) < 1000 or not _PAGE_MARKER_RE.match(nxt):
+        return False
+    if "$" in nxt:
+        return True
+    following = _next_content_line(lines, idx + 1)
+    return following.startswith(_LEADING_BULLET_STARTS) and "$" in following
+
+
 def _leading_bullet_block(lines: list[str]) -> list[str] | None:
     """Consecutive bullet lines immediately after the headline.
 
@@ -4775,15 +9565,71 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             continue  # inside a skipped footnote-definition block
         if _ADMIN_LINE_RE.match(ln) or _CONTACT_LINE_RE.search(ln):
             continue
+        if _is_page_footer_furniture(lines, idx):
+            # Batch 207: page-footer furniture mid-item (same CCI
+            # footer pair as the lede/section paths) — the item stays
+            # open across the skip.
+            continue
         if _BOILERPLATE_RE.match(ln):
             break
+        if _CAUTIONARY_HEADING_RE.match(ln) or _CONFERENCE_CALL_HEADING_RE.match(ln):
+            # Batch 274: a safe-harbor heading or a conference-call
+            # section heading ends the block — the risk bullets (Ford:
+            # the "• Ford's long-term success..." run after the
+            # Cautionary page, which the footnote-definition skip
+            # otherwise swallows transparently) and the call-details
+            # page are never highlights. Placed with the boilerplate
+            # break, before the footnote-definition skip: the
+            # Cautionary page itself matches the numbered-definition
+            # shape ("4 Cautionary Note ..."), so the skip would
+            # swallow it and the block would run on into the risk
+            # bullets (F 2026-09-30).
+            break
         if _HIGHLIGHTS_HEADING_RE.search(ln) and len(ln) <= 120:
-            break  # a headed section follows; it competes on its own
-        if not bullets and _DATELINE_LEAD_RE.match(ln):
+            # Batch 271: narrowed heading continuation — a short
+            # colon-ended standalone sub-heading ("Other Highlights:"
+            # — Visa Q4 FY2025) that introduces a bullet list is a
+            # label line inside the leading block, not a competing
+            # section: keep collecting when bullets are already in
+            # hand and the next content line is a bullet. The label
+            # is dropped post-selection by the batch-177 rule, so
+            # only the bullets are served. The gates are what keep
+            # this narrow: a bare heading ("Recent Highlights" —
+            # Air Products, no colon) still breaks, and a bullet
+            # line carrying a glued heading label (Booking's
+            # "• Revenue grew ... Full Year 2024 Highlights")
+            # never reaches this branch as a heading —
+            # _is_lede_colon_heading refuses bullet lines. The
+            # batch-270 naive form (continue past ANY heading
+            # followed by bullets) flipped APD x3 and BKNG x1
+            # and is not used.
+            if (
+                bullets
+                and not ln.startswith(_LEADING_BULLET_STARTS)
+                and _is_lede_colon_heading(ln)
+                and _next_content_line_is_bullet(lines, idx)
+            ):
+                bullets.append(ln)
+                in_item = True
+                # Continue: the continuation branch below would
+                # append the same label a second time. The cap
+                # check at the bottom of the loop is skipped for
+                # this label line only — the bullet the gate just
+                # confirmed follows immediately and runs it.
+                continue
+            else:
+                break  # a headed section follows; it competes on its own
+        if not bullets and (
+            _DATELINE_LEAD_RE.match(ln) or _DATED_DATELINE_LEAD_RE.match(ln)
+        ):
             continue  # dateline sentence before the bullets (Prudential):
             # the bullets are still the leading block, not the dateline
             # prose. Only before any bullet is collected; mid-block lines
             # keep the existing continuation behavior. Batch 118.
+            # Batch 228: the dated form ("ST. LOUIS, October 25, 2024
+            # -- ...") joins the skip — _DATELINE_LEAD_RE allows no
+            # digits, so it never matched a dated dateline, and a dated
+            # dateline ahead of the bullets broke the block instead.
         if not bullets and _is_lede_period_header(ln):
             continue  # bare period label between the dateline and the
             # bullets (Amazon Q4: "Fourth Quarter 2024" sits on its own
@@ -4791,6 +9637,19 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             # _is_lede_table_line). Only before any bullet is collected;
             # mid-block lines keep the existing continuation behavior.
             # Batch 172.
+        if not bullets and _is_lede_colon_heading(ln):
+            continue  # Batch 195: a colon-ended list-intro heading
+            # ahead of the bullets ("Q1 FY25 (comparisons versus prior
+            # year):" — Air Products) carries no figures and no news;
+            # the list below it is the content. The lede loop already
+            # skips such headings (batch 177); the leading-bullet block
+            # never did, so the intro line broke the block at its first
+            # line and the financial bullets under it never competed.
+            # Only before any bullet is collected — a mid-block colon
+            # line is a continuation and is dropped post-selection by
+            # the batch-177 rule. When the line after the intro is not
+            # a bullet, the else branch below breaks the block exactly
+            # as before, so the skip alone can never create a block.
         block = _footnote_def_block_len(lines, idx)
         if block:
             # Footnote definition after a bullet ("1) See Table A ...",
@@ -4840,9 +9699,25 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
             if (
                 _TABLE_UNITS_RE.match(ln)
                 or _TABLE_WORD_UNITS_RE.match(ln)
-                or _is_lede_table_heading(ln)
+                or (
+                    _is_lede_table_heading(ln)
+                    and not _next_content_line_is_bullet(lines, idx)
+                )
+                # Batch 271: a financial-statement table title
+                # ("Income Statement Summary" — Visa Q4 FY2025)
+                # ends the block: the flattened statement behind
+                # it is table residue, not a bullet continuation.
+                # The next-is-bullet guard is the batch-195 shape:
+                # a title that introduces bullets ("KEY DRIVERS"
+                # + its bullet list) is a sub-heading, not a table,
+                # so the break fires only when a table follows.
+                or (
+                    _is_financial_table_title(ln)
+                    and not _next_content_line_is_bullet(lines, idx)
+                )
                 or _is_lede_period_header(ln)
                 or _is_bare_period_fragment(ln)
+                or _DATED_DATELINE_LEAD_RE.match(ln)
             ):
                 break  # a table starts where the bullets end (AppLovin's
                 # "First Quarter 2026 Financial Guidance Summary" heading
@@ -4853,7 +9728,19 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # a bare period fragment ("Three Months") is the same
                 # signal — BlackRock's nonoperating-income table header
                 # follows the expense bullets, and the fragments tail the
-                # block as continuations.
+                # block as continuations. Batch 195: the table-heading
+                # break fires only when the next content line is NOT a
+                # bullet — a bare "Guidance" heading that introduces
+                # bullets (Air Products) is a sub-heading, not a table
+                # title, so the heading is kept as a label line and the
+                # bullets below it stay in the block. Batch 228: a dated
+                # dateline sentence ("ST. LOUIS, October 25, 2024 -- ...")
+                # is body prose, never a bullet continuation — the
+                # dateline paragraph opens the body, and the flattened
+                # table behind it (Centene: 7 rows in all 8 quarters)
+                # rode the block as continuations of the open bullet
+                # item because neither the dateline nor the data rows
+                # matched any break shape above.
             bullets.append(ln)
             if (
                 # Batch 158: the terminal-punctuation check sees through a
@@ -4870,12 +9757,123 @@ def _leading_bullet_block(lines: list[str]) -> list[str] | None:
                 # heading/boilerplate breaks above still bound the block,
                 # so an unclosed quote cannot run away.
                 and not _item_has_open_quote(_current_leading_item_text(bullets))
+                # Batch 274: don't close the item when the next line is
+                # the next page of a flattened page-image exhibit —
+                # _is_page_marker_page above. The page marker is
+                # furniture, not a new item: the block keeps collecting
+                # the next page (segment table, segment narrative,
+                # outlook) as a continuation.
+                and not _is_page_marker_page(lines, idx)
             ):
+                # Batch 246: the dateline closes the item, and the
+                # executive quote follows it immediately (ADI, Deckers,
+                # Autodesk: the seed rows carry the quote, the block
+                # stopped at the dateline). Pull the quote run —
+                # consecutive executive-quote lines, at most 3 — then
+                # end the block: the results table follows the quote.
+                # The dateline test is what keeps this narrow: a
+                # terminated prose continuation that is not a dateline
+                # never pulls a quote behind it, and a quote that is
+                # not immediately after the dateline is never reached.
+                if _is_quote_pull_dateline(ln) and _is_executive_quote_line(nxt):
+                    j = idx + 1
+                    pulled = 0
+                    while (
+                        j < n
+                        and pulled < 3
+                        and _is_executive_quote_line(lines[j])
+                    ):
+                        bullets.append(lines[j])
+                        pulled += 1
+                        j += 1
                 break  # item closed and prose follows (dateline)
         else:
             break  # first line isn't a bullet — no leading block
         if len(bullets) >= 14:
-            break
+            # Batch 263: bullet-run extension — the mirror of the
+            # batch-259 lede extension. A bullet run is a sequence of
+            # discrete items, not a prose paragraph: when the next
+            # content line is a bullet and the last collected line is
+            # one too, keep collecting up to the 18-line bound the
+            # completion allowance already trusts. The case that
+            # forces it is DIS Q4 FY2025: the run hits 14 exactly on
+            # the colon-ended "• Sports: ... For Q4:" parent, whose
+            # ◦ children the allowance refuses — a colon-ended parent
+            # is not "unfinished" by the finish rule's signals (its
+            # continuation is a bullet, not a prose continuation), so
+            # the block ends on the dangling parent and the Sports
+            # children plus the Experiences parent and children are
+            # stranded. The extension only fires bullet-to-bullet, so
+            # a heading after the run still ends the block through
+            # the allowance below (a mid-block heading is appended
+            # as a continuation and is then the last collected line,
+            # not a bullet start), and the 18-line bound is unchanged.
+            bullet_run = (
+                len(bullets) < 18
+                and bullets[-1].startswith(_LEADING_BULLET_STARTS)
+                and _next_content_line_is_bullet(lines, idx)
+            )
+            # Batch 264: sub-list completion — the mirror of the
+            # batch-263 bullet-run extension past the 18-line bound.
+            # The extension stops at 18 even mid-sub-list: DIS Q4
+            # FY2025 ends on the first Experiences ◦ child while its
+            # sibling ("Domestic Parks & Experiences operating income
+            # grew 9% to $920 million") sits one line past the cap,
+            # and the line after that is the "Guidance and Outlook"
+            # heading, so the sub-list is one bullet short of
+            # complete. When the block is at the bound on a ◦ child
+            # of a colon-ended • parent and the next content line is
+            # another ◦ child of the same parent, keep collecting —
+            # at most 4 lines past the cap, mirroring the batch-222
+            # allowance, and only while the next line is a ◦ child:
+            # the moment a heading or a • bullet follows, the
+            # sub-list is over and both breaks below fire. The
+            # colon-parent check is what keeps it a sub-list finish
+            # rather than a general cap raise: a ◦ run with no
+            # colon-ended parent is a top-level list the 18-line
+            # bound still ends.
+            parent = next(
+                (b for b in reversed(bullets) if b.startswith("•")),
+                "",
+            )
+            sublist_run = (
+                18 <= len(bullets) < 22
+                and bullets[-1].startswith("◦")
+                and parent.endswith(":")
+                and _next_content_line(lines, idx).startswith("◦")
+            )
+            # Batch 222: completion allowance — the same mid-sentence
+            # wart as the lede loop and the section collector: the
+            # 14-line cap can strand a quote/sentence (GEV's quote
+            # attribution ends "said GE Vernova CEO"). When the last
+            # collected line is still unfinished (wrap tail, quote
+            # attribution, open quote), allow up to 4 more lines so
+            # the sentence can terminate and the quote close; bounded
+            # at 18. The post-selection trim drops the dangling tail
+            # when even 18 is not enough. Batch 224: the same
+            # allowance fires on the lookahead — the next line
+            # (lines[idx + 1]) starting lowercase means the sentence
+            # the cap just cut is still running, even when its tail
+            # line ends in a noun or figure. And the 18-line cap
+            # itself yields when the sentence terminates just ahead
+            # (_lede_termination_ahead): Halliburton's sentence ends
+            # one line past the cap, so an absolute cap would strand
+            # it and the trim would walk it back further — the pull
+            # runs at most 4 lines past the cap, only while
+            # termination stays in sight. The termination lookahead is
+            # gated on the sentence still being unfinished (or the next
+            # line continuing it): once the tail terminates, the pull
+            # stops even when another terminated line sits ahead.
+            term_ahead = _lede_termination_ahead(bullets, lines[idx + 1 : idx + 5])
+            if not bullet_run and not sublist_run and not (
+                _lede_item_still_unfinished(bullets)
+                or _lede_next_line_continues(
+                    bullets[-1], lines[idx + 1] if idx + 1 < n else ""
+                )
+            ):
+                break
+            if len(bullets) >= 18 and not term_ahead and not bullet_run and not sublist_run:
+                break
     if len("\n".join(bullets)) >= 150:
         # Batch 140: drop lone-marker lines AFTER qualification, so the
         # 150-char floor and the item-close logic above see the same
@@ -4902,23 +9900,145 @@ def _is_section_footnote_line(ln: str) -> bool:
     )
 
 
-def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
-    """Return the content lines of every explicit "Highlights" section.
+def _next_content_line(lines: list[str], idx: int) -> str:
+    """First non-admin line after lines[idx], or "" when there is none.
+
+    Batch 264: the batch-195 look-ahead behind
+    _next_content_line_is_bullet, returning the line itself so the
+    batch-264 sub-list completion can check its marker — a ◦ child
+    continuing the same sub-list as the last collected line.
+    """
+    for ln in lines[idx + 1 :]:
+        if _ADMIN_LINE_RE.match(ln):
+            continue
+        return ln
+    return ""
+
+
+def _next_content_line_is_bullet(lines: list[str], idx: int) -> bool:
+    """True when the first non-admin line after lines[idx] starts a bullet.
+
+    A guidance/outlook table heading ("First Quarter 2026 Financial
+    Guidance Summary") and a bare sub-heading ("Guidance") share the
+    _is_lede_table_heading shape, but only the first heads a table: the
+    second heads bullets. The look-ahead tells them apart — page-number
+    admin lines between the heading and its bullets are skipped, so a
+    page break between them does not hide the bullets. Batch 195.
+    """
+    for ln in lines[idx + 1 :]:
+        if _ADMIN_LINE_RE.match(ln):
+            continue
+        return bool(_BULLET_LEAD_RE.match(ln) or ln.startswith("·"))
+    return False
+
+
+def _extract_highlights_sections_anchored(
+    lines: list[str],
+) -> list[tuple[str, list[str], int, list[str]]]:
+    """Return (anchor, content lines, anchor index, sub-list tail) for
+    every explicit "Highlights" section.
 
     Previously only the first match was returned; Halliburton's releases
     pair leading financial bullets with a later business "Highlights"
     section, so all candidates are collected and ranked by financial
-    density by the caller (batch 102).
+    density by the caller (batch 102). Batch 244: the anchor rides
+    along so the caller can prefer a quarter-scoped section over a
+    full-year one (AGNC) — the content is byte-identical to what
+    _extract_highlights_sections returns. Batch 249: the anchor index
+    rides along too, so the caller can prepend the executive-quote run
+    that sits immediately before the winning heading (Palantir).
+    Batch 256: the sub-list tail rides along too — the continuation of
+    a sub-section bullet list past the 12-line cap, collected by
+    _collect_sublist_tail. It is NOT part of the content: the caller
+    appends it to the WINNER post-selection, so qualification and the
+    density ranking judge the capped section exactly as before.
     """
-    sections: list[list[str]] = []
+    sections: list[tuple[str, list[str], int, list[str]]] = []
     for i, ln in enumerate(lines):
-        if not _HIGHLIGHTS_HEADING_RE.search(ln) or len(ln) > 120:
+        if not _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln) or len(ln) > 120:
             continue
         collected: list[str] = []
+        # Batch 184: a section anchored by a leading-"Highlights"
+        # sub-headline serves the anchor as its first content line — the
+        # anchor is the release's own sub-headline, not a title. The
+        # shape is all-caps and unterminated (Chipotle's "HIGHLIGHTS
+        # RETURN TO POSITIVE ..." / "HIGHLIGHTS POSITIVE COMPARABLE
+        # SALES"); a real heading never qualifies (the narrowed regex
+        # says so), and a terminated prose pointer (Delta's "Highlights
+        # of the March quarter, ... are on page five ...") stays a
+        # heading-only anchor, so the quotes after it are still served
+        # without the pointer sentence itself.
+        if (
+            re.match(r"highlights?\b", ln, re.IGNORECASE)
+            and not _HIGHLIGHTS_HEADING_RE.search(ln)
+            and ln.isupper()
+            and not ln.rstrip().endswith((".", "!", "?", "…"))
+        ):
+            collected.append(ln)
         hit_table = False
-        for follow in lines[i + 1:]:
+        # Batch 222: snapshot the section as the old 12-line cap saw
+        # it. The qualification checks below (thin-section, financial
+        # table) must judge the section on its first 12 follow lines,
+        # not on the allowance-extended tail: the extra lines are quote
+        # prose, and their $/% figures would otherwise trip the
+        # data-row count and discard a narrative section (CINF Q4
+        # 2025: the CEO quote's "$2.393 billion ... 4%" lines push
+        # data_rows to 4 and the whole section is rejected for the lede
+        # fallback). The allowance changes only how much of a qualified
+        # section is served, never whether it qualifies.
+        snapshot: list[str] | None = None
+        # Batch 194: a "-more-" page marker inside a Highlights
+        # section is never content, and a heading-shaped line right
+        # after it ends the section (same rule as the lede loop).
+        after_more = False
+        # Batch 256: remember whether collection stopped AT the cap
+        # (and where), so the caller can complete a stranded
+        # sub-section bullet list post-selection — see
+        # _collect_sublist_tail. Only the cap break sets cap_stop:
+        # a break on a heading/table/boilerplate line ends the
+        # section cleanly, and the 16-line bound break is already at
+        # the maximum. stop_idx is the raw index of the last
+        # collected follow line when cap_stop is set.
+        cap_stop = False
+        stop_idx = i
+        n_follow = 0  # Batch 184: the cap counts FOLLOW lines only — a
+        # prepended sub-headline anchor (above) is headline-adjacent
+        # content, not part of the section's 12-line budget. Counting
+        # it would shift every line by one and drop the section's last
+        # line (Chipotle's revenue prose) for no reason; for sections
+        # without a prepended anchor n_follow == len(collected), so
+        # behavior is byte-identical.
+        for j, follow in enumerate(lines[i + 1 :], start=i + 1):
             if _ADMIN_LINE_RE.match(follow):
                 continue  # stray exhibit headers / page numbers mid-document
+            if _is_page_footer_furniture(lines, j):
+                # Batch 207: page-footer furniture inside a Highlights
+                # section (CCI Q3 2024: the footer pair falls mid-bullet
+                # where the bullet wraps across a page break, so both
+                # lines were collected inside the bullet paragraph).
+                # Skipped in-loop, so the pair never consumes one of
+                # the section's 12 follow slots.
+                continue
+            if follow == "-more-":
+                # Batch 194: page-continuation marker, never content.
+                after_more = True
+                continue
+            if after_more:
+                # Consumed by the next line: a bare company-name page
+                # header is skipped transparently (CarMax: "CarMax,
+                # Inc." + "Page 2 of 13" head page 2), so the line after
+                # IT is judged as the section boundary.
+                if _is_trailing_company_signature(follow):
+                    continue
+                # A heading-shaped line ends the section (its content
+                # belongs to the next section), anything else continues it.
+                after_more = False
+                if (
+                    collected
+                    and _is_sentence_terminated(collected[-1])
+                    and _is_more_page_section_heading(follow)
+                ):
+                    break
             if _BOILERPLATE_RE.match(follow):
                 break
             if follow.isupper() and len(follow) <= 80:
@@ -4926,10 +10046,21 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             if (
                 _TABLE_UNITS_RE.match(follow)
                 or _TABLE_WORD_UNITS_RE.match(follow)
-                or _is_lede_table_heading(follow)
+                or _LEDE_BARE_UNITS_DOLLARS_RE.match(follow)
+                or _is_lede_recon_heading(follow)
+                or _is_call_notice(follow)
+                or _is_lede_call_announcement(follow)
+                or (
+                    _is_lede_table_heading(follow)
+                    and not _next_content_line_is_bullet(lines, j)
+                )
                 or _is_lede_period_header(follow)
                 or _is_lede_date_header(follow)
                 or _is_bare_period_fragment(follow)
+                or (
+                    _GUIDANCE_HEADING_RE.match(follow)
+                    and not _next_content_line_is_bullet(lines, j)
+                )
             ):
                 hit_table = True
                 break  # a table starts where the highlights end (AppLovin's
@@ -4937,6 +10068,21 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # ends here, the heading is not highlights. Only the strong
                 # heading shapes break — data rows stay out, so a section
                 # whose bullets are figure-dense is never cut. Batch 153.
+                # Batch 195: the table-heading break does not fire when
+                # the next content line is a bullet — a bare "Guidance"
+                # heading that introduces bullets (Air Products) is a
+                # sub-heading, not a table title, so it is collected as
+                # a label line and the bullets below it stay in the
+                # section.
+                # Batch 182: a conference-call notice breaks collection
+                # the same way (CSX: the notice + webcast + pointer
+                # lines were collected as section content in 3 quarters
+                # because the collector has no notice handling — the
+                # lede loop's notice skip never runs on the section
+                # path). Batch 211: the test is _is_call_notice, not
+                # the bare regex — a content sentence that only points
+                # at the call ("... will be provided on the conference
+                # call and webcast", Biogen) does not end the section.
                 # Batch 154: a date header ("Three Months Ended June 30,")
                 # breaks too — it is the table's period header, and without
                 # it Instacart's financial section ends on the orphan line.
@@ -4944,14 +10090,71 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                 # same signal — the period header needs a year and the date
                 # header needs "ended" or a month, so the fragment alone
                 # matches neither and would be collected as content.
+                # Batch 229: a guidance-section heading ends the section
+                # the same way — Adobe's "Financial Targets" heading
+                # (now in _GUIDANCE_HEADING_RE) is followed by its
+                # targets table, which the collector served as highlights
+                # in 6 quarters because the heading matches no table
+                # shape above (no outlook/guidance word, so
+                # _is_lede_table_heading never fires). The bullet gate
+                # is the batch-195 one: a bare "Guidance" heading that
+                # introduces bullets (Air Products) is a sub-heading,
+                # not a table title, so it is kept as a label line.
             collected.append(follow)
-            if len(collected) >= 12:
-                break
+            n_follow += 1
+            if n_follow == 12 and snapshot is None:
+                snapshot = list(collected)
+            if n_follow >= 12:
+                # Batch 222: completion allowance — the same
+                # mid-sentence wart as the lede loop: the 12-line cap
+                # can strand a quote/sentence (GEV's CEO quote ends
+                # "and slot"). When the last collected line is still
+                # unfinished (wrap tail, quote attribution, open
+                # quote), allow up to 4 more follow lines so the
+                # sentence can terminate and the quote close; bounded
+                # at 16. The post-selection trim in
+                # _extract_highlights_section drops the dangling tail
+                # when even 16 is not enough. Batch 224: the same
+                # allowance fires on the lookahead — the next line
+                # (lines[j + 1]) starting lowercase means the sentence
+                # the cap just cut is still running, even when its tail
+                # line ends in a noun or figure. And the 16-line cap
+                # itself yields when the sentence terminates just ahead
+                # (_lede_termination_ahead) — the pull runs at most 4
+                # lines past the cap, only while termination stays in
+                # sight. The termination lookahead is gated on the
+                # sentence still being unfinished (or the next line
+                # continuing it): once the tail terminates, the pull
+                # stops even when another terminated line sits ahead.
+                term_ahead = _lede_termination_ahead(
+                    collected, lines[j + 1 : j + 5]
+                )
+                if not (
+                    _lede_item_still_unfinished(collected)
+                    or _lede_next_line_continues(
+                        collected[-1], lines[j + 1] if j + 1 < len(lines) else ""
+                    )
+                ):
+                    # Batch 256: the cap fired — remember where, so
+                    # the post-selection completion can pick the
+                    # sub-section's list back up (see
+                    # _collect_sublist_tail). The 16-line bound break
+                    # below does NOT set it: at 16 the section is
+                    # already at its maximum and nothing more is due.
+                    cap_stop = True
+                    stop_idx = j
+                    break
+                if n_follow >= 16 and not term_ahead:
+                    break
+        # Batch 222: the qualification checks judge the snapshot (the
+        # section as the old 12-line cap saw it), never the
+        # allowance-extended tail — see the snapshot note above.
+        checked = snapshot if snapshot is not None else collected
         if hit_table and (
-            len("\n".join(collected)) < 150
+            len("\n".join(checked)) < 150
             or not any(
                 _BULLET_LEAD_RE.match(ln) or ln.startswith("·")
-                for ln in collected
+                for ln in checked
             )
         ):
             continue  # table-headed section too thin — try later headings,
@@ -4967,8 +10170,8 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
             # a bullet (batch 138/139: Plug/Chubb flatten bullets onto
             # that marker), so a "·"-bulleted section is never rejected
             # for lacking a "•"-style lead.
-        if len("\n".join(collected)) >= 150:
-            if _looks_like_financial_table(collected):
+        if len("\n".join(checked)) >= 150:
+            if _looks_like_financial_table(checked):
                 continue  # table, not narrative highlights — try later headings
             # Batch 140: drop lone-marker lines AFTER qualification, so the
             # 12-line cap and the 150-char floor see the same lines as
@@ -5033,31 +10236,174 @@ def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
                     # content. Batch 173.
                     j += 1
                     continue
+                if _is_lede_report_pointer(collected[j]):
+                    # Report-pointer sentence inside a Highlights
+                    # section (American Express: "This earnings release
+                    # should be read in conjunction with the company's
+                    # statistical tables ...") — the same document-tail
+                    # pointer as in the lede loop; the section collector
+                    # is the path that actually serves Amex, so it needs
+                    # the skip too. Batch 182.
+                    j += 1
+                    continue
                 if not _is_lone_bullet_marker(collected[j]):
                     kept.append(collected[j])
                 j += 1
             collected = kept
             if collected:
-                sections.append(collected)
+                # Batch 256: the sub-section bullet-list tail rides
+                # along so the WINNER can be completed post-selection
+                # (see _extract_highlights_section). It is computed
+                # here — the collector is the only place that knows
+                # exactly where the cap stopped — but it is NOT part
+                # of `collected`: qualification and the density ranking
+                # judge the capped section exactly as before, so
+                # completing a list can never flip which candidate
+                # wins. The guard is the sub-heading itself: the tail
+                # of the collected lines after the last Highlights
+                # sub-heading must be all bullets, so the tail
+                # completes the sub-section's list and never extends
+                # the section's own list past its cap (AMD's plain
+                # 12-bullet list, AGNC's portfolio section).
+                tail: list[str] = []
+                if cap_stop:
+                    sub_idx = max(
+                        (
+                            k
+                            for k, ln in enumerate(collected)
+                            if _HIGHLIGHTS_SECTION_ANCHOR_RE.search(ln)
+                            and len(ln) <= 120
+                        ),
+                        default=None,
+                    )
+                    if sub_idx is not None and all(
+                        _BULLET_LEAD_RE.match(ln) or ln.startswith("·")
+                        for ln in collected[sub_idx + 1 :]
+                    ):
+                        tail = _collect_sublist_tail(lines, stop_idx + 1)
+                sections.append((ln, collected, i, tail))
             continue
         break  # heading found but section too thin — don't try later headings
     return sections
+
+
+def _collect_sublist_tail(lines: list[str], start: int) -> list[str]:
+    """Collect the continuation of a sub-section bullet list past the
+    section collector's cap (batch 256).
+
+    Starting at raw line `start` (the line after the cap's last
+    collected line), skip admin/page-footer lines the collector
+    itself skips, then take consecutive bullet lines — at most 4,
+    mirroring the +4 completion allowance — stopping at the first
+    non-bullet content line. A lone bullet marker ("•" on its own
+    line) is skipped, not counted: its item text is a non-bullet
+    line and stops the scan, so a flattened list never yields a
+    dangling glyph. Returns [] when the next content line is not a
+    bullet — the list already ended, and there is nothing to
+    complete. The caller bounds the total served lines at 16.
+    """
+    tail: list[str] = []
+    j = start
+    n = len(lines)
+    while j < n and len(tail) < 4:
+        ln = lines[j]
+        if _ADMIN_LINE_RE.match(ln) or _is_page_footer_furniture(lines, j):
+            j += 1
+            continue
+        if _is_lone_bullet_marker(ln):
+            j += 1
+            continue
+        if _BULLET_LEAD_RE.match(ln) or ln.startswith("·"):
+            tail.append(ln)
+            j += 1
+            continue
+        break
+    return tail
+
+
+def _extract_highlights_sections(lines: list[str]) -> list[list[str]]:
+    """Return the content lines of every explicit "Highlights" section."""
+    return [content for _, content, _, _ in _extract_highlights_sections_anchored(lines)]
+
+
+def _prepend_pre_section_quote(
+    lines: list[str], anchor_idx: int | None, content: list[str]
+) -> list[str]:
+    """Prepend the executive-quote run immediately before a Highlights
+    section heading (batch 249).
+
+    Palantir's releases put the CEO's quote between the dateline and
+    the "Q# YYYY Highlights" heading, so the section path wins and
+    the quote is never collected — the batch-246 pull-in only fires
+    inside the leading-bullet block, which these releases never open.
+    The quote is the release's own summary of the quarter and the
+    seed rows carry it, so the section serves it too: the consecutive
+    executive-quote lines (at most 3, the batch-246 cap) directly
+    before the heading, in document order.
+
+    The dateline anchor is what keeps this narrow, exactly as in
+    batch 246: the line before the quote run must be a dateline
+    sentence. A quote preceded by a bullet (Amazon's Jassy quote
+    inside a bullet), a footnote line (Chevron's reconciliation
+    pointer), an attribution line (Equinix's "Charles Meyers, CEO
+    and President, Equinix:"), or an undated dateline (Biogen,
+    Datadog) is a different shape and stays out. A headed section
+    is the only winner this applies to — the leading-bullet block
+    (anchor None) already pulls its quotes via batch 246.
+    """
+    if anchor_idx is None or anchor_idx <= 0:
+        return content
+    # Walk back over the whole consecutive quote run, then take the
+    # first three in document order — the batch-246 cap. Capping the
+    # backwards walk instead would keep the LAST three (the ones
+    # nearest the heading) and strand the dateline check on the
+    # uncollected fourth quote line, so a four-line run would prepend
+    # nothing at all.
+    j = anchor_idx - 1
+    run: list[str] = []
+    while j >= 0 and _is_executive_quote_line(lines[j]):
+        run.append(lines[j])
+        j -= 1
+    if not run:
+        return content
+    if j < 0 or not _is_quote_pull_dateline(lines[j]):
+        return content
+    run.reverse()
+    return run[:3] + content
 
 
 def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     """Return the content lines of an explicit "Highlights" section, or None.
 
     Financial priority (batch 102): the leading bullet block right after
-    the headline and every "Highlights" section compete; the one densest
-    with reported financial figures wins (earlier wins ties). When nothing
-    is financial, the earliest candidate is kept — the pre-batch-102
-    behavior.
+    the headline and every "Highlights" section compete; the one with
+    the most reported financial figure lines wins (earlier wins ties).
+    When nothing is financial, the earliest candidate is kept — the
+    pre-batch-102 behavior. Batch 261: the docstring used to say
+    "densest", but the code has always scored by absolute figure-line
+    count, and that is the right rule — a density-first simulation
+    over the 1,699-exhibit cache flips 27 winners to thinner sections
+    (ADBE's 7-figure Financial Highlights lose to 3-figure Business
+    Segment Highlights; CRM's 11-figure quarter section loses to the
+    6-figure guidance section), so density-first is rejected and the
+    docstring now states the implemented rule.
+
+    Scope priority (batch 244): a full-year-scoped section never wins
+    over a quarter-scoped section that financially qualifies. A Q4
+    release often carries both ("FOURTH QUARTER 2024 FINANCIAL
+    HIGHLIGHTS" and "2024 FULL YEAR HIGHLIGHTS", AGNC); the full-year
+    section has more figure lines, so density alone picks it — but the
+    row is a quarter, so the quarter's figures are the right ones. The
+    scope rule only fires when a quarter-scoped candidate qualifies
+    financially, so a release whose only financial section is the
+    full-year one is untouched, and the leading-bullet block (no
+    anchor) neither triggers nor is dropped by it.
     """
-    candidates: list[list[str]] = []
+    candidates: list[tuple[str | None, list[str], int | None, list[str]]] = []
     leading = _leading_bullet_block(lines)
     if leading is not None:
-        candidates.append(leading)
-    candidates.extend(_extract_highlights_sections(lines))
+        candidates.append((None, leading, None, []))
+    candidates.extend(_extract_highlights_sections_anchored(lines))
     if not candidates:
         return None
 
@@ -5069,9 +10415,21 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
         # score 0 and only wins when nothing financial exists.
         return (1, count) if (count >= 2 and density >= 0.4) else (0, 0)
 
-    best = max(candidates, key=_score)
-    if _score(best)[0] <= 0:
-        best = candidates[0]
+    if any(
+        anchor is not None
+        and _highlights_section_scope(anchor) == "quarter"
+        and _score(content)[0] == 1
+        for anchor, content, _, _ in candidates
+    ):
+        candidates = [
+            (anchor, content, idx, tail)
+            for anchor, content, idx, tail in candidates
+            if anchor is None or _highlights_section_scope(anchor) != "fullyear"
+        ]
+    best_pair = max(candidates, key=lambda c: _score(c[1]))
+    if _score(best_pair[1])[0] <= 0:
+        best_pair = candidates[0]
+    best_anchor, best, best_idx, best_tail = best_pair
     # Batch 177: drop colon-ended list-intro / section headings and
     # summary-table column-header lines from the WINNING section only.
     # The drop must happen after selection, not in the per-section
@@ -5084,11 +10442,46 @@ def _extract_highlights_section(lines: list[str]) -> list[str] | None:
     # the served text loses the dangling heading (Datadog: "Third
     # Quarter & Recent Business Highlights:" between the financial
     # bullets and the business bullets).
-    return [
+    best = [
         ln
         for ln in best
         if not _is_lede_colon_heading(ln) and not _is_lede_table_header(ln)
     ]
+    # Batch 256: complete the winning section's stranded sub-section
+    # bullet list (BKR: the Q4 section serves 6 Q4 bullets + the
+    # "Full-year highlights" label + 5 of 7 FY bullets; the last two
+    # are the tail). This happens AFTER selection, for the same reason
+    # as the batch-177 drops: growing a candidate pre-selection
+    # changes its figure count and flips which candidate wins — the
+    # broad in-collector form did exactly that (Welltower's Q4
+    # section grew past its Annual section and flipped the winner;
+    # AGNC's later section grew past the quarter section). The tail
+    # is at most 4 lines and the served total stays at or under the
+    # section's own 16-line bound. A headed section is the only
+    # winner with a tail — the leading-bullet block carries [].
+    if best_tail:
+        best = best + best_tail[: max(0, 16 - len(best))]
+    # Batch 222: drop a trailing mid-sentence fragment (the same wart
+    # as the lede loop — the 12-line cap strands GEV's quote at "and
+    # slot"); post-selection, so the financial-density competition is
+    # untouched (batch 177). Applies to whichever candidate won —
+    # a leading-bullet block's trailing continuation is the same shape.
+    # Batch 230: join fragmented bullet openers ("· Net" / "Sales
+    # Increased ...") the same way — post-selection, so qualification
+    # and the density competition see the unjoined lines exactly as
+    # before. The batch-256 tail is appended before this step, so a
+    # tail that ends on a dangling opener is trimmed here, and a
+    # fragmented tail opener is joined here.
+    best = _join_fragmented_bullet_starts(best)
+    best = _trim_unfinished_tail(best)
+    # Batch 249: a headed section's executive quote, when it sits
+    # between the dateline and the heading (Palantir), is prepended
+    # after the post-selection drops/trim, so the competition and
+    # the trim judge the section alone. The leading-bullet block
+    # (anchor None) never reaches this — its quotes come via batch 246.
+    if best_anchor is not None:
+        best = _prepend_pre_section_quote(lines, best_idx, best)
+    return best
 
 
 # --- Shareholder-letter extraction mode (batch 94) ---------------------------
@@ -5573,8 +10966,1051 @@ def _extract_flat_summary_table_highlights(
     return result
 
 
+# Batch 213: the 4000-char cap is a guillotine on genuine long sections,
+# not just a runaway bound. Survey over all 1,699 cached exhibits
+# (scripts/batch213_survey.py): 26 sections exceed 4000 chars uncapped,
+# max 7614 (CCI 2023-09-30, ends at its natural "Supplemental Information
+# Package" close), p99 5741, none over 8000 — and 134 of 1307 stored rows
+# end with the truncation "…" (AMT/CHD/CLX lose 140–2,100 chars of real
+# outlook tables and prose). The 30-line budget + 20-line lookahead
+# (batch 204) is the runaway bound; the char cap only needs to cover the
+# longest genuine section, so it moves 4000 -> 8000. ABNB's sections
+# still end mid-sentence at 6135 chars — that is the line budget cutting
+# a 30+ line section with no break in the lookahead window, by design.
+_MAX_GUIDANCE_LINES = 30
+_GUIDANCE_BUDGET_LOOKAHEAD_LINES = 20
+
+
+# Batch 233: the collected guidance of a table-shaped section is a
+# flattened split table — a bare label line, then one or two
+# figure-only value lines — plus footnote furniture. AppLovin's
+# "Advertising Revenue" / "$1,030 $1,050" and DuPont's "Net sales" /
+# "~$3,025" / "$12,800 - $12,900" read as a parts list, and the long
+# non-GAAP footnotes after the rows ("2Includes repurchased shares
+# ...", "3 We have not provided the forward-looking GAAP equivalents
+# ...") ride along because their openers evade the shared footnote
+# skip: the key is glued to its word ("2Includes") or the first line
+# is an unterminated wrap ("3 We have not ..."), and
+# _is_bare_numbered_footnote requires termination. The batch-231 fill
+# gate blocked all 11 rows (table fraction >= 0.2). _clean_guidance_result
+# fuses each split row into one readable line ("Advertising Revenue:
+# $1,030 – $1,050", "Net sales: ~$3,025 / $12,800 - $12,900") and drops
+# the footnote-definition blocks, keeping the heading, the units line,
+# period sub-headings, prose and quotes. Anything that does not match
+# the clean shapes passes through untouched, so an ambiguous table
+# (Autodesk's wrapped header run, Delta's wordy "Greater than 10%"
+# values, GE's interleaved FCF/Conversion rows) is served exactly as
+# before. Batch 235: Emerson's wrapped labels now join ("Underlying
+# Sales Growth: 2% - 3% / 3% - 5%") instead of refusing.
+_GUIDANCE_VALUE_WORDS = frozenset(["up", "down", "n/a", "to"])
+_GUIDANCE_VALUE_SCALE_WORDS = frozenset(
+    ["million", "millions", "billion", "billions", "thousand", "thousands", "percent"]
+)
+# Finite verbs / auxiliaries a table label never carries: the guard
+# that keeps a wrapped prose fragment ("Revenue grew" / "$5.10 billion
+# ...") from fusing as a label + value row. Participles that do occur
+# in real labels ("Adjusted", "used" in "Shares used in ...") are
+# deliberately absent. Batch 233: base and plural forms included —
+# Cigna's "The foregoing statements represent the Company's current
+# estimates of The Cigna Group's 2025" slipped past "represents"
+# (plural "represent") and got chopped into a "Group's: 2025" row.
+_GUIDANCE_LABEL_VERB_WORDS = frozenset(
+    [
+        "was", "were", "is", "are", "has", "have", "had", "grew", "grows",
+        "grow", "increased", "increases", "increase", "decrease",
+        "decreased", "decreases", "rose", "rises", "rise", "fell",
+        "falls", "fall", "declined", "declines", "decline", "expects",
+        "expect", "expected", "anticipates", "anticipate", "reported",
+        "reports", "report", "reflects", "reflect", "represents",
+        "represent", "includes", "include", "included", "drove",
+        "driven", "improved", "continued", "continue", "remains",
+        "remained", "remain", "came", "comes", "estimates", "estimate",
+        "forecast", "forecasts", "project", "projects", "assume",
+        "assumes", "believe", "believes", "guide", "guides",
+        # Batch 235: "add" / "subtract" — Elevance's "Add / (Subtract):"
+        # is an add/subtract list header, not a row label; without
+        # these it counts as a label and the wrapped-label guard
+        # refuses every row of the list below it.
+        "add", "subtract",
+    ]
+)
+# A label never opens with a qualifier word: "at least $7,000" is a
+# value with its qualifier, not a label + value row (Cigna), and
+# neither is "No change" or "Up 5%".
+_GUIDANCE_LABEL_QUALIFIER_WORDS = frozenset(
+    [
+        "at", "approximately", "about", "up", "more", "less", "greater",
+        "over", "under", "around", "no", "not",
+    ]
+)
+# A bare month word is a date fragment, never a metric label.
+_GUIDANCE_MONTH_WORDS = frozenset(
+    [
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november",
+        "december",
+    ]
+)
+# A bare-numbered footnote opener in the relaxed (guidance-local) form:
+# digit key + space + capital ("3 We have not provided ...", "1 Non-GAAP
+# measures ...") or the key glued to its word ("2Includes repurchased
+# ..."). The shared _is_bare_numbered_footnote requires termination,
+# which is exactly what a wrapped definition's first line lacks.
+_GUIDANCE_FOOTNOTE_OPENER_RE = re.compile(
+    r"^\d{1,3}\.?(?:\s+[A-Z]|(?=[A-Z][a-z]))"
+)
+# A letter-dash footnote key ("(a – Future dividends and increases to
+# the share buyback authorization ...", "(b – FCF* conversion: ...") —
+# GE Aerospace keys its table footnotes with a parenthesized letter
+# plus a dash instead of "(a) ...". The shared _LEDE_FOOTNOTE_RE needs
+# the closing paren right after the key, so this shape never opens a
+# block anywhere, and the two definitions ride the collected guidance
+# to the end of the section. Single letter only: a multi-letter
+# parenthesized label is a metric label (batch 238's "(ETR) ~23%"
+# labeled value), never a footnote key — and the dash after the key is
+# what separates it from a paren prose continuation (batch 176's
+# "(MRC) protocol ..." carries no dash). The dash may be a hyphen, en
+# dash or em dash, and the definition may start on the next line, so
+# the line may end right after it.
+_GUIDANCE_LETTER_DASH_FOOTNOTE_RE = re.compile(
+    r"^\([a-zA-Z]\s*[–—-](?:\s+\S|\s*$)"
+)
+# One figure inside a guidance value line: optional ~, optional parens
+# (a negative), optional spaced "$", digits with PROPER thousands
+# grouping, optional decimal, optional spaced "%"/"B"/"M"/"K"/"x"
+# suffix. "15 %" and "$ 967" match; a bare year ("2025") matches too,
+# so callers must already know the line is a value line before counting
+# figures in it. Batch 233: the grouping is strict (",\d{3}") — a
+# comma-separated footnote key ("1,2", "2,5" — Cigna's "Pre-Tax 1,2")
+# is not a figure, and the loose "\d[\d,]*" read it as one, fusing
+# the keys as the row's values. The digit run is \d{1,4}, not
+# \d{1,3}: a bare 4-digit year must match as ONE figure, or the
+# year filter in _guidance_value_figures never fires ("2025" split
+# into "202" + "5") and a prose sentence chops at its year.
+_GUIDANCE_FIGURE_RE = re.compile(
+    r"~?\(?\$?\s*\d{1,4}(,\d{3})*(\.\d+)?\s*(%|B|M|K|x)?\)?"
+)
+_GUIDANCE_UNITS_RE = re.compile(
+    r"^\(?in (millions|billions|thousands)\b"
+    r"|^dollars? in (millions|billions|thousands)\b",
+    re.IGNORECASE,
+)
+
+
+def _guidance_footnote_opener(
+    ln: str, nxt: str = "", include_paren: bool = True
+) -> bool:
+    """Guidance-local footnote opener: the shared shapes, plus the
+    AppLovin/Delta shapes the shared opener misses (see
+    _GUIDANCE_FOOTNOTE_OPENER_RE) and the letter-dash key (see
+    _GUIDANCE_LETTER_DASH_FOOTNOTE_RE). Used only by the guidance clean
+    step (via _footnote_def_block_len's opens parameter) — the
+    highlights/lede paths keep the strict opener. The attested
+    population is footnote-only: a cache-wide survey of collected
+    guidance finds 18 digit+capital lines and every one opens a
+    footnote definition (AppLovin x5, Bristol Myers x3, Delta x8,
+    Emerson x1), and the clean step additionally requires a table to
+    have been seen before the relaxed opener fires, so a numbered
+    prose item ahead of any table can never match.
+    """
+    if _opens_footnote_def(ln, nxt, include_paren):
+        return True
+    if _GUIDANCE_LETTER_DASH_FOOTNOTE_RE.match(ln):
+        return True
+    return bool(_GUIDANCE_FOOTNOTE_OPENER_RE.match(ln))
+
+
+def _is_guidance_value_line(ln: str) -> bool:
+    """True for a bare figure-only value line of a split guidance-table
+    row ("$1,030 $1,050", "~$3,025", "$12,800 - $12,900", "63% 64%",
+    "15 % 17 %", "$ 967 $ 986", "($0.70) – ($0.10)", "2x - 3x",
+    "$12.1 billion - $12.3 billion"). Every token must be a figure, a
+    scale word, or a joiner — a wordy value ("Greater than 10%",
+    "10% average", "2x or less") is not one, so Delta's wordy rows
+    never fuse, and a prose continuation with trailing words
+    ("$5.10 billion, up 10% year over year") fails on its words. A
+    lone dash is not a value line (no figure), so a line-split range
+    continuation ("- $1.30") is only ever consumed as a merge onto the
+    previous value, never as a row of its own.
+    """
+    if not ln or ln[0] in "•●○◦▪■·\"“":
+        return False
+    toks = ln.split()
+    if not toks:
+        return False
+    # Batch 233: a lone 1-3 digit line is a page number ("1" after the
+    # AppLovin table), never a value — without this the fuser attaches
+    # it to the last row ("63% 64% / 1"). The same for a lone
+    # parenthesized key ("(2)"), which is a footnote key, not a value,
+    # and for a lone 4-digit line, which is a year ("2024" ahead of
+    # Emerson's table) — the \d{1,4} figure regex would otherwise read
+    # it as a value line, the pending header never forms, and no fused
+    # row in the table normalizes.
+    if len(toks) == 1 and (
+        re.fullmatch(r"\d{1,3}", toks[0])
+        or re.fullmatch(r"\(\d{1,3}\)", toks[0])
+        or re.fullmatch(r"\d{4}", toks[0])
+    ):
+        return False
+    for t in toks:
+        s = t.strip("(),")
+        if s in ("-", "–", "—", "~", "%", "$", ">", "<"):
+            continue
+        if s.lower() in _GUIDANCE_VALUE_WORDS:
+            continue
+        if s.lower() in _GUIDANCE_VALUE_SCALE_WORDS:
+            continue
+        if _GUIDANCE_FIGURE_RE.fullmatch(s):
+            continue
+        return False
+    return bool(re.search(r"\d", ln))
+
+
+def _guidance_value_figures(ln: str) -> list[str]:
+    """Figure spans of a value line, with inner spaces normalized
+    ("$ 967" -> "$967", "15 %" -> "15%"). A bare parenthesized key
+    ("(1)", "(2)") is a footnote key, never a figure — without this
+    filter Akamai's valueless "Revenue growth rates year-over-year*(2)"
+    splits as label + "(2)", and a "(1) $1.91 - $1.97" unit counts
+    three figures instead of two, blocking its range-join. A bare
+    four-digit number is a year, not a value, and is filtered for the
+    same reason (Cigna's "... Group's 2025" must never split on it)."""
+    out = []
+    for m in _GUIDANCE_FIGURE_RE.finditer(ln):
+        fig = m.group(0).replace(" ", "")
+        if re.fullmatch(r"\(\d{1,3}\)", fig):
+            continue
+        if re.fullmatch(r"\d{4}", fig):
+            continue
+        # Batch 233: a bare digit that is one half of a comma-separated
+        # footnote key ("1,2") is not a figure — the strict thousands
+        # grouping stops "1,2" matching as one figure, but the regex
+        # still matches its "1" and "2" separately, so the split
+        # guard above would see two figures and fuse the keys as
+        # the row's values ("Pre-Tax: 1,2").
+        start, end = m.span()
+        if (
+            end < len(ln)
+            and ln[end] == ","
+            and end + 1 < len(ln)
+            and ln[end + 1].isdigit()
+        ):
+            continue
+        if start > 1 and ln[start - 1] == "," and ln[start - 2].isdigit():
+            continue
+        out.append(fig)
+    return out
+
+
+def _is_guidance_table_label(ln: str) -> bool:
+    """True for a bare metric label of a split guidance-table row
+    ("Advertising Revenue", "Net sales", "Operating EBITDA(2)",
+    "CASM excluding net special items, fuel and profit sharing2").
+    Short, unterminated, digit-free once footnote keys are stripped,
+    and carrying no finite verb — a wrapped prose fragment ("Revenue
+    grew") fails on the verb, a fused row ("Total revenue $5.25
+    billion ...") fails on its figures, a period sub-heading ("Q3 FY
+    2024", "Full Year 2025E") fails on its digits, and a Low/High
+    column header fails explicitly. A trailing ":" is allowed (the
+    fuse strips it before joining).
+    """
+    if not ln or len(ln) > 90 or ln[0].isdigit():
+        return False
+    if ln[0] in "•●○◦▪■·\"“(":
+        return False
+    # Batch 235: a short all-caps line is a metric, not a heading —
+    # Digital Realty's "G&A" is a row label. A heading is never
+    # followed by a value line, so the fuse loop (which requires one)
+    # cannot misfire on a real heading; longer all-caps lines stay
+    # excluded.
+    if ln.isupper() and len(ln.split()) > 2:
+        return False
+    # Batch 235: a bare value word is a value, never a label — "N/A"
+    # (DuPont's current-guidance cell, Visa's) fused as a label
+    # misattributes the next row's figures to it ("N/A: ~$0.43").
+    if ln.strip().rstrip(".:").lower() in _GUIDANCE_VALUE_WORDS:
+        return False
+    if _is_sentence_terminated(ln.rstrip().rstrip(":")):
+        return False
+    words = ln.split()
+    # Batch 233: the cap is 12 words — Akamai's "Shares used in
+    # non-GAAP per diluted share calculations * (in millions)" is 11,
+    # and a longer label is still a noun phrase (the verb guard, not
+    # the cap, is what keeps prose fragments out).
+    if not 1 <= len(words) <= 12:
+        return False
+    # Batch 233: a bare month word is a date fragment ("December 31,"),
+    # never a metric — Elevance's period column headers must stay
+    # as-is rather than fusing to "December: 31,".
+    if len(words) == 1 and words[0].strip("(),:;").lower() in _GUIDANCE_MONTH_WORDS:
+        return False
+    # Batch 233: a label carries an alphabetic word ("+$25" is a value,
+    # not a label + value) and never opens with a qualifier ("at least
+    # $7,000" is a qualified value, not a label + value).
+    if not any(ch.isalpha() for ch in ln):
+        return False
+    if words[0].strip("(),:;").lower() in _GUIDANCE_LABEL_QUALIFIER_WORDS:
+        return False
+    if ln.strip().lower() in ("low", "high", "low end", "high end"):
+        return False
+    if _is_guidance_period_label(ln):
+        return False
+    if any(
+        w.strip("(),:;").lower() in _GUIDANCE_LABEL_VERB_WORDS for w in words
+    ):
+        return False
+    s = re.sub(r"\([0-9a-z]\)", "", ln)
+    s = re.sub(r"\d+$", "", s)
+    s = s.replace("*", "")
+    return not re.search(r"\d", s)
+
+
+def _is_guidance_units_line(ln: str) -> bool:
+    """True for a table units declaration ("(In millions, except
+    percentages)", "Dollars in millions, unless noted") — context for
+    the figures that follow, kept as its own line and never treated as
+    a column header."""
+    return bool(_GUIDANCE_UNITS_RE.match(ln))
+
+
+def _clean_guidance_footnotes(lines: list[str]) -> list[str]:
+    """Drop footnote-definition blocks inside collected guidance.
+
+    The shared opener (via _footnote_def_block_len) catches the
+    stragglers the in-loop skip missed; the relaxed opener additionally
+    catches AppLovin's glued-key and unterminated-wrap footnotes, but
+    only once a table value line has been seen — footnotes in guidance
+    tables always follow the rows. A block drops only when it terminates
+    within 10 lines, or when it runs to the end of the collected lines
+    (Delta's footnotes 1-4 end the section on an unterminated "4
+    Introduced at November 2024 Investor Day"); anything else is left
+    in place.
+
+    Batch 235: a block also drops when the prose after it terminates
+    within a few lines (Delta's footnotes end on an unterminated "1
+    Non-GAAP measures; ..." and the section's prose resumes after
+    them, wrapped over two lines — the definition is over, new content
+    began). And a bare-number footnote key ("1." on its own line,
+    Elevance) is merged with its definition line first, so the generic
+    opener sees "1. Adjustment item ..." and the block drops whole.
+    A prior/updated column header ("(Prior) April", "(Updated)") never
+    opens a block — the paren shape matches the footnote opener, and
+    the digit-led table row after it counts as a "plausible
+    continuation", which ate Bristol Myers' "2026 WW Revenue Growth*"
+    row whole. A block whose last line is a table row never drops,
+    for the same reason.
+    """
+    lines = _merge_bare_number_footnotes(lines)
+    out: list[str] = []
+    i = 0
+    seen_table = False
+    while i < len(lines):
+        ln = lines[i]
+        # Batch 233: a fused table row ("Total Advertising Revenue
+        # $1,195 $1,215") is table evidence too — AppLovin 2025-03-31
+        # has no split value line, so the bare-value test alone never
+        # arms the relaxed opener and its footnotes survive. A
+        # terminated prose line never counts (the data-row predicate's
+        # own guard notwithstanding, check it here).
+        if not _is_sentence_terminated(ln) and (
+            _is_guidance_value_line(ln) or _is_lede_data_row(ln)
+        ):
+            seen_table = True
+        # Batch 235: a prior/updated header is table chrome, not a
+        # footnote — it is dropped downstream by _clean_guidance_result.
+        if _is_guidance_prior_updated_header(ln):
+            out.append(ln)
+            i += 1
+            continue
+        block = _footnote_def_block_len(lines, i)
+        if not block and seen_table:
+            block = _footnote_def_block_len(
+                lines, i, opens=_guidance_footnote_opener
+            )
+        if block and block <= 10:
+            last = lines[i + block - 1]
+            if (
+                not _is_guidance_value_line(last)
+                and not _is_lede_data_row(last)
+                and _split_guidance_fused_row(last) is None
+                and (
+                    _is_sentence_terminated(last)
+                    or i + block == len(lines)
+                    or _prose_terminates_within(lines, i + block)
+                )
+            ):
+                i += block
+                continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+def _prose_terminates_within(
+    lines: list[str], j: int, limit: int = 3
+) -> bool:
+    """True when the prose starting at lines[j] reaches a terminated
+    sentence within `limit` lines — a wrapped prose sentence ("Given
+    current uncertainty, Delta is not reaffirming full year" / "2025
+    financial guidance ... improves.") still counts as new content
+    after a footnote block. Stops (False) at a table line, a footnote
+    opener, or the end of lines without termination."""
+    k = j
+    while k < len(lines) and k < j + limit:
+        ln = lines[k]
+        if (
+            _is_guidance_value_line(ln)
+            or _is_guidance_table_label(ln)
+            or _is_guidance_header_line(ln)
+            or _is_guidance_units_line(ln)
+            or _guidance_footnote_opener(ln)
+        ):
+            return False
+        if _is_sentence_terminated(ln):
+            return True
+        k += 1
+    return False
+
+
+def _merge_bare_number_footnotes(lines: list[str]) -> list[str]:
+    """Merge a bare-number footnote key with its definition line.
+
+    Elevance puts the key on its own line ("1." / "Adjustment item
+    resides in the Corporate & Other reportable segment.") — the
+    generic opener never fires on the bare "1.", so the definition
+    survives as stray prose. Merging gives "1. Adjustment item ...",
+    which the generic opener catches and the block logic drops whole
+    (including a wrapped second line). Only after a table value line
+    has been seen — a bare number ahead of any table could be an
+    ordered-list marker in prose — and only when the next line is
+    prose, never a table line, so a row is never absorbed into a key.
+    """
+    out: list[str] = []
+    seen_table = False
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if not _is_sentence_terminated(ln) and (
+            _is_guidance_value_line(ln) or _is_lede_data_row(ln)
+        ):
+            seen_table = True
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (
+            seen_table
+            and re.fullmatch(r"\d{1,3}[.)]", ln.strip())
+            and nxt.strip()
+            and not _is_guidance_value_line(nxt)
+            and not _is_guidance_table_label(nxt)
+            and not _is_guidance_header_line(nxt)
+            and not _is_guidance_units_line(nxt)
+        ):
+            out.append(f"{ln.strip()} {nxt.strip()}")
+            i += 2
+            continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+# One token of a guidance-table column header: a quarter, a year, a
+# Low/High marker, or a period word. A pending header line is
+# droppable (in the Low/High range-join case) only when every word is
+# one of these — "June 30, 2024 Year Ended" keeps its month, so it is
+# never dropped, only emitted as context. Batch 235: "guidance",
+# "gaap" and "non-gaap" — Salesforce's column headers are "Q4 FY25 /
+# Guidance5" and "GAAP Non-GAAP(1)"; without these they count as row
+# labels and the wrapped-label guard refuses the row below them.
+_GUIDANCE_HEADER_TOKEN_RE = re.compile(
+    r"^(low|high|end|full|years?|quarters?|first|second|third|fourth|"
+    r"fiscal|current|prior|updated|\(prior\)|\(updated\)|q[1-4]|"
+    r"guidance|gaap|non-gaap|"
+    r"fy\d{2,4}|\d{4}e?|[1-4]q['’]?\d{2}e?)$",
+    re.IGNORECASE,
+)
+
+
+def _is_guidance_header_line(ln: str) -> bool:
+    """True for a column-header / period-label line held in pending
+    ahead of a row ("1Q25", "Low", "High", "Full Year 2025E", "Three
+    Months Ended", "Q3 FY 2024", "FOURTH QUARTER 2024"). Every word
+    must be header vocabulary, or the line must be an all-caps period
+    label — so a fused content row ("Available seat miles +3.0% –
+    +5.0%") never lands in pending, where a later range-join could
+    drop it as a header.
+    """
+    words = ln.split()
+    if not 1 <= len(words) <= 10:
+        return False
+    if ln.isupper():
+        return True
+    if _is_guidance_period_label(ln):
+        return True
+    if _is_lede_period_header(ln) or _is_bare_period_fragment(ln):
+        return True
+    # Batch 235: a header word may carry a glued footnote key, a
+    # trailing digit, or asterisks ("Guidance5", "Non-GAAP(1)",
+    # "Current Guidance**") — try the raw token first (so "FY25"
+    # still matches as-is), then the key-stripped form. Stripping
+    # only ever adds matches for a header word plus a key; a
+    # non-header word ("Growth2") still fails.
+    def _header_token(w: str) -> bool:
+        tok = w.strip(",.:;")
+        if _GUIDANCE_HEADER_TOKEN_RE.match(tok):
+            return True
+        tok = re.sub(r"\*+$", "", tok)
+        tok = re.sub(r"\(\d{1,3}\)$", "", tok)
+        tok = re.sub(r"\d+$", "", tok)
+        return bool(_GUIDANCE_HEADER_TOKEN_RE.match(tok))
+
+    return all(_header_token(w) for w in words)
+
+
+def _is_guidance_header_token_line(ln: str) -> bool:
+    """True when a pending header line is droppable in the Low/High
+    range-join case: it is a column header ("Low", "High", "Low End
+    High End") or a bare quarter token ("1Q25", "1Q'25E"). A period
+    sub-heading with real words ("Full Year 2024", "Full Year 2025E")
+    is never one — Centene drops its "Full Year 2024" line otherwise,
+    losing the table's period — and neither is a bare year ("2025").
+    Dropping is safe only because the section heading carries the
+    period and the dash carries the Low/High columns."""
+    words = ln.split()
+    if not words:
+        return False
+    if any(w.strip(",.:;").lower() in ("low", "high") for w in words):
+        return True
+    # Batch 239: a lone "End" is the second half of a wrapped "Low
+    # End" / "High End" column header (Simon's tables split each
+    # header across two lines) — in the Low/High range-join case the
+    # dash encodes the columns, so it drops with Low/High. A bare
+    # year or period sub-heading still never drops.
+    if len(words) == 1 and words[0].strip(",.:;").lower() == "end":
+        return True
+    if len(words) == 1:
+        return bool(
+            re.fullmatch(
+                r"([1-4]q['’]?\d{2}e?|q[1-4]['’]?\d{2}e?|q[1-4])",
+                words[0].strip(",.:;"),
+                re.IGNORECASE,
+            )
+        )
+    return False
+
+
+def _move_label_qualifier(label: str, values: str) -> tuple[str, str]:
+    """Move a trailing qualifier off a fused label and onto its values
+    ("GAAP diluted EPS >" + "$5.94" -> "GAAP diluted EPS" + "> $5.94";
+    "... share At least" + "$37.20" -> "... share" + "At least $37.20")
+    — the qualifier belongs with the figure, not the metric, and
+    leaving it on the label reads as "EPS >: $5.94" or
+    "Tax impact ... Approximately: ($0.89)". Only "><~", a trailing
+    standalone dash token (the first column's missing-value marker),
+    a trailing "at least" / "up to" phrase, or a single trailing
+    qualifier word move."""
+    if label and label[-1] in "><~":
+        return label[:-1].rstrip(), f"{label[-1]} {values}"
+    words = label.split()
+    # A trailing standalone dash token is the first column's
+    # missing-value marker, not part of the metric ("Amortization of
+    # Acquisition-related Inventory Step-up ---" + "$0.38" -> "Step-up:
+    # --- $0.38", not "Step-up ---: $0.38").
+    if words and words[-1] in ("-", "--", "---", "–", "—"):
+        return " ".join(words[:-1]), f"{words[-1]} {values}"
+    if len(words) > 2 and " ".join(
+        w.lower().strip("(),:;") for w in words[-2:]
+    ) in ("at least", "up to"):
+        return " ".join(words[:-2]), f"{words[-2]} {words[-1]} {values}"
+    if (
+        len(words) > 1
+        and words[-1].lower().strip("(),:;")
+        in _GUIDANCE_LABEL_QUALIFIER_WORDS
+    ):
+        return " ".join(words[:-1]), f"{words[-1]} {values}"
+    return label, values
+
+
+# A units line with its Low/High column headers fused onto it
+# ("(In millions, except percentages) Low High" — AppLovin 2026):
+# split into the units line plus the header lines, so the headers
+# reach pending and the rows range-join like the other quarters.
+_GUIDANCE_UNITS_LOW_HIGH_RE = re.compile(
+    r"^(\([^)]*\)\s+)(Low\s+High|Low|High)\s*$", re.IGNORECASE
+)
+
+
+def _split_guidance_fused_row(ln: str) -> tuple[str, str] | None:
+    """Split an already-fused guidance-table row ("Revenue $1,320
+    $1,340", "Apps Revenue 325 335") into (label, values), or None.
+
+    The label is the leading text before the first figure and must
+    itself be table-label shaped (so a prose line with figures —
+    "Cisco estimates that GAAP EPS will be $0.51 ..." — fails on its
+    verb, and a fused range with a "+" prefix — American's "Available
+    seat miles +3.0% – +5.0%" — fails because "+5.0%" is not a figure
+    span, so the values tail is not figure-only).
+    """
+    m = _GUIDANCE_FIGURE_RE.search(ln)
+    if not m:
+        return None
+    label = ln[: m.start()].strip()
+    values = ln[m.start() :].strip()
+    if not label or not values:
+        return None
+    if not _is_guidance_table_label(label):
+        return None
+    if not _is_guidance_value_line(values):
+        return None
+    # Batch 233: the values tail must carry a real figure — a bare
+    # parenthesized key ("(2)") is not one, so a valueless label that
+    # merely carries a footnote key never splits ("Revenue growth rates
+    # year-over-year*(2)" stays whole; its values, when present, sit on
+    # the next line and fuse there).
+    if not _guidance_value_figures(values):
+        return None
+    return label, values
+
+
+_GUIDANCE_PRIOR_HEADER_RE = re.compile(r"^\(Prior\)(?:\s+[A-Za-z]+\d*)?$")
+_GUIDANCE_UPDATED_HEADER_RE = re.compile(r"^\(Updated\)\d*$")
+_GUIDANCE_REAFFIRMED_HEADER_RE = re.compile(r"^\(Reaffirmed\)\d*$")
+
+
+def _is_guidance_prior_updated_header(ln: str) -> bool:
+    """True for a Bristol Myers column header fragment: "(Prior)
+    April" / "(Prior)" / "(Updated)" / "(Updated)4" /
+    "(Reaffirmed)" — the prior-vs-updated columns of its guidance
+    table, flattened onto their own lines (BMY 2026-03-31 pairs each
+    bare month with its own marker line: "February" / "(Prior)" /
+    "April" / "(Reaffirmed)"). They are table chrome, not footnote
+    definitions (the probe flags them only because the paren shape
+    matches the footnote opener)."""
+    return bool(
+        _GUIDANCE_PRIOR_HEADER_RE.match(ln.strip())
+        or _GUIDANCE_UPDATED_HEADER_RE.match(ln.strip())
+        or _GUIDANCE_REAFFIRMED_HEADER_RE.match(ln.strip())
+    )
+
+
+def _is_bare_month_line(ln: str) -> bool:
+    """True for a line that is exactly one month name ("February") —
+    the first column of Bristol Myers' prior/updated header group."""
+    return (
+        len(ln.split()) == 1
+        and ln.strip().strip("(),:;").lower() in _GUIDANCE_MONTH_WORDS
+    )
+
+
+def _is_guidance_bare_value_word(ln: str) -> bool:
+    """True for a bare table value word on its own line ("Unchanged"
+    — First Solar's prior-column value). It is label-shaped, so
+    without this the wrapped-label guard refuses the row below it."""
+    return ln.strip().rstrip(".:").lower() == "unchanged"
+
+
+def _is_guidance_sub_label_line(ln: str) -> bool:
+    """True for a parenthetical-only sub-label line ("(Reported &
+    Ex-FX)" under Bristol Myers' "Total Revenues") — part of the row's
+    label, not a row of its own. A bare footnote key ("(2)") and the
+    prior/updated header fragments are not sub-labels."""
+    s = ln.strip()
+    if not re.fullmatch(r"\([^)]*\)", s):
+        return False
+    if re.fullmatch(r"\(\d{1,3}\)", s):
+        return False
+    # Batch 235: a parenthesized VALUE ("($35 - $40 million)") is
+    # not a sub-label — without the digit guard Digital Realty's
+    # first value line joins the label ("Net non-cash rent
+    # adjustments (1) ($35 - $40 million): ...").
+    if re.search(r"\d", s):
+        return False
+    if s in ("(Prior)", "(Updated)"):
+        return False
+    return any(ch.isalpha() for ch in s)
+
+
+def _carries_footnote_marker(ln: str) -> bool:
+    """True when a line carries a footnote marker: an asterisk, a
+    parenthesized key ("(2)", "(c)"), or a glued trailing digit
+    ("expenses1", "assets 3"). A wrapped-label fragment never carries
+    one — the key belongs to the complete label — so a marked line is
+    a complete row label (or a column header), never a fragment."""
+    s = ln.strip()
+    if "*" in s:
+        return True
+    if re.search(r"\([0-9a-z]\)", s):
+        return True
+    t = re.sub(r"\([0-9a-z]\)", "", s).replace("*", "")
+    return bool(re.search(r"\d$", t.strip()))
+
+
+def _is_wrapped_label_fragment(prev: str, cur: str) -> bool:
+    """True when prev is the first line of a label wrapped over two
+    lines (Emerson's "Underlying Sales" / "Growth") — the current row
+    must join with it, not fuse alone. Narrow on purpose: a longer
+    prev line is a section sub-heading ("Top-Line and Cost Structure",
+    "Rental rates on renewal leases", "Changes to Midpoint from
+    Previous Outlook(b)"), a bare value word ("Unchanged") is a value,
+    a header line is a column header, a marked prev line is itself a
+    row label (GE's "Operating Profit*", "Free cash flow*"), and a
+    current label carrying its own slash phrase ("U.S. Dollar / Pound
+    Sterling"), more than four words, or a footnote marker ("assets 3",
+    "International pass-through revenue(5)", "FCF* Conversion-b)") is
+    a complete metric — none of those is a wrapped fragment. Batch 240:
+    the cap was two words, but a wrap point is arbitrary — the label
+    wraps where the cell width falls, so Emerson's "Acquisition /
+    Divestiture" / "Fees and Related Costs" continuation is four words
+    and is the same fragment as a one-word one. The other guards (prev
+    at most three words, no marker on either side, no slash in cur)
+    still keep complete metrics out, and the blast bounds the change."""
+    if not _is_guidance_table_label(prev):
+        return False
+    if _is_guidance_header_line(prev):
+        return False
+    if _is_guidance_bare_value_word(prev):
+        return False
+    if _carries_footnote_marker(prev):
+        return False
+    if len(prev.split()) > 3:
+        return False
+    if len(cur.split()) > 4:
+        return False
+    if "/" in cur:
+        return False
+    if _carries_footnote_marker(cur):
+        return False
+    return True
+
+
+def _is_split_table_value(ln: str, prev: str) -> bool:
+    """True when a bare-decimal line is a split table value, not the
+    exhibit-version fragment _ADMIN_LINE_RE thinks it is.
+
+    Batch 239: SPG's guidance tables put the currency symbol and the
+    amount in separate cells ("$" / "6.67"), so the flattened text
+    carries a lone "$" line followed by a bare-decimal line — and the
+    guidance collector's admin skip drops the number as a "99.1"
+    version fragment, losing the table's values (net income
+    $6.67-$6.92, FFO $12.40-$12.65 per share). A version fragment
+    never follows a lone "$" cell or a guidance-table label inside a
+    guidance section, so those predecessors prove the number is a
+    value. The label predecessor is restricted to non-all-caps
+    labels, so an "EXHIBIT" / "99.1" header pair can never fire it.
+    Deliberately NOT a value-line predecessor: Elevance's membership
+    table chains bare decimals after plain value lines ("1,025" /
+    "29.9" / "2.6" — change-% values), and keeping those spends the
+    30-line collection budget and drops the table's tail ("Commercial
+    Risk-Based: 4,781 / 4,777" loses its second value). A bare
+    decimal after a plain value line stays dropped, as before.
+    """
+    if not re.fullmatch(r"\d+\.\d+", ln.strip()):
+        return False
+    p = prev.strip()
+    if p == "$":
+        return True
+    return bool(p) and not p.isupper() and _is_guidance_table_label(p)
+
+
+_SPLIT_CURRENCY_NUMBER_RE = re.compile(r"^\(?\d[\d,]*(?:\.\d+)?\)?$")
+
+
+def _merge_split_currency_values(lines: list[str]) -> list[str]:
+    """Merge a lone "$" cell line with the following bare-number cell
+    ("$" / "6.67" -> "$6.67").
+
+    Batch 239: SPG's guidance tables split currency and amount into
+    separate cells, so the flattened text carries a bare "$" line
+    followed by a bare-number line. The "$" alone is not a value line
+    (no digit) and the number alone fuses to nothing, so the row
+    never forms and the table renders as bare "$" placeholders. The
+    merge only fires when the next line is a decimal or
+    thousands-grouped number — never a bare year or page number — or
+    a parenthesized negative, so a "$" line above an unrelated
+    number can never merge.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if (
+            ln.strip() == "$"
+            and _SPLIT_CURRENCY_NUMBER_RE.match(nxt.strip())
+            and ("." in nxt or "," in nxt)
+        ):
+            out.append("$" + nxt.strip())
+            i += 2
+            continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+def _clean_guidance_result(collected: list[str]) -> list[str]:
+    """Fuse split guidance-table rows and drop table chrome.
+
+    Walks the footnote-cleaned collected lines with a pending buffer
+    for the short non-prose lines ahead of a row (column headers,
+    period sub-headings). When a label line is followed by one to four
+    figure-only value lines, the row fuses to "Label: v1 / v2 / ..." —
+    or "Label: low – high" when the table's columns are exactly one
+    Low/High pair and the row carries exactly two figures in one value
+    unit. A value line starting with a range dash continues the
+    previous value ("$3.2B" + "- $3.3B" is one range, not two columns).
+    A label wrapped over two lines (Emerson's "Underlying Sales" /
+    "Growth") joins with the previous line — the previous line was
+    already emitted, so it is popped back and the joined label fuses.
+    A parenthetical sub-label line between a label and its values
+    ("Total Revenues" / "(Reported & Ex-FX)") joins the label, and
+    Bristol Myers' "(Prior) <Month>" / "(Updated)" column headers drop
+    with the bare month line heading their group. A fifth value unit
+    still refuses the row (an ambiguous table), and the pending
+    headers then flush unchanged. The Low/High state is carried across
+    the table's rows (AppLovin's first row drops the "1Q25 / Low /
+    High" headers, so later rows range-join from the carried flag),
+    and a header run without Low/High — or a prose line — resets it,
+    so a later table is judged on its own headers. A fused row ("Apps
+    Revenue 325 335") range-joins the same way when the flag is set.
+    Pending headers drop only the pure-token lines in the Low/High
+    case (the dash encodes them and the heading carries the period);
+    otherwise they emit as-is, so period sub-headings ("Q3 FY 2024",
+    "FY 2024", "FOURTH QUARTER 2024") survive as section structure.
+    Prose, quotes, bullets, units lines and unjoinable rows pass
+    through untouched, and a pure rule line ("____...") is dropped as
+    table chrome. The heading (collected[0]) is always kept.
+    """
+    if not collected:
+        return collected
+    lines = _clean_guidance_footnotes(collected[1:])
+    # Split a units line carrying its Low/High headers ("(In millions,
+    # except percentages) Low High") so the headers reach pending.
+    split_lines: list[str] = []
+    for ln in lines:
+        m = _GUIDANCE_UNITS_LOW_HIGH_RE.match(ln)
+        if m:
+            split_lines.append(m.group(1).strip())
+            split_lines.extend(m.group(2).split())
+        else:
+            split_lines.append(ln)
+    lines = split_lines
+    # Batch 239: merge split currency/amount cells ("$" / "6.67")
+    # before the fuse loop, so the row forms with real values.
+    lines = _merge_split_currency_values(lines)
+    out: list[str] = [collected[0]]
+    pending: list[str] = []
+    range_join = False
+    seen_row = False
+    i = 0
+
+    def resolve_pending() -> None:
+        """Resolve the pending header run at a row: a Low/High pair
+        drops its pure-token lines and arms range-joining; any other
+        non-empty run emits as-is and disarms it; an empty run leaves
+        the carried state alone (same table continues)."""
+        nonlocal pending, range_join
+        if not pending:
+            return
+        low_high = sum(
+            len(re.findall(r"\b(low|high)\b", p, re.IGNORECASE))
+            for p in pending
+        )
+        if low_high == 2:
+            for p in pending:
+                if not _is_guidance_header_token_line(p):
+                    out.append(p)
+            range_join = True
+        else:
+            out.extend(pending)
+            range_join = False
+        pending = []
+
+    def range_join_units(units: list[str]) -> str | None:
+        """"low – high" for a single value unit carrying exactly two
+        figures and no range of its own, when the table is Low/High —
+        else None (the caller then joins with " / "). A leading
+        qualifier ("> $5.94" — moved off the label) is preserved in
+        front of the joined range."""
+        if not range_join or len(units) != 1:
+            return None
+        unit = units[0]
+        qual = ""
+        m = re.match(r"^([><~])\s+", unit)
+        if m:
+            qual = m.group(1) + " "
+            unit = unit[m.end() :]
+        figs = _guidance_value_figures(unit)
+        if len(figs) == 2 and not re.search(
+            r"\d\s*[-–—]\s*\$?\d|\bto\b", unit
+        ):
+            return f"{qual}{figs[0]} – {figs[1]}"
+        return None
+
+    while i < len(lines):
+        ln = lines[i]
+        if _GUIDANCE_RULE_LINE_RE.match(ln):
+            i += 1
+            continue
+        if _is_guidance_prior_updated_header(ln):
+            # Batch 235: Bristol Myers' prior/updated column headers
+            # are table chrome — drop them, and the bare month line
+            # heading the group with them ("February" / "(Prior)
+            # April" / "(Updated)", or each month paired with its
+            # own marker: "February" / "(Prior)" / "April" /
+            # "(Reaffirmed)").
+            if out and _is_bare_month_line(out[-1]):
+                out.pop()
+            i += 1
+            continue
+        if _is_guidance_units_line(ln):
+            out.extend(pending)
+            pending = []
+            out.append(ln)
+            i += 1
+            continue
+        if _is_guidance_table_label(ln) and i + 1 < len(lines):
+            # A parenthetical sub-label line between the label and
+            # its values ("Total Revenues" / "(Reported & Ex-FX)" /
+            # "~$45.5 billion ...") joins the label.
+            label = ln.rstrip().rstrip(":")
+            j0 = i + 1
+            if (
+                i + 2 < len(lines)
+                and _is_guidance_sub_label_line(lines[i + 1])
+                and _is_guidance_value_line(lines[i + 2])
+            ):
+                label = f"{label} {lines[i + 1].strip()}"
+                j0 = i + 2
+            # Collect the value units: 1-4 value lines, with a
+            # dash-led line merging onto the previous unit. Batch
+            # 235: the cap was 2 — a three/four-column table (DuPont
+            # prior/current/Q4, Digital Realty's three As-of dates,
+            # GE's 2025-prior/updated + 2028-prior/updated) refused
+            # every row; the units are consecutive value lines after
+            # one label, so they belong to that row.
+            units: list[str] = []
+            j = j0
+            while j < len(lines) and len(units) < 5:
+                v = lines[j]
+                if not _is_guidance_value_line(v):
+                    break
+                if units and v.lstrip().startswith(("-", "–", "—", "to")):
+                    units[-1] = units[-1] + " " + v.strip()
+                else:
+                    units.append(v.strip())
+                j += 1
+                # A lone closing-paren continuation (")%") belongs to
+                # the value just collected ("(5.8" + ")%" — Elevance's
+                # wrapped "(5.8%)").
+                while j < len(lines) and re.fullmatch(
+                    r"\)\s*[%BKMx]?", lines[j].strip()
+                ):
+                    units[-1] = units[-1] + lines[j].strip()
+                    j += 1
+            if 1 <= len(units) <= 4:
+                # A wrapped label (Emerson's "Underlying Sales" /
+                # "Growth") joins with the previous line instead of
+                # refusing: the previous line was already emitted as
+                # a standalone line, so pop it back and fuse the
+                # joined label. Anything else that merely looks like
+                # a label (a sub-heading, a column header, a bare
+                # value word) is not a fragment — see
+                # _is_wrapped_label_fragment — and the row fuses
+                # alone, leaving it in place.
+                prev = lines[i - 1] if i > 0 else ""
+                join = _is_wrapped_label_fragment(prev, ln)
+                # Batch 235: a short marked prev line is itself a row
+                # label (GE's "Operating Profit*", "Free cash flow*")
+                # whose values have not been served — the current row's
+                # values may be interleaved with them, so refuse and
+                # emit as-is rather than misattribute. A header line
+                # is exempt (a column header, not a row), and so is a
+                # long marked line (Crown Castle's "Changes to
+                # Midpoint from Previous Outlook(b)" is a column
+                # header, not a row label).
+                refuse = not join and bool(prev) and (
+                    _is_guidance_table_label(prev)
+                    and not _is_guidance_header_line(prev)
+                    and len(prev.split()) <= 3
+                    and _carries_footnote_marker(prev)
+                )
+                if join:
+                    if out and out[-1] == prev:
+                        out.pop()
+                        label = f"{prev.rstrip().rstrip(':')} {label}"
+                    else:
+                        # The fragment is not the last emitted line
+                        # — do not join across whatever intervened.
+                        refuse = True
+                if not refuse:
+                    resolve_pending()
+                    # A trailing qualifier belongs with the values —
+                    # moved before the range-join so it is not lost
+                    # when the join re-emits the figures.
+                    label, first = _move_label_qualifier(label, units[0])
+                    units = [first] + units[1:]
+                    joined = range_join_units(units)
+                    if joined is not None:
+                        out.append(f"{label}: {joined}")
+                    else:
+                        out.append(f"{label}: {' / '.join(units)}")
+                    seen_row = True
+                    i = j
+                    continue
+            # Not a fuseable row: fall through and emit as-is.
+        if (
+            _is_sentence_terminated(ln)
+            or ln[0] in "•●○◦▪■·\"“"
+            or _is_guidance_value_line(ln)
+        ):
+            # Prose, a quote, a bullet, or an orphan value line: the
+            # table (if any) is over — flush pending as-is. Only
+            # genuine prose (a terminated sentence, a quote, a bullet)
+            # disarms range-joining and clears the row state: an orphan
+            # value line is table residue (Akamai's "6 % 8 %" after a
+            # refused row), and clearing the flag on it would stop the
+            # very next row from range-joining.
+            out.extend(pending)
+            pending = []
+            if _is_sentence_terminated(ln) or ln[0] in "•●○◦▪■·\"“":
+                range_join = False
+                seen_row = False
+            out.append(ln)
+            i += 1
+            continue
+        split = _split_guidance_fused_row(ln)
+        if split is not None and (pending or range_join or seen_row):
+            label, values = split
+            resolve_pending()
+            label, values = _move_label_qualifier(
+                label.rstrip().rstrip(":"), values
+            )
+            joined = range_join_units([values])
+            if joined is not None:
+                out.append(f"{label}: {joined}")
+            else:
+                # A fused row in table context normalizes to the same
+                # "Label: values" shape as a split row (DuPont fuses
+                # its first row, so without this its "Net sales"
+                # line carries no colon while the rows below do).
+                out.append(f"{label}: {values}")
+            seen_row = True
+            i += 1
+            continue
+        if _is_guidance_header_line(ln):
+            # A column header or period sub-heading ahead of a row —
+            # hold it in pending until the next row resolves it.
+            pending.append(ln)
+            i += 1
+            continue
+        out.extend(pending)
+        pending = []
+        out.append(ln)
+        i += 1
+    out.extend(pending)
+    return out
+
+
 def extract_management_guidance(
-    document_html: str, max_chars: int = 4000
+    document_html: str, max_chars: int = 8000
 ) -> str | None:
     """Best-effort extract forward-looking management guidance from an earnings release.
 
@@ -5588,22 +12024,296 @@ def extract_management_guidance(
 
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     for i, ln in enumerate(lines):
-        if _GUIDANCE_HEADING_RE.match(ln) and len(ln) <= 90:
-            collected = [ln]
-            for follow in lines[i + 1 :]:
-                if _ADMIN_LINE_RE.match(follow):
+        anchor = _guidance_anchor_text(lines, i)
+        if anchor is not None:
+            if _is_toc_entry(lines, i):
+                # Batch 210: a heading that heads a table-of-contents
+                # run is a TOC entry, not the section heading — DLR's
+                # financial supplement lists "2025 Outlook" on its
+                # contents page (title + page number, then the next
+                # entry the same way), and anchoring there stored the
+                # whole contents page as guidance. Skip the TOC anchor
+                # and keep scanning for the real heading (the outlook
+                # page itself, ~750 lines on in DLR's supplement).
+                continue
+            if _is_guidance_teaser_anchor(lines, i):
+                # Batch 212: the heading heads a highlights teaser,
+                # headline fragment or wrapped bullet in the pre-body
+                # area (the dateline follows within 50 lines) — skip
+                # it and keep scanning for the real guidance section.
+                continue
+            collected = [anchor]
+            # Index loop (batch 193): footnote/note blocks are skipped
+            # whole, so the loop can jump past them instead of
+            # appending them one line at a time.
+            # Batch 212: a wrapped anchor consumed two lines, so
+            # collection starts after the second fragment.
+            j = i + 1 + (1 if anchor != ln else 0)
+            over_budget = False
+            budget_cut = 0
+            while j < len(lines):
+                follow = lines[j]
+                if (
+                    _ADMIN_LINE_RE.match(follow)
+                    and not _is_split_table_value(
+                        follow, collected[-1] if collected else ""
+                    )
+                ) or _MORE_MARKER_RE.match(follow):
+                    # Batch 193: "-more-" is a page-continuation
+                    # marker, never content — skip it like the admin
+                    # lines (8 collected guidance texts carry one).
+                    j += 1
                     continue
-                if _BOILERPLATE_RE.match(follow) or _FINANCIAL_TABLE_START_RE.match(follow):
+                if _BARE_DOMAIN_RE.match(follow):
+                    # Batch 206: a bare-domain line is page furniture
+                    # (see _BARE_DOMAIN_RE) — skip it like an admin
+                    # line, so the 30-line budget is spent only on
+                    # kept lines.
+                    j += 1
+                    continue
+                if (
+                    j + 1 < len(lines)
+                    and _BARE_DOMAIN_RE.match(lines[j + 1])
+                    and len(follow) <= 60
+                    and follow.rstrip().endswith((".", "!", "?"))
+                    and not re.search(r"[$%\d]", follow)
+                    and not follow.startswith("•")
+                    and follow[0].isupper()
+                    and not _is_guidance_title_case(follow)
+                ):
+                    # Batch 206: the footer tagline — a short terminated
+                    # sentence-case line immediately before a bare domain
+                    # is the page-footer tagline ("The pathway to
+                    # possible." before "CrownCastle.com"), not guidance.
+                    # The lookahead keeps the skip narrow: a genuine
+                    # short guidance sentence is skipped only when the
+                    # very next line is a bare domain — the footer
+                    # signature. Figure lines ($/%/digits) and
+                    # title-case lines never match, so a table row or a
+                    # heading before a domain pointer survives.
+                    j += 1
+                    continue
+                if (
+                    len(follow) <= 90
+                    and not _is_sentence_terminated(follow)
+                    and re.search(r"\breports\b", follow, re.IGNORECASE)
+                    and re.search(r"\b(results|earnings)\b$", follow, re.IGNORECASE)
+                ):
+                    # Batch 193: a repeated release-title line inside
+                    # the guidance section ("American Airlines Reports
+                    # Second-Quarter 2026 Financial Results" — AAL's
+                    # page-header repeat) is page furniture, never
+                    # guidance content — skip it like an admin line.
+                    j += 1
+                    continue
+                if (
+                    _BOILERPLATE_RE.match(follow)
+                    or _FINANCIAL_TABLE_START_RE.match(follow)
+                    or _is_lede_call_announcement(follow)
+                    or (
+                        (m := _CONFERENCE_CALL_NOTICE_RE.search(follow)) is not None
+                        and m.start() <= 120
+                    )
+                    or (
+                        (m := _CALL_QA_SESSION_RE.search(follow)) is not None
+                        and m.start() <= 120
+                    )
+                    or (
+                        (m := _CALL_HOST_NOTICE_RE.search(follow)) is not None
+                        and _notice_starts_sentence(follow, m)
+                    )
+                    or (
+                        (m := _CALL_IN_NUMBERS_RE.search(follow)) is not None
+                        and _notice_starts_sentence(follow, m)
+                    )
+                    or re.search(r"\bwill host\b[^.]*\bwebcast\b", follow, re.IGNORECASE)
+                ):
+                    # Batch 193: a conference-call / webcast notice ends
+                    # the guidance section — the notice line itself
+                    # ("Church & Dwight ... will host a webcast to
+                    # discuss second quarter 2025 results ...") was
+                    # collected as guidance once the footnote skip
+                    # freed the line budget, and the dial-in / URL
+                    # lines after it are event logistics, never
+                    # guidance. The _is_lede_call_announcement shape
+                    # (CSX's split notice) and the bare "will host a
+                    # webcast" shape are the two the ^-anchored
+                    # table-start regex never matches. The
+                    # _CONFERENCE_CALL_NOTICE_RE match must start in
+                    # the line's first 120 chars: Biogen's FX-assumption
+                    # line ends "... will be provided on the conference
+                    # call and webcast." — a guidance sentence with a
+                    # call pointer in its tail, not a notice — and an
+                    # unguarded .search breaks on it, dropping the FX
+                    # line and the two disclaimer lines after it. The
+                    # _CALL_QA_SESSION_RE test carries the same guard
+                    # for the same reason (GIS's notice shape). The
+                    # batch-209 host-notice and call-in-numbers tests
+                    # carry a sentence-start version of it
+                    # (_notice_starts_sentence): DHI's guidance
+                    # pointer ("The Company plans to also provide
+                    # guidance ... on its conference call today") has
+                    # no host verb, and GE's call-schedule line
+                    # ("will host its calls on April 23 ...") has no
+                    # "a conference call", so neither breaks — but
+                    # the guard keeps any future long guidance
+                    # sentence that mentions hosting a call in its
+                    # tail from breaking.
+                    # Batch 209 walk-back: the notice sentence may
+                    # share its line with the tail of the preceding
+                    # sentence — CI's availability sentence ("This
+                    # quarterly earnings release ... [is] available
+                    # on ... website ... (URL).") wraps onto the same
+                    # line as "Management will be hosting ...", so
+                    # breaking at the line leaves the kept text ending
+                    # mid-sentence ("This quarterly earnings",
+                    # "... Investor Relations section"). When the
+                    # notice sentence does not start the break line
+                    # and the text before it ends with sentence
+                    # punctuation, that text is the end of the last
+                    # kept sentence — pop unterminated kept lines
+                    # (the sentence's wrapped fragments) so the text
+                    # ends at the last complete sentence. The heading
+                    # (collected[0]) is never popped, and the walk-back
+                    # only runs when this break fired on a batch-209
+                    # notice match (re-checked here: the compound
+                    # condition above covers other break causes too).
+                    for _re in (_CALL_HOST_NOTICE_RE, _CALL_IN_NUMBERS_RE):
+                        _nm = _re.search(follow)
+                        if _nm is None or not _notice_starts_sentence(follow, _nm):
+                            continue
+                        _sent = _notice_sentence_start(follow, _nm)
+                        if _sent > 0 and _is_sentence_terminated(
+                            follow[:_sent].rstrip()
+                        ):
+                            while len(collected) > 1 and not _is_sentence_terminated(
+                                collected[-1]
+                            ):
+                                collected.pop()
+                        break
                     break
-                if follow.isupper() and len(follow) <= 80 and not any(
-                    w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
+                if (
+                    follow.isupper()
+                    and len(follow) <= 80
+                    and re.search(r"[A-Za-z]{2,}", follow)
+                    and not _is_guidance_period_label(follow)
+                    and not any(
+                        w in follow for w in ["GAAP", "RANGE", "GUIDANCE", "OUTLOOK", "REVENUE", "EPS", "NET SALES"]
+                    )
+                ):
+                    # Batch 193: an all-caps period label ("Q4 FY25",
+                    # "FY25" — CRM's guidance-table period headers) is
+                    # a table header, not a section heading, so it
+                    # never breaks collection.
+                    # Batch 199: a wrapped table value on its own line
+                    # ("$520M" — FSLR's split "Operating Expenses"
+                    # row) is all-caps by construction ($/digits carry
+                    # no case, "M" is the only cased char) but never a
+                    # heading, so a line with no two-letter word never
+                    # breaks. A real heading ("CONFERENCE CALL
+                    # DETAILS") always carries one.
+                    break
+                # Batch 193: footnote-definition, rounding-note and
+                # asterisk-note blocks are never guidance — skip the
+                # whole block in-loop, with the same block machinery
+                # the Highlights section collector uses post-collection
+                # (batch 162/166). In-loop (not post-collection: batch
+                # 192 showed a post-collection filter frees char
+                # budget that the cap then refills with next-section
+                # content) so the 30-line budget is spent only on kept
+                # lines. APD's "#" per-share definition and "* Certain
+                # results" legend, AFL's "*See Non-U.S. GAAP ..."
+                # pointer, AKAM's "** Cloud Infrastructure ..." note,
+                # AMT's "(1)For additional discussion ..." table
+                # footnote and the "*Management is unable to
+                # reconcile" disclaimer all drop here. Two guards:
+                # (a) a parenthesized WORD is a table column header,
+                # not a footnote key — "(Prior) July" / "(Updated)"
+                # (BMY's guidance-table headers) match
+                # _LEDE_FOOTNOTE_RE's paren shape, so the block
+                # machinery would drop them (and chain onto the next
+                # table row, "2026 WW Revenue Growth* ..."). A real
+                # paren footnote carries a digit key or a sentence
+                # after the marker; a bare label word (or nothing) is
+                # a header, so those lines collect normally.
+                # (b) a block never swallows a guidance (sub-)heading
+                # — CARR's "1 Excludes NORESCO" block chains through
+                # "2 The closure ..." and the bare "5" onto the "2026
+                # Guidance" table header. Truncate the block at the
+                # first guidance-vocabulary line after the opener.
+                block = 0
+                if not re.match(r"^\([A-Za-z]+\)\d?(?:\s+[A-Z][a-z]*)?$", follow):
+                    block = (
+                        _footnote_def_block_len(lines, j)
+                        or _rounding_note_block_len(lines, j)
+                        or _asterisk_note_block_len(lines, j)
+                    )
+                if block:
+                    for k in range(j + 1, j + block):
+                        if re.search(r"\b(outlook|guidance)\b", lines[k], re.IGNORECASE):
+                            block = k - j
+                            break
+                    j += block
+                    continue
+                # Batch 193: a next-section heading ends the guidance
+                # section — but only once the section has delivered
+                # guidance (see _guidance_has_signal).
+                if _is_guidance_next_section_heading(lines, j) and _guidance_has_signal(collected):
+                    break
+                # Batch 205: a results-table period header ends the
+                # guidance section. DELL's guidance bullets are followed
+                # by a results heading ("Fourth Quarter ... Financial
+                # Results") whose follower is the period header — that
+                # path breaks at the heading once the period regex matches
+                # the dateless shape. But ECL's two outlook bullets run
+                # straight into its results table ("First Quarter Ended
+                # March 31") with no heading line at all, so the header
+                # itself must break collection. Two guards: guidance signal
+                # must already be delivered (a guidance table's own period
+                # header sits before any signal — AKAM's "Three Months
+                # Ended" intro), and the lines ahead must confirm a
+                # results table (a guidance-range table's "Low End High
+                # End" refuses it); without the confirmation a guidance
+                # table that happens to head its columns with "Ended"
+                # would be cut.
+                if (
+                    len(follow) <= 90
+                    and _GUIDANCE_RESULTS_PERIOD_RE.match(follow)
+                    and _guidance_has_signal(collected)
+                    and _is_results_table_ahead(lines, j)
                 ):
                     break
                 collected.append(follow)
-                if len(collected) >= 30:
+                if len(collected) >= _MAX_GUIDANCE_LINES and not over_budget:
+                    # Batch 204: budget hit — enter the lookahead
+                    # window (see constants above): keep collecting,
+                    # but the extra lines survive only if a
+                    # section-end break fires before the window closes.
+                    over_budget = True
+                    budget_cut = len(collected)
+                elif over_budget and len(collected) > (
+                    budget_cut + _GUIDANCE_BUDGET_LOOKAHEAD_LINES
+                ):
+                    # No section-end fired inside the lookahead
+                    # window: drop the unverified extra lines and keep
+                    # the budget cut.
+                    del collected[budget_cut:]
                     break
+                j += 1
+            else:
+                # Ran out of lines without a section-end break: the
+                # lookahead extras never verified — drop them.
+                if over_budget:
+                    del collected[budget_cut:]
 
-            res = "\n\n".join(collected)
+            # Batch 233: fuse split guidance-table rows and drop
+            # footnote furniture (see _clean_guidance_result) — the
+            # collector above is untouched; only the collected text
+            # is rewritten, so the budget/break logic still governs
+            # what is collected.
+            collected = _clean_guidance_result(collected)
+
+            res = "\n\n".join(_join_fragmented_bullet_starts(collected))
             if len(res) >= 100:
                 if len(res) > max_chars:
                     res = res[:max_chars].rsplit(" ", 1)[0].rstrip() + "…"
@@ -5652,6 +12362,23 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</(p|div|li|tr|h[1-6])>", "\n", text)
+    # Batch 218: a digit-only <sup> footnote key glues to its neighbors
+    # when the tags are stripped ("Financial Guidance1", "1Non-GAAP" —
+    # the batch-217 residual wart; the older extractor spaced both
+    # sides). The key is never part of a split word (unlike span-split
+    # text), so wrap digit keys in \x02 markers here and resolve them
+    # to spaces at the end, once the neighbors are visible in flattened
+    # text. Batch 219: the same treatment for parenthesized letter
+    # keys ("(a)", "(b)" — 547 single + ~52 multi-key runs in the
+    # cache, mostly Citi tables) and for multi-key runs ("(a)(b)",
+    # "(1)(2)"). Letter keys are footnote keys exactly like digit
+    # ones; ordinals ("th"), trademarks ("SM", "®") and "○"/"." stay
+    # glued — ordinals are word parts, marks are typographically
+    # attached. Census of the 1,699-exhibit cache: 4,290 digit-key
+    # sups, 547 paren-letter singles, 52 multi-letter runs, 35
+    # ordinals, 158 SM/TM/® (+147 "&reg;" entities), 22 "○", 126
+    # empty sups, 1 "."; zero bare letter keys, zero mixed runs.
+    text = _SUP_KEY_RE.sub(_sup_key_marker, text)
     # Inline formatting tags carry no whitespace of their own: adjacent inline
     # elements with no whitespace between them render concatenated in a
     # browser. Replacing them with a space corrupts words that filers split
@@ -5675,4 +12402,82 @@ def _html_to_text(document_html: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)          # collapse runs of spaces
     text = re.sub(r" *\n *", "\n", text)          # trim spaces around newlines
     text = re.sub(r"\n{3,}", "\n\n", text)        # cap blank-line runs
-    return text.strip()
+    # Batch 198: a bullet glyph in its own inline element glues to its
+    # item text when the tags are stripped (\"&#8226;</font><font>Net
+    # sales...\" -> \"•Net sales...\") — the no-space inline join above is
+    # deliberate (DFIN span-splitting), but a line-leading bullet is never
+    # part of a split word, so restore the space after it. Stored rows
+    # from the older extractor already carry the spaced form (\"• Net
+    # sales...\"), and the served guidance/highlights cards render the
+    # glued form on ~1,400 of the 1,699 cached exhibits. Dashes are
+    # gated on a following letter: a dash before a digit or \"$\" is a
+    # table negative, not a bullet. Strip first: a leading space from a
+    # stripped opening tag would otherwise hide the first line's bullet
+    # from the ^ anchor (the final .strip() runs after these regexes).
+    text = text.strip()
+    text = re.sub(r"(?m)^([•●○◦▪■·])(\S)", r"\1 \2", text)
+    text = re.sub(r"(?m)^([–—])([A-Za-z])", r"\1 \2", text)
+    # Batch 218 (continued): resolve the \x02 footnote-key markers.
+    # Batch 219: parenthesized letter keys resolve through the same
+    # rules — they always start with "(", so they space after a digit
+    # ("2025 (a) Sales") and before a following letter, exactly like
+    # parenthesized digit keys. The exponent-wedge guard can never fire
+    # on them (it requires a bare key).
+    # Space before the key unless it already follows whitespace, a line
+    # start, "(" or "$"; space after it when a letter follows, except
+    # for a bare key after a digit (the "10²cm" shape — no corpus
+    # occurrences, but a parenthesized key after a digit still spaces:
+    # "2025 (1) Sales"). A bare key wedged between a digit and a
+    # letter is left glued on both sides (exponent/unit, never a
+    # footnote key in the census: the one attested digit-letter case
+    # is parenthesized). A marker next to another marker spaces too
+    # ("word 1 2" for consecutive sups).
+    return _SUP_MARKER_RE.sub(lambda m: _resolve_sup_key(text, m), text)
+
+
+_SUP_KEY_RE = re.compile(r"(?i)<sup\b[^>]*>(.*?)</sup>", re.S)
+_SUP_MARKER_RE = re.compile(r"\x02([^\x02]*)\x02")
+_PAREN_KEY_RE = re.compile(r"\(\s*([0-9A-Za-z])\s*\)")
+
+
+def _sup_key_marker(match: re.Match) -> str:
+    """Wrap a <sup> footnote key in \\x02 markers.
+
+    Digit keys ("1", "(1)") and parenthesized letter keys ("(a)")
+    are footnote keys, never part of a split word, so they space like
+    the older extractor rendered them. Anything else is returned
+    unchanged, so the later inline-tag strip removes those sups
+    exactly as before: ordinals ("th"), trademarks ("®"/"SM"),
+    glyphs ("○"), punctuation ("."), empty sups, and sups carrying
+    prose ("(a) Represents ...").
+    """
+    inner = re.sub(r"<[^>]+>", "", match.group(1))
+    # Batch 219: em-space / thin-space entities (CB's "(1)&#8195;&#8201;")
+    # are whitespace too — strip them so the key still reads as a key.
+    inner = re.sub(r"&(?:nbsp|#8203|#160|#8195|#8201);", " ", inner).strip()
+    # Batch 219: a run of parenthesized single-char keys — "(a)(b)",
+    # "(1)(2)", "(a) (b)" — normalizes to space-joined keys so each
+    # key spaces like a lone one. Mixed digit/letter runs stay
+    # unchanged (no corpus occurrences; ambiguous).
+    keys = _PAREN_KEY_RE.findall(inner)
+    if keys and re.sub(r"\s+", "", inner) == "".join(f"({k})" for k in keys):
+        if all(k.isdigit() for k in keys) or all(k.isalpha() for k in keys):
+            return "\x02" + " ".join(f"({k})" for k in keys) + "\x02"
+        return match.group(0)
+    digits = re.sub(r"[\s(),]", "", inner)
+    if digits and digits.isdigit():
+        return f"\x02{inner}\x02"
+    if re.fullmatch(r"\([A-Za-z]\)", inner):
+        return f"\x02{inner}\x02"
+    return match.group(0)
+
+
+def _resolve_sup_key(text: str, match: re.Match) -> str:
+    key = match.group(1)
+    prev = text[match.start() - 1] if match.start() > 0 else ""
+    nxt = text[match.end()] if match.end() < len(text) else ""
+    if prev.isdigit() and not key.startswith("(") and nxt.isalpha():
+        return key  # exponent/unit wedge: leave glued on both sides
+    left = " " if prev and prev not in " \t\n($" else ""
+    right = " " if nxt.isalpha() and (key.startswith("(") or not prev.isdigit()) else ""
+    return f"{left}{key}{right}"

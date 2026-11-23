@@ -1,0 +1,22 @@
+# Keep the Railway build context lean. tickerlens.db is intentionally NOT
+# excluded — the Dockerfile COPYs it so the image ships seeded data.
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.edgar_cache
+.env
+*.db-wal
+*.db-shm
+*.db-journal
+hidden_files
+scripts
+tests
+notebooks
+docs
+memory
+output
+.DS_Store
+.uv-cache
+.ipynb_checkpoints

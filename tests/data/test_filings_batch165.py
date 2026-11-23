@@ -89,10 +89,12 @@ def _skyd_q2_2026_html() -> str:
         "•One year in, we’re proud of the great progress: including nearly doubling our theatrical slate",
         "from 8 to 15 films in 2026 and on track to release 15+ in 2027; 40 new or returning DTC series",
         "greenlit; and over 90 series and 800+ episodes expected from our TV studios in 2026.",
-        "•Q2 was our best quarter for retention in Paramount+’s history, powered by Dutton Ranch, UFC,",
+    # Batch 198: the fixture inputs stay glued (they exercise the
+    # _html_to_text normalization), but the served output is spaced.
+        "• Q2 was our best quarter for retention in Paramount+’s history, powered by Dutton Ranch, UFC,",
         "and the FIFA World Cup non-exclusively across six countries in Latin America, gaining ~2 million",
         "new Paramount+ subscribers in the quarter to reach 81.6 million worldwide.",
-        "•Q2 film slate, led by Scary Movie, performed well, and we’re building our pipeline across",
+        "• Q2 film slate, led by Scary Movie, performed well, and we’re building our pipeline across",
         "Television Studios, Paramount Animation, and Skydance Sports for both first- and third-party",
         "distribution.",
         "•Our focus on creative execution and efficiency at TV Media is working: CBS held seven of the",
@@ -113,10 +115,10 @@ def test_skyd_q2_2026_bullet_three_completes() -> None:
     assert parts[1:] == [
         "from 8 to 15 films in 2026 and on track to release 15+ in 2027; 40 new or returning DTC series",
         "greenlit; and over 90 series and 800+ episodes expected from our TV studios in 2026.",
-        "•Q2 was our best quarter for retention in Paramount+’s history, powered by Dutton Ranch, UFC,",
+        "• Q2 was our best quarter for retention in Paramount+’s history, powered by Dutton Ranch, UFC,",
         "and the FIFA World Cup non-exclusively across six countries in Latin America, gaining ~2 million",
         "new Paramount+ subscribers in the quarter to reach 81.6 million worldwide.",
-        "•Q2 film slate, led by Scary Movie, performed well, and we’re building our pipeline across",
+        "• Q2 film slate, led by Scary Movie, performed well, and we’re building our pipeline across",
         "Television Studios, Paramount Animation, and Skydance Sports for both first- and third-party",
         "distribution.",
     ]
@@ -131,10 +133,10 @@ def test_inline_bullet_at_budget_boundary_does_not_start() -> None:
     hl = extract_press_release_highlights(
         _contact_release_html(
             "Acme Reports Third Quarter Results",
-            "•Bullet one reports net income of $1.21 billion, up 14 percent.",
+            "• Bullet one reports net income of $1.21 billion, up 14 percent.",
             "Bullet one continues with core operating income up 9 percent.",
             "Bullet one closes with a combined ratio of 87.2 percent.",
-            "•Bullet two reports net premiums written of $4.8 billion, up 6 percent.",
+            "• Bullet two reports net premiums written of $4.8 billion, up 6 percent.",
             "Bullet two continues with book value per share of $142.18, up 11 percent.",
             "Bullet two closes with tangible book value up 13 percent.",
             "•Bullet three must not appear in the extracted highlights at all.",
@@ -145,10 +147,10 @@ def test_inline_bullet_at_budget_boundary_does_not_start() -> None:
     parts = hl.split("\n\n")
     assert parts[0] == "Acme Reports Third Quarter Results"
     assert parts[1:] == [
-        "•Bullet one reports net income of $1.21 billion, up 14 percent.",
+        "• Bullet one reports net income of $1.21 billion, up 14 percent.",
         "Bullet one continues with core operating income up 9 percent.",
         "Bullet one closes with a combined ratio of 87.2 percent.",
-        "•Bullet two reports net premiums written of $4.8 billion, up 6 percent.",
+        "• Bullet two reports net premiums written of $4.8 billion, up 6 percent.",
         "Bullet two continues with book value per share of $142.18, up 11 percent.",
         "Bullet two closes with tangible book value up 13 percent.",
     ]
@@ -158,17 +160,22 @@ def test_inline_bullet_at_budget_boundary_does_not_start() -> None:
 def test_inline_bullet_finishing_cap_bounds_long_wrapped_item() -> None:
     # The final bullet is one sentence wrapped across 7 fragment lines
     # (the attested shape — Skydance's bullets wrap mid-sentence, never
-    # with terminal punctuation mid-item); only the first 4 continuation
-    # lines are taken, and the next bullet never starts.
+    # with terminal punctuation mid-item). Batch 165 capped the pull-in
+    # at the first 4 continuation lines; batch 222's completion
+    # allowance lets the unfinished item run to its close (all 7 lines,
+    # ending terminated), so the highlights no longer end mid-bullet at
+    # "tangible common equity of 18.2 percent annualized and". The cap
+    # still bounds the pull-in (8 past the budget) and the next bullet
+    # never starts.
     hl = extract_press_release_highlights(
         _contact_release_html(
             "Acme Reports Third Quarter Results",
-            "•Alpha bullet opens with net income of $1.21 billion, up 14 percent.",
+            "• Alpha bullet opens with net income of $1.21 billion, up 14 percent.",
             "Alpha bullet continues with core operating income up 9 percent.",
             "Alpha bullet closes with a combined ratio of 87.2 percent.",
-            "•Beta bullet opens with net premiums written of $4.8 billion.",
+            "• Beta bullet opens with net premiums written of $4.8 billion.",
             "Beta bullet continues with commercial lines up 8 percent.",
-            "•Gamma bullet opens with book value per share of $142.18 and",
+            "• Gamma bullet opens with book value per share of $142.18 and",
             "tangible book value up 13 percent and ROE of 14.7 percent",
             "annualized and ROTE of 21.7 percent annualized and core",
             "operating ROE of 13.9 percent annualized and return on",
@@ -182,19 +189,21 @@ def test_inline_bullet_finishing_cap_bounds_long_wrapped_item() -> None:
     assert hl is not None
     parts = hl.split("\n\n")
     assert parts[1:] == [
-        "•Alpha bullet opens with net income of $1.21 billion, up 14 percent.",
+        "• Alpha bullet opens with net income of $1.21 billion, up 14 percent.",
         "Alpha bullet continues with core operating income up 9 percent.",
         "Alpha bullet closes with a combined ratio of 87.2 percent.",
-        "•Beta bullet opens with net premiums written of $4.8 billion.",
+        "• Beta bullet opens with net premiums written of $4.8 billion.",
         "Beta bullet continues with commercial lines up 8 percent.",
-        "•Gamma bullet opens with book value per share of $142.18 and",
+        "• Gamma bullet opens with book value per share of $142.18 and",
         "tangible book value up 13 percent and ROE of 14.7 percent",
         "annualized and ROTE of 21.7 percent annualized and core",
         "operating ROE of 13.9 percent annualized and return on",
         "tangible common equity of 18.2 percent annualized and",
+        "a CET1 ratio of 11.4 percent at quarter end with",
+        "a supplementary leverage ratio of 7.1 percent and",
+        "a liquidity coverage ratio of 132 percent at quarter end.",
     ]
     assert "Delta bullet" not in hl
-    assert "supplementary leverage ratio" not in hl
 
 
 def test_complete_figure_bullet_does_not_extend() -> None:
@@ -206,11 +215,11 @@ def test_complete_figure_bullet_does_not_extend() -> None:
         _contact_release_html(
             "•Net revenue grew 10% in the first quarter, with payments volume up 9% and cross-border",
             "volume up 16% and processed transactions up 11% year over year.",
-            "•GAAP EPS of $2.58, up 8% year over year",
-            "•Non-GAAP EPS of $2.75, up 14% year over year",
-            "•Payments volume up 9% year over year",
-            "•Cross-border volume up 16% year over year",
-            "•Share repurchases and dividends of $5.1B",
+            "• GAAP EPS of $2.58, up 8% year over year",
+            "• Non-GAAP EPS of $2.75, up 14% year over year",
+            "• Payments volume up 9% year over year",
+            "• Cross-border volume up 16% year over year",
+            "• Share repurchases and dividends of $5.1B",
             "Income Statement Summary",
             "In billions, except percentages and per share data.",
             "Visa's strong first-quarter results reflected healthy spending during the holiday season.",
@@ -224,11 +233,11 @@ def test_complete_figure_bullet_does_not_extend() -> None:
     )
     assert parts[1:] == [
         "volume up 16% and processed transactions up 11% year over year.",
-        "•GAAP EPS of $2.58, up 8% year over year",
-        "•Non-GAAP EPS of $2.75, up 14% year over year",
-        "•Payments volume up 9% year over year",
-        "•Cross-border volume up 16% year over year",
-        "•Share repurchases and dividends of $5.1B",
+        "• GAAP EPS of $2.58, up 8% year over year",
+        "• Non-GAAP EPS of $2.75, up 14% year over year",
+        "• Payments volume up 9% year over year",
+        "• Cross-border volume up 16% year over year",
+        "• Share repurchases and dividends of $5.1B",
     ]
     assert "Income Statement Summary" not in hl
     assert "healthy spending" not in hl
