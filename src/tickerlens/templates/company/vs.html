@@ -71,24 +71,14 @@
 </nav>
 
 <!-- Header -->
-<div class="mb-8 pb-6 border-b border-slate-200/80 dark:border-white/[0.08] flex flex-col md:flex-row md:items-center justify-between gap-4">
+<div class="mb-6 pb-5 border-b border-slate-200/80 dark:border-white/[0.08] flex flex-col md:flex-row md:items-center justify-between gap-4">
   <div>
-    <div class="flex items-center gap-3 mb-1.5 flex-wrap">
-      <div class="flex items-center gap-2">
-        <h1 class="text-3xl font-extrabold text-slate-900 dark:text-white font-mono tracking-tight">{{ vs.a.ticker }}</h1>
-        <button type="button" @click="copyToClipboard('{{ vs.a.ticker }}', 'Copied {{ vs.a.ticker }}!')" class="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer" title="Copy symbol">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-        </button>
-      </div>
-      <span class="text-slate-400 dark:text-gray-600 text-2xl font-light">vs</span>
-      <div class="flex items-center gap-2">
-        <h1 class="text-3xl font-extrabold text-slate-900 dark:text-white font-mono tracking-tight">{{ vs.b.ticker }}</h1>
-        <button type="button" @click="copyToClipboard('{{ vs.b.ticker }}', 'Copied {{ vs.b.ticker }}!')" class="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer" title="Copy symbol">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-        </button>
-      </div>
+    <div class="flex items-center gap-2.5 mb-1 flex-wrap">
+      <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white font-mono tracking-tight">{{ vs.a.ticker }}</h1>
+      <span class="text-slate-400 dark:text-gray-600 text-xl font-light">vs</span>
+      <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white font-mono tracking-tight">{{ vs.b.ticker }}</h1>
     </div>
-    <p class="text-slate-500 dark:text-gray-400 text-sm">{{ vs.a.name }} · {{ vs.b.name }} — latest reported quarter side by side.</p>
+    <p class="text-slate-500 dark:text-gray-400 text-xs sm:text-sm">{{ vs.a.name }} · {{ vs.b.name }} — latest reported quarter side by side.</p>
   </div>
 
   <!-- Direct Swap Link Button -->

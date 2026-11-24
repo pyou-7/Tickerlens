@@ -22,347 +22,327 @@
   {%- if val is none or val is not number -%}—{%- else -%}${{ "%.2f"|format(val) }}{%- endif -%}
 {%- endmacro %}
 
-{# kpi_card: label, value string, yoy pct (float or none), explainer tooltip #}
-{% macro kpi_card(label, value, yoy_pct, explainer=none) %}
-<div class="group relative rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs hover:border-indigo-400 dark:hover:border-indigo-500/60 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-indigo-500/5 transition-all duration-200 flex flex-col justify-between">
-  <div>
-    <div class="flex items-center justify-between mb-1.5">
-      <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400">{{ label }}</span>
-      {% if explainer %}
-      <span class="text-slate-300 dark:text-gray-600 hover:text-indigo-500 dark:hover:text-indigo-400 text-[11px] cursor-help transition" title="{{ explainer }}">ⓘ</span>
+{% macro kpi_card(label, value, yoy_pct) %}
+<div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-4 flex flex-col justify-between gap-2">
+  <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">{{ label }}</span>
+  <div class="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ value }}</div>
+  {% if yoy_pct is not none %}
+    <div>
+      {% if yoy_pct >= 0 %}
+        <span class="inline-flex items-center gap-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">▲ +{{ "%.1f"|format(yoy_pct) }}% YoY</span>
+      {% else %}
+        <span class="inline-flex items-center gap-0.5 text-xs font-semibold text-rose-600 dark:text-rose-400 tabular-nums">▼ {{ "%.1f"|format(yoy_pct) }}% YoY</span>
       {% endif %}
     </div>
-    <div class="text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ value }}</div>
-  </div>
-  <div class="mt-2.5 min-h-[1.25rem]">
-    {%- if yoy_pct is not none -%}
-      {%- if yoy_pct >= 0 -%}
-        <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 tabular-nums">
-          <span>▲</span>
-          <span>+{{ "%.1f"|format(yoy_pct) }}% YoY</span>
-        </span>
-      {%- else -%}
-        <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/80 tabular-nums">
-          <span>▼</span>
-          <span>{{ "%.1f"|format(yoy_pct) }}% YoY</span>
-        </span>
-      {%- endif -%}
-    {%- endif -%}
-  </div>
+  {% endif %}
 </div>
 {% endmacro %}
 
 {% block content %}
 
-<!-- Company header -->
-<div class="flex flex-col md:flex-row items-start justify-between gap-6 mb-8 pb-6 border-b border-slate-200/80 dark:border-white/[0.08]">
-  <div class="space-y-2 max-w-2xl">
-    <div class="flex items-center gap-3 flex-wrap">
-      <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ overview.name }}</h1>
+<!-- Clean Company Header -->
+<div class="flex flex-col md:flex-row items-start justify-between gap-5 mb-5">
+  <div class="space-y-1.5 max-w-2xl">
+    <div class="flex items-center gap-2.5 flex-wrap">
+      <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">{{ overview.name }}</h1>
       {% if overview.ticker %}
-        <div class="flex items-center gap-1.5">
-          <span class="rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-sm px-2.5 py-1 shadow-xs">
-            {{ overview.ticker }}
-          </span>
-          <!-- Quick Copy Ticker -->
-          <button type="button" @click="copyToClipboard('{{ overview.ticker }}', 'Copied {{ overview.ticker }} to clipboard!')"
-                  class="p-1 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer"
-                  title="Copy ticker symbol">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-          </button>
-          <!-- Share Link -->
-          <button type="button" @click="copyToClipboard(window.location.href, 'Link copied to clipboard!')"
-                  class="p-1 rounded-lg text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition cursor-pointer"
-                  title="Share link">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
-          </button>
-        </div>
+        <span class="rounded-lg bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 font-mono font-bold text-xs px-2 py-0.5">
+          {{ overview.ticker }}
+        </span>
       {% endif %}
-      {% if overview.cik %}
-        <a href="https://www.sec.gov/edgar/browse/?CIK={{ overview.cik }}" target="_blank" rel="noopener noreferrer"
-           class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-gray-800/80 border border-slate-200/80 dark:border-white/[0.08] text-xs font-mono text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition"
-           title="View primary filings on SEC EDGAR (CIK: {{ overview.cik }})">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-          <span>CIK {{ overview.cik }}</span>
-          <span class="text-[10px] opacity-70">↗</span>
-        </a>
+      {% if overview.sector %}
+        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 px-2 py-0.5 text-slate-500 dark:text-gray-400 text-xs font-medium">
+          {{ overview.sector }}
+        </span>
       {% endif %}
       {% if also_trades_as %}
-        <span class="text-xs text-slate-500 dark:text-gray-400 flex items-center gap-1">
-          Also trades as
+        <span class="text-xs text-slate-400 dark:text-gray-500">
+          Also
           {% for sib in also_trades_as %}
             <a href="/company/{{ sib }}" class="font-mono font-semibold text-indigo-600 dark:text-indigo-400 hover:underline">{{ sib }}</a>{{ ", " if not loop.last }}
           {% endfor %}
         </span>
       {% endif %}
-      {% if overview.sector %}
-        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200/60 dark:border-white/[0.08] px-2.5 py-0.5 text-slate-600 dark:text-gray-400 text-xs font-medium">
-          {{ overview.sector }}
-        </span>
-      {% endif %}
     </div>
 
-    <div class="flex items-baseline gap-4 text-sm text-slate-600 dark:text-gray-400 flex-wrap">
+    <div class="flex items-baseline gap-4 flex-wrap">
       {% if overview.last_price %}
-        <span class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ fmt_price(overview.last_price) }}</span>
+        <span class="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">{{ fmt_price(overview.last_price) }}</span>
       {% endif %}
       {% if overview.market_cap %}
         <span class="text-xs font-medium text-slate-500 dark:text-gray-400 tabular-nums">Market Cap <strong class="text-slate-800 dark:text-slate-200">{{ fmt_large(overview.market_cap) }}</strong></span>
       {% endif %}
     </div>
+
+    {% if overview.description %}
+    <div x-data="{ expanded: false }" class="pt-1">
+      <p class="text-xs text-slate-500 dark:text-gray-400 leading-relaxed" :class="!expanded && 'line-clamp-2'">
+        {{ overview.description }}
+      </p>
+      <button type="button" @click="expanded = !expanded" class="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline mt-0.5 cursor-pointer" x-text="expanded ? 'Show less' : 'Read more'"></button>
+    </div>
+    {% endif %}
   </div>
 
-  <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
-    <div class="shrink-0">
-      {% set ticker = overview.ticker %}
-      {% include "partials/watch_button.html" %}
-    </div>
+  <!-- Focused Action Controls -->
+  <div class="flex items-center gap-2 flex-wrap shrink-0">
+    {% set ticker = overview.ticker %}
+    {% include "partials/watch_button.html" %}
 
-    <form method="post" action="/company/{{ overview.ticker }}/refresh" class="shrink-0">
-      <button type="submit"
-              title="Refresh company fundamentals and Yahoo price quote"
-              class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
-        <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <form method="post" action="/company/{{ overview.ticker }}/refresh" class="inline">
+      <button type="submit" title="Refresh fundamentals & quote"
+              class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 transition cursor-pointer">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
         <span>Refresh</span>
       </button>
     </form>
 
-    <a href="/company/{{ overview.ticker }}/tearsheet"
-       target="_blank"
-       title="Open printable institutional research tearsheet / PDF export"
-       class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
-      <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-      </svg>
-      <span>Tearsheet</span>
-    </a>
-
     <form @submit.prevent="if ($event.target.peer.value.trim()) location = '/company/{{ overview.ticker }}/vs/' + $event.target.peer.value.trim().toUpperCase()"
-          class="flex gap-1.5" x-data>
-      <input type="text" name="peer" maxlength="10" placeholder="Compare vs… (ticker)" aria-label="Compare with ticker"
-             class="w-36 rounded-xl bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-white text-xs px-3 py-2 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500/50 shadow-inner font-semibold" />
+          class="flex gap-1" x-data>
+      <input type="text" name="peer" maxlength="10" placeholder="vs ticker…" aria-label="Compare with ticker"
+             class="w-24 sm:w-28 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-white/[0.08] text-slate-900 dark:text-white text-xs px-2.5 py-2 font-mono uppercase placeholder:normal-case placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-indigo-500/50" />
       <button type="submit"
-              class="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 shadow-xs transition cursor-pointer">
-        ⇄ Compare
+              class="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-2.5 py-2 text-xs font-semibold text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 transition cursor-pointer">
+        ⇄
       </button>
     </form>
   </div>
 </div>
 
-<!-- Company Sub-Navigation -->
+<!-- Unified Company Sub-Navigation -->
 {% set current_ticker = overview.ticker %}
 {% set active_tab = 'overview' %}
 {% set cik = overview.cik %}
 {% include "partials/company_subnav.html" %}
 
-<!-- Peer Intelligence & Head-to-Head Benchmarks -->
-{% if peers %}
-<div class="mb-6 flex items-center gap-2 flex-wrap">
-  <span class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 font-mono flex items-center gap-1.5">
-    <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
-    </svg>
-    <span>Sector Peers:</span>
-  </span>
-  {% for p in peers %}
-    <a href="/company/{{ overview.ticker }}/vs/{{ p.ticker }}"
-       title="Compare {{ overview.ticker }} vs {{ p.ticker }}{% if p.name %} ({{ p.name }}){% endif %}"
-       class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/90 dark:border-white/[0.08] hover:border-indigo-400 dark:hover:border-indigo-500/60 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/30 text-xs font-semibold text-slate-700 dark:text-gray-300 transition shadow-2xs group cursor-pointer">
-      <span class="text-slate-400 dark:text-gray-500 text-[10px] font-normal">vs</span>
-      <span class="font-mono font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400">{{ p.ticker }}</span>
-      {% if p.is_stored %}
-        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Full historical filings loaded"></span>
-      {% endif %}
-    </a>
-  {% endfor %}
-</div>
+{% if overview.pending_filing_note %}
+<p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3.5 py-2 font-medium mb-6">{{ overview.pending_filing_note }}</p>
 {% endif %}
 
-{% if watching %}
-<!-- Watchlist Notes & Tags Editor -->
-<div class="mb-8 p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40">
-  <div class="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-400 mb-1">Watchlist Annotations</div>
-  {% include "partials/watch_note.html" %}
-  {% include "partials/watch_tags.html" %}
-</div>
-{% endif %}
-
-<!-- Description -->
-{% if overview.description %}
-<div class="rounded-2xl bg-white dark:bg-gray-900/60 border border-slate-200/80 dark:border-white/[0.08] p-5 shadow-xs mb-8 max-w-4xl">
-  <h2 class="text-xs uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500 mb-2">Company Overview</h2>
-  <p class="text-slate-700 dark:text-gray-300 text-sm leading-relaxed">{{ overview.description }}</p>
-</div>
-{% endif %}
-
-<!-- Latest quarter snapshot -->
-<div class="mb-8">
-  <div class="flex items-baseline justify-between mb-3">
-    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
-      Latest Quarter · <span class="text-slate-900 dark:text-white font-mono">{{ overview.latest_label }}</span>
-      <span class="font-normal text-slate-400 dark:text-gray-500 ml-1">(ended {{ overview.latest_period_end }})</span>
-    </h2>
-  </div>
-  {% if overview.pending_filing_note %}
-  <p class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-2 font-medium max-w-4xl mb-3">{{ overview.pending_filing_note }}</p>
-  {% endif %}
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-    {{ kpi_card("Revenue", fmt_large(overview.latest_kpi.revenue), overview.yoy.revenue, "Total top-line recognized sales under GAAP ASC 606") }}
-    {{ kpi_card("Net Income", fmt_large(overview.latest_kpi.net_income), overview.yoy.net_income, "Bottom-line GAAP net earnings after taxes and expenses") }}
-    {{ kpi_card("EPS (diluted)", fmt_eps(overview.latest_kpi.eps_diluted), overview.yoy.eps_diluted, "GAAP earnings per share divided by diluted share count") }}
-    {{ kpi_card("Free Cash Flow", fmt_large(overview.latest_kpi.free_cash_flow), overview.yoy.free_cash_flow, "Operating cash flow minus Capital Expenditures (CapEx)") }}
-  </div>
-</div>
-
-<!-- TTM snapshot -->
-<div class="mb-10">
-  <div class="flex items-baseline justify-between mb-3">
-    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
-      Trailing Twelve Months (TTM)
-      {%- if overview.ttm_quarters < 4 %}
-        <span class="normal-case text-amber-600 dark:text-amber-400 ml-1">({{ overview.ttm_quarters }}-quarter partial)</span>
-      {%- endif %}
-    </h2>
-  </div>
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-    {{ kpi_card("Revenue", fmt_large(overview.ttm_kpi.revenue), none, "Summed revenue across the past 4 reported quarters") }}
-    {{ kpi_card("Net Income", fmt_large(overview.ttm_kpi.net_income), none, "Summed GAAP net income across the past 4 quarters") }}
-    {{ kpi_card("EPS (diluted)", fmt_eps(overview.ttm_kpi.eps_diluted), none, "Summed diluted EPS over the trailing 12 months") }}
-    {{ kpi_card("Free Cash Flow", fmt_large(overview.ttm_kpi.free_cash_flow), none, "Trailing 12-month Operating Cash Flow minus CapEx") }}
-  </div>
-</div>
-
-<!-- Valuation signal -->
-{% if valuation %}
-<div class="mb-10">
-  <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Valuation Signal & Price Target</h2>
-  <div class="rounded-3xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-6 sm:p-7 shadow-xs max-w-4xl space-y-5">
-    <div class="flex items-center gap-3 flex-wrap">
-      {% set sig = valuation.signal %}
-      {% if sig == "Strong Buy" %}
-        {% set badge = "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800" %}
-      {% elif sig == "Buy" %}
-        {% set badge = "bg-green-50 dark:bg-green-950/50 text-green-700 dark:text-green-300 border-green-300 dark:border-green-800" %}
-      {% elif sig == "Hold" %}
-        {% set badge = "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800" %}
-      {% elif sig in ["Sell", "Strong Sell"] %}
-        {% set badge = "bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800" %}
-      {% else %}
-        {% set badge = "bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700" %}
-      {% endif %}
-      <span class="rounded-xl border px-3.5 py-1.5 font-extrabold text-lg tracking-tight {{ badge }} shadow-xs">
-        {{ sig }}
-      </span>
-      <span class="text-xs text-slate-400 dark:text-gray-500 font-medium">Confidence: <strong class="text-slate-700 dark:text-gray-300">{{ valuation.confidence | capitalize }}</strong></span>
-      {% if signal_change %}
-      <span class="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/80 rounded-xl px-3 py-1 font-medium">
-        Signal changed from {{ signal_change.previous_signal }} to {{ signal_change.current_signal }} since {{ signal_change.previous_date }}
-      </span>
-      {% endif %}
-    </div>
-
-    <!-- Price Target & Implied Upside -->
-    <div class="flex items-baseline gap-8 flex-wrap pt-2 border-t border-slate-100 dark:border-gray-800/60">
-      <div>
-        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Current Price</div>
-        <div class="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.current_price) }}</div>
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- 1. THE DECISION CARD (UNIFIED VALUATION + FUNDAMENTAL SCORE)                -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+{% if valuation or ai_analysis %}
+<div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-5 sm:p-6 mb-7 space-y-6" x-data="{ showRationale: false }">
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- Left: Valuation Signal & Price Target -->
+    {% if valuation %}
+    <div class="{{ 'lg:col-span-6 lg:border-r lg:border-slate-100 lg:dark:border-gray-800/80 lg:pr-6' if ai_analysis else 'lg:col-span-12' }} space-y-4">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div class="flex items-center gap-2.5">
+          {% set sig = valuation.signal %}
+          {% if sig == "Strong Buy" %}
+            {% set badge = "bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800" %}
+          {% elif sig == "Buy" %}
+            {% set badge = "bg-green-50 dark:bg-green-950/50 text-green-700 dark:text-green-300 border-green-300 dark:border-green-800" %}
+          {% elif sig == "Hold" %}
+            {% set badge = "bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800" %}
+          {% elif sig in ["Sell", "Strong Sell"] %}
+            {% set badge = "bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800" %}
+          {% else %}
+            {% set badge = "bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700" %}
+          {% endif %}
+          <span class="rounded-xl border px-3 py-1 font-extrabold text-base tracking-tight {{ badge }}">{{ sig }}</span>
+          <span class="text-xs text-slate-400 dark:text-gray-500">Confidence: <strong class="text-slate-700 dark:text-gray-300">{{ valuation.confidence | capitalize }}</strong></span>
+        </div>
+        {% if signal_change %}
+          <span class="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 rounded-lg px-2 py-0.5 font-medium">
+            {{ signal_change.previous_signal }} → {{ signal_change.current_signal }} ({{ signal_change.previous_date }})
+          </span>
+        {% endif %}
       </div>
-      <div class="text-slate-300 dark:text-gray-700 text-2xl font-light">→</div>
-      <div>
-        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Model Target</div>
-        <div class="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.target_price) }}</div>
+
+      <!-- Price → Target → Upside -->
+      <div class="flex items-baseline gap-6 flex-wrap">
+        <div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Current</div>
+          <div class="text-xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.current_price) }}</div>
+        </div>
+        <span class="text-slate-300 dark:text-gray-700 text-lg">→</span>
+        <div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Model Target</div>
+          <div class="text-xl font-extrabold text-slate-900 dark:text-white tabular-nums">{{ fmt_price(valuation.target_price) }}</div>
+        </div>
+        {% if valuation.upside_pct is not none %}
+        <div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Implied Upside</div>
+          <div class="text-xl font-extrabold tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if valuation.upside_pct >= 0 else 'text-rose-600 dark:text-rose-400' }}">
+            {{ "%+.1f"|format(valuation.upside_pct) }}%
+          </div>
+        </div>
+        {% endif %}
       </div>
-      {% if valuation.upside_pct is not none %}
-      <div>
-        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Implied Upside</div>
-        <div class="text-2xl font-extrabold tabular-nums {% if valuation.upside_pct >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
-          {{ "%+.1f"|format(valuation.upside_pct) }}%
+
+      <!-- Clean Valuation Spectrum Bar -->
+      <div class="space-y-1.5 pt-1">
+        <div class="relative pt-1.5 pb-0.5">
+          <div class="h-2 w-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500"></div>
+          {% set upside = valuation.upside_pct or 0 %}
+          {% set pointer_pos = (50 + (upside * 1.33)) %}
+          {% if pointer_pos < 6 %}{% set pointer_pos = 6 %}{% elif pointer_pos > 94 %}{% set pointer_pos = 94 %}{% endif %}
+          <div class="absolute top-0 -translate-x-1/2 flex flex-col items-center pointer-events-none" style="left: {{ "%.1f"|format(pointer_pos) }}%;">
+            <div class="w-3.5 h-3.5 rounded-full bg-white dark:bg-gray-950 border-2 border-indigo-600 dark:border-indigo-400 shadow-sm"></div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-[10px] text-slate-400 dark:text-gray-500 font-medium">
+          <span>Overvalued</span>
+          <span>Fair Value</span>
+          <span>Undervalued</span>
         </div>
       </div>
-      {% endif %}
-    </div>
 
-    <!-- Interactive Continuous Visual Valuation Spectrum & Methodology Accordion -->
-    <div class="space-y-3 pt-2" x-data="{ openExplainer: false }">
-      <div class="flex items-center justify-between text-xs text-slate-500 dark:text-gray-400">
-        <span class="font-semibold text-[11px] uppercase tracking-wider text-slate-400 dark:text-gray-500">Valuation Spectrum Meter</span>
-        <button type="button" @click="openExplainer = !openExplainer"
-                class="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer text-xs">
-          <span>Methodology Breakdown</span>
-          <span x-text="openExplainer ? '▲' : '▼'">▼</span>
+      <!-- Collapsible Model Rationale -->
+      <div>
+        <button type="button" @click="showRationale = !showRationale"
+                class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 cursor-pointer">
+          <span x-text="showRationale ? 'Hide model rationale' : 'Why this target?'">Why this target?</span>
+          <span class="text-[10px]" x-text="showRationale ? '▲' : '▼'">▼</span>
         </button>
-      </div>
-
-      <!-- Continuous Spectrum Bar with Pointer -->
-      <div class="relative pt-2 pb-1">
-        <div class="h-3 w-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500 shadow-inner"></div>
-        <!-- Pointer Needle -->
-        {% set upside = valuation.upside_pct or 0 %}
-        {# Normalize upside % into 0-100% position on the visual gradient: -30% => 10%, 0% => 50%, +30% => 90% #}
-        {% set pointer_pos = (50 + (upside * 1.33)) %}
-        {% if pointer_pos < 6 %}{% set pointer_pos = 6 %}{% elif pointer_pos > 94 %}{% set pointer_pos = 94 %}{% endif %}
-        <div class="absolute top-0 -translate-x-1/2 flex flex-col items-center pointer-events-none transition-all duration-300" style="left: {{ "%.1f"|format(pointer_pos) }}%;">
-          <div class="relative flex items-center justify-center">
-            <span class="absolute w-4 h-4 rounded-full bg-indigo-500/25 animate-ping"></span>
-            <div class="relative w-3.5 h-3.5 rounded-full bg-white dark:bg-gray-950 border-2 border-indigo-600 dark:border-indigo-400 shadow-md"></div>
-          </div>
-          <div class="w-0.5 h-3 bg-indigo-600 dark:bg-indigo-400"></div>
+        <div x-show="showRationale" x-cloak class="mt-3 p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 border border-slate-200/70 dark:border-gray-800 text-xs text-slate-600 dark:text-gray-300 space-y-2">
+          <ul class="space-y-1">
+            {% for point in valuation.reasoning %}
+            <li class="flex items-start gap-2">
+              <span class="text-indigo-500 font-bold">•</span>
+              <span>{{ point }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% if valuation.fcf_note %}
+          <p class="pt-1 border-t border-slate-200/60 dark:border-gray-700/60 text-slate-500 dark:text-gray-400">{{ valuation.fcf_note }}</p>
+          {% endif %}
+          <p class="text-[11px] text-slate-400 dark:text-gray-500">Method: {{ valuation.method | upper }} · SEC EDGAR fundamentals. Not investment advice.</p>
         </div>
-      </div>
-      <div class="flex items-center justify-between text-[10px] text-slate-400 dark:text-gray-500 uppercase tracking-wider font-semibold">
-        <span>Overvalued (&lt;-20%)</span>
-        <span>Fair Value (-5% to +10%)</span>
-        <span>Undervalued (&gt;+20%)</span>
-      </div>
-
-      <!-- Methodology Explainer Accordion -->
-      <div x-show="openExplainer" x-cloak class="mt-3 p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 space-y-2.5 animate-in fade-in">
-        <div class="font-bold text-slate-900 dark:text-white">Valuation Engine Architecture:</div>
-        <p class="leading-relaxed text-slate-600 dark:text-gray-300">
-          The model evaluates historical compound growth rates across SEC EDGAR filings to estimate a fair Price/Earnings multiple, comparing it against the current market quote:
-        </p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[11px] py-1">
-          <div class="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700">
-            <span class="text-slate-400 dark:text-gray-500">Methodology:</span> {{ valuation.method | upper }}
-          </div>
-          <div class="p-2.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700">
-            <span class="text-slate-400 dark:text-gray-500">Confidence Tier:</span> {{ valuation.confidence | capitalize }}
-          </div>
-        </div>
-        <p class="text-[11px] text-slate-500 dark:text-gray-400">
-          Growth rates are clamped within conservative historical guardrails, and valuation signals are cross-checked against trailing Free Cash Flow yields.
-        </p>
       </div>
     </div>
+    {% endif %}
 
-    <!-- Reasoning Points -->
-    <div class="pt-2">
-      <div class="text-xs font-semibold text-slate-500 dark:text-gray-400 mb-2">Model Rationale:</div>
-      <ul class="text-sm text-slate-700 dark:text-gray-300 space-y-1.5 pl-1">
-        {% for point in valuation.reasoning %}
-        <li class="flex items-start gap-2">
-          <span class="text-indigo-500 shrink-0 font-bold">•</span>
-          <span>{{ point }}</span>
+    <!-- Right: Fundamental Score & Executive Summary -->
+    {% if ai_analysis %}
+    <div class="{{ 'lg:col-span-6' if valuation else 'lg:col-span-12' }} space-y-4">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">Fundamental Health</span>
+          <span class="rounded-md bg-slate-100 dark:bg-gray-800 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:text-gray-300">{{ ai_analysis.cap_tier }}</span>
+        </div>
+        <div class="flex items-baseline gap-1.5">
+          <span class="font-mono font-extrabold text-xl text-slate-900 dark:text-white tabular-nums">{{ ai_analysis.composite_score }}</span>
+          <span class="text-xs text-slate-400 dark:text-gray-500 font-mono">/ 100</span>
+        </div>
+      </div>
+
+      <!-- 4 Compact Factor Scores -->
+      <div class="grid grid-cols-4 gap-2">
+        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 text-center">
+          <div class="text-[10px] font-semibold uppercase text-slate-400 dark:text-gray-500">Growth</div>
+          <div class="text-sm font-bold font-mono text-slate-900 dark:text-white tabular-nums mt-0.5">{{ ai_analysis.growth_score }}%</div>
+        </div>
+        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 text-center">
+          <div class="text-[10px] font-semibold uppercase text-slate-400 dark:text-gray-500">Margins</div>
+          <div class="text-sm font-bold font-mono text-slate-900 dark:text-white tabular-nums mt-0.5">{{ ai_analysis.profitability_score }}%</div>
+        </div>
+        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 text-center">
+          <div class="text-[10px] font-semibold uppercase text-slate-400 dark:text-gray-500">Solvency</div>
+          <div class="text-sm font-bold font-mono text-slate-900 dark:text-white tabular-nums mt-0.5">{{ ai_analysis.solvency_score }}%</div>
+        </div>
+        <div class="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/50 text-center">
+          <div class="text-[10px] font-semibold uppercase text-slate-400 dark:text-gray-500">Value</div>
+          <div class="text-sm font-bold font-mono text-slate-900 dark:text-white tabular-nums mt-0.5">{{ ai_analysis.valuation_score }}%</div>
+        </div>
+      </div>
+
+      <!-- Executive Synthesis -->
+      <p class="text-xs text-slate-600 dark:text-gray-300 leading-relaxed">
+        {{ ai_analysis.executive_summary }}
+      </p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Concise Bull vs Risks Columns -->
+  {% if ai_analysis and (ai_analysis.theses or ai_analysis.risks) %}
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-5 pt-5 border-t border-slate-100 dark:border-gray-800/80">
+    {% if ai_analysis.theses %}
+    <div class="space-y-2">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Strengths &amp; Theses</div>
+      <ul class="text-xs text-slate-600 dark:text-gray-300 space-y-1.5">
+        {% for t in ai_analysis.theses %}
+        <li class="flex items-start gap-2 leading-relaxed">
+          <span class="text-emerald-500 font-bold shrink-0">+</span>
+          <span>{{ t }}</span>
         </li>
         {% endfor %}
       </ul>
     </div>
-
-    {% if valuation.fcf_note %}
-    <p class="text-xs text-slate-500 dark:text-gray-400 bg-slate-50 dark:bg-gray-800/50 rounded-xl p-3 border border-slate-100 dark:border-gray-800">
-      🔍 {{ valuation.fcf_note }}
-    </p>
     {% endif %}
-    <p class="text-[11px] text-slate-400 dark:text-gray-500 italic">
-      Fundamental model estimate based on SEC EDGAR filings and financial metrics. Not investment advice.
-    </p>
+
+    {% if ai_analysis.risks %}
+    <div class="space-y-2">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Key Risks</div>
+      <ul class="text-xs text-slate-600 dark:text-gray-300 space-y-1.5">
+        {% for r in ai_analysis.risks %}
+        <li class="flex items-start gap-2 leading-relaxed">
+          <span class="text-amber-500 font-bold shrink-0">!</span>
+          <span>{{ r }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- 2. KEY FINANCIALS (UNIFIED 4-CARD ROW WITH LATEST QUARTER / TTM TOGGLE)     -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="mb-7" x-data="{ periodTab: 'latest' }">
+  <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+    <div class="flex items-baseline gap-2">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">Key Financials</h2>
+      <span x-show="periodTab === 'latest'" class="text-xs text-slate-400 dark:text-gray-500 font-mono">
+        {{ overview.latest_label }} (ended {{ overview.latest_period_end }})
+      </span>
+      <span x-show="periodTab === 'ttm'" x-cloak class="text-xs text-slate-400 dark:text-gray-500 font-mono">
+        Trailing 12 Months{% if overview.ttm_quarters < 4 %} ({{ overview.ttm_quarters }} of 4 quarters partial){% endif %}
+      </span>
+    </div>
+
+    <div class="inline-flex rounded-xl p-0.5 bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-xs">
+      <button type="button" @click="periodTab = 'latest'"
+              :class="periodTab === 'latest' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-2xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+              class="px-3 py-1 rounded-lg transition cursor-pointer">Latest Quarter</button>
+      <button type="button" @click="periodTab = 'ttm'"
+              :class="periodTab === 'ttm' ? 'bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-2xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-800 dark:hover:text-gray-200'"
+              class="px-3 py-1 rounded-lg transition cursor-pointer">TTM</button>
+    </div>
+  </div>
+
+  <!-- Latest Quarter Grid -->
+  <div x-show="periodTab === 'latest'" class="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+    {{ kpi_card("Revenue", fmt_large(overview.latest_kpi.revenue), overview.yoy.revenue) }}
+    {{ kpi_card("Net Income", fmt_large(overview.latest_kpi.net_income), overview.yoy.net_income) }}
+    {{ kpi_card("EPS (diluted)", fmt_eps(overview.latest_kpi.eps_diluted), overview.yoy.eps_diluted) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(overview.latest_kpi.free_cash_flow), overview.yoy.free_cash_flow) }}
+  </div>
+
+  <!-- TTM Grid -->
+  <div x-show="periodTab === 'ttm'" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+    {{ kpi_card("Revenue", fmt_large(overview.ttm_kpi.revenue), none) }}
+    {{ kpi_card("Net Income", fmt_large(overview.ttm_kpi.net_income), none) }}
+    {{ kpi_card("EPS (diluted)", fmt_eps(overview.ttm_kpi.eps_diluted), none) }}
+    {{ kpi_card("Free Cash Flow", fmt_large(overview.ttm_kpi.free_cash_flow), none) }}
   </div>
 </div>
 
-<!-- Interactive Valuation Sensitivity & Intrinsic DCF Suite -->
-<div class="mb-10" x-data="{
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- 3. INTERACTIVE VALUATION SENSITIVITY & DCF SUITE (COLLAPSIBLE DRAWER)       -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+{% if valuation %}
+<div class="mb-7 rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] overflow-hidden" x-data="{
+  suiteOpen: false,
   activeSuiteTab: 'simulator',
   currPrice: {{ valuation.current_price or 0 }},
   baseTarget: {{ valuation.target_price or 0 }},
@@ -431,223 +411,167 @@
     if (window.triggerHaptic) window.triggerHaptic('medium');
   }
 }">
-  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div class="flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
-      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 font-mono">
+  <!-- Collapsible Drawer Header -->
+  <button type="button" @click="suiteOpen = !suiteOpen" :aria-expanded="suiteOpen"
+          class="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50/70 dark:hover:bg-gray-800/40 transition cursor-pointer">
+    <div class="flex items-center gap-3 flex-wrap">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-gray-200">
         Valuation Sensitivity & Intrinsic DCF Suite
       </h2>
+      {% if dcf and dcf.is_applicable %}
+        <span class="text-xs font-mono text-slate-500 dark:text-gray-400">
+          DCF Fair Value: <strong class="text-indigo-600 dark:text-indigo-400">{{ fmt_price(dcf.fair_value_per_share) }}</strong>
+          <span class="{{ 'text-emerald-600 dark:text-emerald-400' if dcf.upside_pct >= 0 else 'text-rose-600 dark:text-rose-400' }}">({{ "%+.1f"|format(dcf.upside_pct) }}%)</span>
+        </span>
+      {% endif %}
     </div>
+    <div class="flex items-center gap-2 shrink-0 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+      <span x-text="suiteOpen ? 'Hide' : 'Simulate &amp; DCF'">Simulate &amp; DCF</span>
+      <svg class="w-4 h-4 transition-transform duration-200" :class="suiteOpen && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+      </svg>
+    </div>
+  </button>
 
+  <!-- Expandable Suite Body -->
+  <div x-show="suiteOpen" x-cloak class="px-5 pb-6 pt-4 border-t border-slate-100 dark:border-gray-800/80 space-y-5">
     <!-- Segmented Tab Switcher -->
-    <div class="inline-flex rounded-xl p-1 bg-slate-100 dark:bg-gray-800/80 border border-slate-200/80 dark:border-white/[0.08] text-xs">
-      <button type="button" @click="activeSuiteTab = 'simulator'"
-              :class="activeSuiteTab === 'simulator' ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs' : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white font-medium'"
-              class="px-3 py-1 rounded-lg transition flex items-center gap-1.5 cursor-pointer">
-        <span>🎛️</span>
-        <span>What-If Simulator</span>
-      </button>
-      <button type="button" @click="activeSuiteTab = 'dcf'"
-              :class="activeSuiteTab === 'dcf' ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 font-bold shadow-xs' : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white font-medium'"
-              class="px-3 py-1 rounded-lg transition flex items-center gap-1.5 cursor-pointer">
-        <span>▦</span>
-        <span>5-Year DCF Matrix</span>
-      </button>
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div class="inline-flex rounded-xl p-0.5 bg-slate-100 dark:bg-gray-800 border border-slate-200/80 dark:border-white/[0.08] text-xs">
+        <button type="button" @click="activeSuiteTab = 'simulator'"
+                :class="activeSuiteTab === 'simulator' ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 font-semibold shadow-2xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'"
+                class="px-3 py-1 rounded-lg transition cursor-pointer">What-If Simulator</button>
+        <button type="button" @click="activeSuiteTab = 'dcf'"
+                :class="activeSuiteTab === 'dcf' ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 font-semibold shadow-2xs' : 'text-slate-500 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'"
+                class="px-3 py-1 rounded-lg transition cursor-pointer">5-Year DCF Matrix</button>
+      </div>
+
+      <div x-show="activeSuiteTab === 'simulator'" class="flex items-center gap-1.5">
+        <button type="button" @click="applyBear()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-gray-800 hover:text-rose-600 text-slate-600 dark:text-gray-300 transition cursor-pointer">Bear</button>
+        <button type="button" @click="applyBase()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 transition cursor-pointer">Base</button>
+        <button type="button" @click="applyBull()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-gray-800 hover:text-emerald-600 text-slate-600 dark:text-gray-300 transition cursor-pointer">Bull</button>
+      </div>
     </div>
-  </div>
 
-  <div class="rounded-3xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-6 sm:p-7 shadow-xs max-w-4xl space-y-6">
     <!-- TAB 1: WHAT-IF SENSITIVITY SIMULATOR -->
-    <div x-show="activeSuiteTab === 'simulator'" class="space-y-6">
-      <!-- Scenario KPI Header -->
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-2xl bg-slate-50/80 dark:bg-gray-800/40 border border-slate-200/60 dark:border-white/[0.06]">
+    <div x-show="activeSuiteTab === 'simulator'" class="space-y-5">
+      <div class="grid grid-cols-3 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-gray-800/40">
         <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Scenario Target Price</div>
-          <div class="text-2xl font-extrabold text-slate-900 dark:text-white font-mono tabular-nums" x-text="'$' + simTarget.toFixed(2)"></div>
-          <div class="text-[11px] text-slate-400 dark:text-gray-500 mt-0.5">
-            1Y Discounted PV: <span class="font-mono font-medium text-slate-700 dark:text-gray-300" x-text="'$' + simPvTarget.toFixed(2)"></span>
-          </div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Target Price</div>
+          <div class="text-xl font-extrabold text-slate-900 dark:text-white font-mono tabular-nums" x-text="'$' + simTarget.toFixed(2)"></div>
+          <div class="text-[11px] text-slate-400 dark:text-gray-500">PV: <span class="font-mono" x-text="'$' + simPvTarget.toFixed(2)"></span></div>
         </div>
         <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Implied Upside</div>
-          <div class="text-2xl font-extrabold font-mono tabular-nums" :class="upside >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'" x-text="(upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'"></div>
-          <div class="text-[11px] text-slate-400 dark:text-gray-500 mt-0.5">
-            vs Market Quote: <span class="font-mono font-medium text-slate-700 dark:text-gray-300" x-text="'$' + currPrice.toFixed(2)"></span>
-          </div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Upside</div>
+          <div class="text-xl font-extrabold font-mono tabular-nums" :class="upside >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'" x-text="(upside >= 0 ? '+' : '') + upside.toFixed(1) + '%'"></div>
         </div>
         <div>
-          <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Scenario Signal</div>
-          <div class="mt-1">
-            <span class="inline-block px-3 py-1 rounded-xl text-sm font-extrabold border shadow-xs" :class="signalClass" x-text="signal"></span>
-          </div>
+          <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Signal</div>
+          <span class="inline-block mt-1 px-2.5 py-0.5 rounded-lg text-xs font-extrabold border" :class="signalClass" x-text="signal"></span>
         </div>
       </div>
 
-      <!-- Quick Scenario Presets -->
-      <div class="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-slate-100 dark:border-gray-800/60">
-        <span class="text-xs font-semibold text-slate-500 dark:text-gray-400">Scenario Presets:</span>
-        <div class="flex items-center gap-2">
-          <button type="button" @click="applyBear()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-gray-800 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 text-slate-600 dark:text-gray-300 transition border border-transparent hover:border-rose-200 dark:hover:border-rose-800 cursor-pointer">
-            🐻 Bear Case
-          </button>
-          <button type="button" @click="applyBase()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 transition cursor-pointer">
-            ⚖️ Base Model
-          </button>
-          <button type="button" @click="applyBull()" class="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-gray-800 hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-950/40 text-slate-600 dark:text-gray-300 transition border border-transparent hover:border-emerald-200 dark:hover:border-emerald-800 cursor-pointer">
-            🐂 Bull Case
-          </button>
-          <button type="button" @click="applyBase()" title="Reset to Model Baseline" class="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-gray-300 transition cursor-pointer">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-          </button>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <label class="font-medium text-slate-600 dark:text-gray-300">Forward 12M Growth Rate</label>
+            <span class="font-mono font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="(growth >= 0 ? '+' : '') + growth.toFixed(1) + '%'"></span>
+          </div>
+          <input type="range" min="-20" max="50" step="0.5" x-model.number="growth">
         </div>
-      </div>
-
-      <!-- Sliders Grid -->
-      <div class="space-y-4 pt-1">
-        <!-- Slider 1: Growth Rate -->
-        <div class="p-4 rounded-xl bg-slate-50/50 dark:bg-gray-800/30 border border-slate-200/60 dark:border-white/[0.05]">
-          <div class="flex justify-between items-center mb-1.5">
-            <label class="text-xs font-semibold text-slate-700 dark:text-gray-300">
-              Forward 12M Growth Rate (<span x-text="method === 'sales' ? 'Revenue' : 'EPS'"></span>)
-            </label>
-            <span class="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="(growth >= 0 ? '+' : '') + growth.toFixed(1) + '%'"></span>
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <label class="font-medium text-slate-600 dark:text-gray-300">Target Exit Multiple</label>
+            <span class="font-mono font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="mult.toFixed(1) + '×'"></span>
           </div>
-          <input type="range" min="-20" max="50" step="0.5" x-model.number="growth" class="w-full h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 dark:accent-indigo-400">
-          <div class="flex justify-between text-[10px] text-slate-400 dark:text-gray-500 font-mono mt-1">
-            <span>-20% (Contraction)</span>
-            <span>Model Base: {{ "%.1f"|format(valuation.growth_pct or 10.0) }}%</span>
-            <span>+50% (Hypergrowth)</span>
-          </div>
+          <input type="range" :min="method === 'sales' ? 0.5 : 5" :max="method === 'sales' ? 15 : 60" step="0.5" x-model.number="mult">
         </div>
-
-        <!-- Slider 2: Target Exit Multiple -->
-        <div class="p-4 rounded-xl bg-slate-50/50 dark:bg-gray-800/30 border border-slate-200/60 dark:border-white/[0.05]">
-          <div class="flex justify-between items-center mb-1.5">
-            <label class="text-xs font-semibold text-slate-700 dark:text-gray-300">
-              Target Exit Multiple (<span x-text="method === 'sales' ? 'P/S Multiple' : 'P/E Multiple'"></span>)
-            </label>
-            <span class="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="mult.toFixed(1) + '×'"></span>
+        <div class="space-y-1.5">
+          <div class="flex justify-between text-xs">
+            <label class="font-medium text-slate-600 dark:text-gray-300">Annual Hurdle / Discount Rate</label>
+            <span class="font-mono font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="discount.toFixed(1) + '%'"></span>
           </div>
-          <input type="range" :min="method === 'sales' ? 0.5 : 5" :max="method === 'sales' ? 15 : 60" step="0.5" x-model.number="mult" class="w-full h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 dark:accent-indigo-400">
-          <div class="flex justify-between text-[10px] text-slate-400 dark:text-gray-500 font-mono mt-1">
-            <span x-text="method === 'sales' ? '0.5×' : '5.0× (Deep Value)'"></span>
-            <span>Model Base: {{ "%.1f"|format(valuation.fair_multiple or 20.0) }}×</span>
-            <span x-text="method === 'sales' ? '15.0×' : '60.0× (Euphoria)'"></span>
-          </div>
-        </div>
-
-        <!-- Slider 3: Discount Rate -->
-        <div class="p-4 rounded-xl bg-slate-50/50 dark:bg-gray-800/30 border border-slate-200/60 dark:border-white/[0.05]">
-          <div class="flex justify-between items-center mb-1.5">
-            <label class="text-xs font-semibold text-slate-700 dark:text-gray-300">
-              Annual Hurdle / Discount Rate
-            </label>
-            <span class="font-mono text-sm font-bold text-indigo-600 dark:text-indigo-400 tabular-nums" x-text="discount.toFixed(1) + '%'"></span>
-          </div>
-          <input type="range" min="5" max="15" step="0.25" x-model.number="discount" class="w-full h-1.5 bg-slate-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-indigo-600 dark:accent-indigo-400">
-          <div class="flex justify-between text-[10px] text-slate-400 dark:text-gray-500 font-mono mt-1">
-            <span>5.0% (Accommodative)</span>
-            <span>Benchmark WACC: 9.0%</span>
-            <span>15.0% (High Hurdle)</span>
-          </div>
+          <input type="range" min="5" max="15" step="0.25" x-model.number="discount">
         </div>
       </div>
     </div>
 
     <!-- TAB 2: 5-YEAR DCF SENSITIVITY MATRIX -->
-    <div x-show="activeSuiteTab === 'dcf'" class="space-y-6">
+    <div x-show="activeSuiteTab === 'dcf'" class="space-y-5">
       {% if dcf and dcf.is_applicable %}
-        <!-- Summary Header Cards -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-2xl bg-slate-50/80 dark:bg-gray-800/40 border border-slate-200/60 dark:border-white/[0.06]">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/40 text-xs">
           <div>
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Trailing FCF</div>
-            <div class="text-lg font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ fmt_large(dcf.base_fcf) }}</div>
+            <div class="text-[10px] uppercase text-slate-400">Trailing FCF</div>
+            <div class="text-base font-bold font-mono text-slate-900 dark:text-white">{{ fmt_large(dcf.base_fcf) }}</div>
           </div>
           <div>
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Base Growth (Y1)</div>
-            <div class="text-lg font-bold text-slate-900 dark:text-white font-mono tabular-nums">+{{ dcf.base_growth_rate_pct }}%</div>
+            <div class="text-[10px] uppercase text-slate-400">Base Growth (Y1)</div>
+            <div class="text-base font-bold font-mono text-slate-900 dark:text-white">+{{ dcf.base_growth_rate_pct }}%</div>
           </div>
           <div>
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">DCF Fair Value</div>
-            <div class="text-lg font-extrabold text-indigo-600 dark:text-indigo-400 font-mono tabular-nums">{{ fmt_price(dcf.fair_value_per_share) }}</div>
+            <div class="text-[10px] uppercase text-slate-400">DCF Fair Value</div>
+            <div class="text-base font-extrabold font-mono text-indigo-600 dark:text-indigo-400">{{ fmt_price(dcf.fair_value_per_share) }}</div>
           </div>
           <div>
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">DCF Implied Upside</div>
-            <div class="text-lg font-extrabold font-mono tabular-nums {% if dcf.upside_pct >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">
-              {{ "%+.1f"|format(dcf.upside_pct) }}%
-            </div>
+            <div class="text-[10px] uppercase text-slate-400">DCF Upside</div>
+            <div class="text-base font-extrabold font-mono {{ 'text-emerald-600 dark:text-emerald-400' if dcf.upside_pct >= 0 else 'text-rose-600 dark:text-rose-400' }}">{{ "%+.1f"|format(dcf.upside_pct) }}%</div>
           </div>
         </div>
 
-        <!-- 5-Year Projected Cash Flow Schedule -->
+        <!-- 5-Year Projections -->
         <div class="space-y-2">
-          <div class="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-gray-300">
-            <span class="flex items-center gap-1.5">
-              <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-              <span>5-Year Free Cash Flow Projections (with Growth Decay)</span>
-            </span>
-            <span class="text-[11px] text-slate-400 dark:text-gray-500 font-mono">WACC: {{ dcf.base_discount_rate_pct }}% · Term Growth: {{ dcf.base_terminal_growth_pct }}%</span>
-          </div>
-
+          <div class="text-xs font-semibold text-slate-600 dark:text-gray-300">5-Year Free Cash Flow Projections</div>
           <div class="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-white/[0.08]">
             <table class="w-full text-xs text-left">
               <thead class="bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-b border-slate-200/80 dark:border-white/[0.08]">
                 <tr>
-                  <th class="py-2 px-3 font-semibold">Projection Horizon</th>
+                  <th class="py-2 px-3 font-semibold">Metric</th>
                   {% for p in dcf.projections %}
-                    <th class="py-2 px-3 text-right font-mono font-semibold">Year {{ p.year }}</th>
+                    <th class="py-2 px-3 text-right font-mono font-semibold">Y{{ p.year }}</th>
                   {% endfor %}
-                  <th class="py-2 px-3 text-right font-semibold">Terminal Value</th>
+                  <th class="py-2 px-3 text-right font-semibold">Terminal</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100 dark:divide-gray-800/60 font-mono text-slate-700 dark:text-gray-300">
                 <tr>
-                  <td class="py-2 px-3 font-sans text-slate-500 dark:text-gray-400">Assumed Growth</td>
+                  <td class="py-2 px-3 font-sans text-slate-500">Growth</td>
                   {% for p in dcf.projections %}
-                    <td class="py-2 px-3 text-right text-indigo-600 dark:text-indigo-400 font-medium">+{{ p.growth_rate_pct }}%</td>
+                    <td class="py-2 px-3 text-right text-indigo-600 dark:text-indigo-400">+{{ p.growth_rate_pct }}%</td>
                   {% endfor %}
-                  <td class="py-2 px-3 text-right text-slate-400 dark:text-gray-500">{{ dcf.base_terminal_growth_pct }}% perp.</td>
+                  <td class="py-2 px-3 text-right text-slate-400">{{ dcf.base_terminal_growth_pct }}%</td>
                 </tr>
                 <tr>
-                  <td class="py-2 px-3 font-sans text-slate-500 dark:text-gray-400">Projected FCF</td>
+                  <td class="py-2 px-3 font-sans text-slate-500">Projected FCF</td>
                   {% for p in dcf.projections %}
                     <td class="py-2 px-3 text-right font-semibold">{{ fmt_large(p.projected_fcf) }}</td>
                   {% endfor %}
-                  <td class="py-2 px-3 text-right font-semibold text-slate-500 dark:text-gray-400">{{ fmt_large(dcf.pv_terminal_value) }} (PV)</td>
+                  <td class="py-2 px-3 text-right text-slate-500">{{ fmt_large(dcf.pv_terminal_value) }} PV</td>
                 </tr>
                 <tr class="bg-slate-50/40 dark:bg-gray-800/20 font-semibold">
-                  <td class="py-2 px-3 font-sans text-slate-600 dark:text-gray-300">Present Value (PV)</td>
+                  <td class="py-2 px-3 font-sans text-slate-600 dark:text-gray-300">Present Value</td>
                   {% for p in dcf.projections %}
                     <td class="py-2 px-3 text-right">{{ fmt_large(p.pv_fcf) }}</td>
                   {% endfor %}
-                  <td class="py-2 px-3 text-right text-indigo-600 dark:text-indigo-400">{{ fmt_large(dcf.enterprise_value) }} (EV)</td>
+                  <td class="py-2 px-3 text-right text-indigo-600 dark:text-indigo-400">{{ fmt_large(dcf.enterprise_value) }} EV</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
 
-        <!-- 5x5 Sensitivity Matrix Heatmap -->
-        <div class="space-y-2 pt-2">
-          <div class="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-gray-300">
-            <span class="flex items-center gap-1.5">
-              <svg class="w-3.5 h-3.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
-              <span>5×5 Sensitivity Matrix: Fair Value / Share & Upside %</span>
-            </span>
-            <span class="text-[11px] text-slate-400 dark:text-gray-500 font-mono">Rows: Discount Rate · Cols: Terminal Growth</span>
+        <!-- 5x5 Sensitivity Matrix -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-semibold text-slate-600 dark:text-gray-300">5×5 Sensitivity Matrix</span>
+            <span class="text-[11px] text-slate-400 font-mono">Rows: WACC · Cols: Terminal g</span>
           </div>
-
-          <div class="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-white/[0.08] p-3 bg-slate-50/30 dark:bg-gray-800/20">
-            <table class="w-full text-xs text-center border-separate border-spacing-1.5">
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs text-center border-separate border-spacing-1">
               <thead>
                 <tr>
-                  <th class="p-2 text-left font-mono text-[10px] text-slate-400 dark:text-gray-500 uppercase tracking-wider">
-                    WACC \ g<sub>term</sub>
-                  </th>
+                  <th class="p-1.5 text-left font-mono text-[10px] text-slate-400">WACC \ g</th>
                   {% for gt in dcf.terminal_growth_rates %}
-                    <th class="p-2 font-mono text-[11px] font-bold text-slate-600 dark:text-gray-300">
-                      {{ gt }}%
-                    </th>
+                    <th class="p-1.5 font-mono text-[11px] font-bold text-slate-500 dark:text-gray-400">{{ gt }}%</th>
                   {% endfor %}
                 </tr>
               </thead>
@@ -655,33 +579,26 @@
                 {% for row in dcf.matrix %}
                   {% set r_val = dcf.discount_rates[loop.index0] %}
                   <tr>
-                    <td class="p-2 text-left font-mono font-bold text-[11px] text-slate-600 dark:text-gray-300">
-                      {{ r_val }}%
-                    </td>
+                    <td class="p-1.5 text-left font-mono font-bold text-[11px] text-slate-500 dark:text-gray-400">{{ r_val }}%</td>
                     {% for cell in row %}
                       {% set is_base = cell.is_base_case %}
                       {% set u = cell.upside_pct or 0 %}
                       {% if is_base %}
-                        {% set cell_style = "ring-2 ring-indigo-500 dark:ring-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 font-black border-indigo-300 dark:border-indigo-700 shadow-sm" %}
+                        {% set cell_style = "ring-2 ring-indigo-500 bg-indigo-50 dark:bg-indigo-950/60 font-bold" %}
                       {% elif u >= 20 %}
-                        {% set cell_style = "bg-emerald-100/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200/60 dark:border-emerald-800/40" %}
+                        {% set cell_style = "bg-emerald-100/70 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300" %}
                       {% elif u >= 5 %}
-                        {% set cell_style = "bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30" %}
+                        {% set cell_style = "bg-emerald-50/60 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400" %}
                       {% elif u >= -5 %}
-                        {% set cell_style = "bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 border-amber-100 dark:border-amber-900/30" %}
+                        {% set cell_style = "bg-amber-50/60 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400" %}
                       {% elif u >= -20 %}
-                        {% set cell_style = "bg-rose-50/60 dark:bg-rose-950/20 text-rose-700 dark:text-rose-400 border-rose-100 dark:border-rose-900/30" %}
+                        {% set cell_style = "bg-rose-50/60 dark:bg-rose-950/20 text-rose-700 dark:text-rose-400" %}
                       {% else %}
-                        {% set cell_style = "bg-rose-100/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border-rose-200/60 dark:border-rose-800/40" %}
+                        {% set cell_style = "bg-rose-100/70 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300" %}
                       {% endif %}
-                      <td class="p-2.5 rounded-xl border font-mono transition-all duration-200 relative group hover:scale-105 hover:z-10 shadow-2xs hover:shadow-md cursor-default {{ cell_style }}">
-                        {% if is_base %}
-                          <span class="absolute -top-1.5 -right-1 text-[9px] uppercase tracking-wider font-extrabold bg-indigo-600 text-white px-1 rounded-sm shadow-xs">Base</span>
-                        {% endif %}
-                        <div class="text-[12px] font-bold tabular-nums">${{ "%.2f"|format(cell.fair_value_per_share) }}</div>
-                        <div class="text-[10px] tabular-nums font-semibold mt-0.5 opacity-90">
-                          {{ "%+.1f"|format(u) }}%
-                        </div>
+                      <td class="p-2 rounded-lg font-mono {{ cell_style }}">
+                        <div class="text-[11px] font-bold tabular-nums">${{ "%.2f"|format(cell.fair_value_per_share) }}</div>
+                        <div class="text-[10px] tabular-nums opacity-85">{{ "%+.1f"|format(u) }}%</div>
                       </td>
                     {% endfor %}
                   </tr>
@@ -691,20 +608,11 @@
           </div>
         </div>
       {% else %}
-        <!-- Honest Fallback when DCF is not applicable -->
-        <div class="p-5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-xs space-y-2">
-          <div class="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300 text-sm">
-            <span>ℹ️</span>
-            <span>DCF Intrinsic Model Context</span>
-          </div>
+        <div class="p-4 rounded-xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-xs space-y-1.5">
+          <div class="font-bold text-amber-800 dark:text-amber-300">DCF Intrinsic Model Context</div>
           <p class="text-amber-700 dark:text-amber-300/90 leading-relaxed">
             {{ dcf.unavailability_reason if dcf else "Discounted Cash Flow data unavailable for this company." }}
           </p>
-          <div class="pt-1">
-            <button type="button" @click="activeSuiteTab = 'simulator'" class="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold flex items-center gap-1 cursor-pointer">
-              <span>Explore multiple-based sensitivity in the What-If Simulator →</span>
-            </button>
-          </div>
         </div>
       {% endif %}
     </div>
@@ -712,145 +620,45 @@
 </div>
 {% endif %}
 
-<!-- AI Fundamental Analysis Synthesis (PRD §4.4) -->
-{% if ai_analysis %}
-<div class="mb-10">
-  <div class="flex items-center justify-between mb-3">
-    <div class="flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 font-mono">
-        AI Fundamental Intelligence Briefing
-      </h2>
-    </div>
-    <span class="text-[11px] font-mono text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/60 px-2.5 py-0.5 rounded-full">
-      PRD §4.4 Tiered Synthesis
-    </span>
-  </div>
-
-  <div class="rounded-3xl bg-gradient-to-b from-indigo-50/40 via-white to-slate-50/30 dark:from-indigo-950/20 dark:via-gray-900/90 dark:to-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] p-6 sm:p-7 shadow-xs max-w-4xl space-y-6">
-    <!-- Header: Signal, Tier & Confidence -->
-    <div class="flex items-center justify-between gap-4 flex-wrap pb-4 border-b border-slate-100 dark:border-gray-800/80">
-      <div class="flex items-center gap-3 flex-wrap">
-        {% set sig = ai_analysis.signal %}
-        {% if sig == "Invest" %}
-          {% set sig_badge = "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800" %}
-        {% elif sig == "Swing" %}
-          {% set sig_badge = "bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800" %}
-        {% elif sig == "Watch" %}
-          {% set sig_badge = "bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800" %}
-        {% else %}
-          {% set sig_badge = "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800" %}
-        {% endif %}
-        <div class="rounded-xl border px-3.5 py-1.5 font-extrabold text-base tracking-tight {{ sig_badge }} shadow-xs flex items-center gap-2">
-          <span>Signal: {{ sig }}</span>
-        </div>
-
-        <span class="rounded-lg bg-slate-100 dark:bg-gray-800 border border-slate-200 dark:border-gray-700 px-2.5 py-1 text-slate-700 dark:text-gray-300 text-xs font-semibold">
-          {{ ai_analysis.cap_tier }}
-        </span>
-
-        <span class="text-xs text-slate-400 dark:text-gray-500 font-medium">
-          Confidence: <strong class="text-slate-800 dark:text-gray-200">{{ ai_analysis.confidence }}</strong>
-        </span>
-      </div>
-
-      <!-- Composite Fundamental Score -->
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-slate-500 dark:text-gray-400 font-medium">Fundamental Score:</span>
-        <span class="font-mono font-extrabold text-lg text-slate-900 dark:text-white px-2.5 py-0.5 rounded-lg bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-2xs tabular-nums">
-          {{ ai_analysis.composite_score }}/100
-        </span>
-      </div>
-    </div>
-
-    <!-- Factor Radar Pills -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      <div class="p-3 rounded-xl bg-white dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 space-y-1">
-        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500">Revenue Growth</div>
-        <div class="text-base font-bold font-mono text-slate-900 dark:text-white tabular-nums">{{ ai_analysis.growth_score }}%</div>
-      </div>
-      <div class="p-3 rounded-xl bg-white dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 space-y-1">
-        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500">Margin & Cash Flow</div>
-        <div class="text-base font-bold font-mono text-slate-900 dark:text-white tabular-nums">{{ ai_analysis.profitability_score }}%</div>
-      </div>
-      <div class="p-3 rounded-xl bg-white dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 space-y-1">
-        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500">Balance Sheet Solvency</div>
-        <div class="text-base font-bold font-mono text-slate-900 dark:text-white tabular-nums">{{ ai_analysis.solvency_score }}%</div>
-      </div>
-      <div class="p-3 rounded-xl bg-white dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 space-y-1">
-        <div class="text-[10px] uppercase font-bold text-slate-400 dark:text-gray-500">Valuation Alignment</div>
-        <div class="text-base font-bold font-mono text-slate-900 dark:text-white tabular-nums">{{ ai_analysis.valuation_score }}%</div>
-      </div>
-    </div>
-
-    <!-- Two-Column Theses vs Risks -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-      <!-- Investment Theses (Citing Filings) -->
-      <div class="space-y-3">
-        <div class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-gray-300 flex items-center gap-1.5">
-          <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span>Key Investment Theses (SEC Data)</span>
-        </div>
-        <ul class="text-xs text-slate-700 dark:text-gray-300 space-y-2">
-          {% for t in ai_analysis.theses %}
-          <li class="flex items-start gap-2 bg-white/70 dark:bg-gray-800/40 p-2.5 rounded-xl border border-slate-100 dark:border-gray-800/60 leading-relaxed">
-            <span class="text-emerald-500 font-bold shrink-0">•</span>
-            <span>{{ t }}</span>
-          </li>
-          {% endfor %}
-        </ul>
-      </div>
-
-      <!-- Flagged Risks (10-K & Guidance) -->
-      <div class="space-y-3">
-        <div class="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-gray-300 flex items-center gap-1.5">
-          <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <span>Flagged Risk Vectors (10-K & 8-K)</span>
-        </div>
-        <ul class="text-xs text-slate-700 dark:text-gray-300 space-y-2">
-          {% for r in ai_analysis.risks %}
-          <li class="flex items-start gap-2 bg-white/70 dark:bg-gray-800/40 p-2.5 rounded-xl border border-slate-100 dark:border-gray-800/60 leading-relaxed">
-            <span class="text-amber-500 font-bold shrink-0">▲</span>
-            <span>{{ r }}</span>
-          </li>
-          {% endfor %}
-        </ul>
-      </div>
-    </div>
-
-    <!-- Executive Summary Box -->
-    <div class="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-900/50 border-l-4 border-l-indigo-600 dark:border-l-indigo-400 text-xs text-slate-700 dark:text-gray-300 leading-relaxed shadow-2xs">
-      <div class="flex items-center gap-1.5 font-bold text-indigo-900 dark:text-indigo-300 mb-1">
-        <svg class="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        <span>Executive Synthesis</span>
-      </div>
-      <p class="text-slate-700 dark:text-gray-300 leading-relaxed">{{ ai_analysis.executive_summary }}</p>
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!-- 4. SECONDARY CONTEXT: NEWS + PEERS & WATCHLIST NOTES                        -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Latest News -->
+  <div class="lg:col-span-2">
+    <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Latest News</h2>
+    <div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] px-5 py-2"
+         hx-get="/company/{{ overview.ticker }}/news" hx-trigger="load" hx-swap="innerHTML">
+      <p class="text-xs text-slate-400 dark:text-gray-500 py-4">Loading headlines…</p>
     </div>
   </div>
-</div>
-{% endif %}
 
+  <!-- Right Rail: Sector Peers & Personal Notes -->
+  <div class="space-y-6">
+    {% if peers %}
+    <div>
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Compare Sector Peers</h2>
+      <div class="flex flex-wrap gap-2">
+        {% for p in peers %}
+          <a href="/company/{{ overview.ticker }}/vs/{{ p.ticker }}"
+             title="Compare {{ overview.ticker }} vs {{ p.ticker }}{% if p.name %} ({{ p.name }}){% endif %}"
+             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-white/[0.08] hover:border-indigo-400 dark:hover:border-indigo-500/60 text-xs font-semibold text-slate-700 dark:text-gray-300 transition">
+            <span class="text-slate-400 text-[10px]">vs</span>
+            <span class="font-mono font-bold text-slate-900 dark:text-white">{{ p.ticker }}</span>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
 
-<!-- Latest News (lazy-loaded so a slow feed never blocks the page) -->
-<div class="mb-10">
-  <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Latest News</h2>
-  <div class="rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] px-5 py-2 shadow-xs max-w-4xl"
-       hx-get="/company/{{ overview.ticker }}/news" hx-trigger="load" hx-swap="innerHTML">
-    <p class="text-sm text-slate-400 dark:text-gray-500 py-4 animate-pulse">Loading headlines…</p>
+    {% if watching %}
+    <div class="p-4 rounded-2xl bg-white dark:bg-gray-900/90 border border-slate-200/80 dark:border-white/[0.08] space-y-2">
+      <div class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">Your Watchlist Notes</div>
+      {% include "partials/watch_note.html" %}
+      {% include "partials/watch_tags.html" %}
+    </div>
+    {% endif %}
   </div>
-</div>
-
-<!-- Action to View Detail -->
-<div class="pt-2">
-  <a href="/company/{{ overview.ticker }}/detail"
-     class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 font-semibold text-white shadow-md shadow-indigo-600/20 hover:shadow-indigo-600/30 transition text-sm cursor-pointer">
-    <span>View Detailed Time Slicer & Statements</span>
-    <span>→</span>
-  </a>
 </div>
 
 {% endblock %}

@@ -248,47 +248,31 @@
   <div id="htmx-progress"></div>
 
   <!-- Global Nav -->
-  <nav class="border-b border-slate-200/80 dark:border-white/[0.08] bg-white/85 dark:bg-[#090a0f]/85 backdrop-blur-xl sticky top-0 z-40 transition-colors duration-150 shadow-xs dark:shadow-none">
-    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
-      <div class="flex items-center gap-6">
-        <a href="/" class="flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-extrabold tracking-tight text-lg hover:text-indigo-500 dark:hover:text-indigo-300 transition shrink-0 group">
-          <div class="relative flex items-center justify-center">
-            <span class="absolute inset-0 rounded-xl bg-indigo-500/25 blur-[5px] group-hover:bg-indigo-500/40 transition"></span>
-            <span class="relative w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center text-xs font-mono font-bold shadow-sm border border-indigo-400/30">TL</span>
-          </div>
-          <div class="flex flex-col">
-            <span class="text-slate-900 dark:text-white font-bold text-sm sm:text-base leading-none group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">Tickerlens</span>
-            <span class="text-[9px] sm:text-[10px] font-mono font-semibold text-slate-400 dark:text-gray-500 tracking-wider uppercase leading-none mt-0.5">SEC Intelligence</span>
-          </div>
+  <nav class="border-b border-slate-200/80 dark:border-white/[0.08] bg-white/85 dark:bg-[#090a0f]/85 backdrop-blur-xl sticky top-0 z-40 transition-colors duration-150">
+    <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex items-center justify-between h-14 gap-4">
+      <div class="flex items-center gap-5">
+        <a href="/" class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-bold tracking-tight hover:text-indigo-500 dark:hover:text-indigo-300 transition shrink-0 group">
+          <span class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center text-xs font-mono font-bold shadow-xs">TL</span>
+          <span class="text-slate-900 dark:text-white font-bold text-sm sm:text-base tracking-tight">Tickerlens</span>
         </a>
         {% set nav_path = request.url.path if request is defined and request.url is defined else '' %}
         <div class="hidden sm:flex items-center gap-1">
-          <a href="/" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition {% if nav_path == '/' %}bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400{% else %}text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-gray-800{% endif %}">Home</a>
-          <a href="/calendar" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 {% if nav_path.startswith('/calendar') %}bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400{% else %}text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-gray-800{% endif %}">
-            <span>Calendar</span>
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          </a>
+          <a href="/" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition {% if nav_path == '/' %}bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400{% else %}text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800{% endif %}">Home</a>
+          <a href="/calendar" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition {% if nav_path.startswith('/calendar') %}bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400{% else %}text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800{% endif %}">Calendar</a>
         </div>
       </div>
 
-      <div class="flex items-center gap-2.5 sm:gap-3">
+      <div class="flex items-center gap-2.5">
         <!-- Search Combobox Container in persistent header -->
         {% block nav_search %}
-        <div class="relative w-52 sm:w-72">
+        <div class="relative w-48 sm:w-64">
           <input data-search-combobox type="text" placeholder="Search ticker or company…"
                  aria-label="Search companies"
                  id="nav-search-input"
-                 class="w-full rounded-xl bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 pl-3.5 pr-10 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:focus:ring-indigo-500/60 focus:bg-white dark:focus:bg-gray-950 transition shadow-inner" />
-          <kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500 shadow-xs">⌘K</kbd>
+                 class="w-full rounded-xl bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 pl-3 pr-9 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white dark:focus:bg-gray-950 transition" />
+          <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 dark:text-gray-500">⌘K</kbd>
         </div>
         {% endblock %}
-
-        <!-- Keyboard Shortcuts Help Button -->
-        <button type="button" @click="shortcutsOpen = true"
-                class="hidden sm:flex items-center justify-center w-8 h-8 rounded-xl border border-slate-200/80 dark:border-gray-800 bg-slate-100 dark:bg-gray-900 text-slate-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs font-mono transition shadow-inner cursor-pointer"
-                title="Keyboard Shortcuts (?)">
-          ?
-        </button>
 
         <!-- Theme Switcher: Light / Dark / System -->
         <div x-data="{
@@ -356,72 +340,21 @@
   </nav>
 
   <!-- Main content -->
-  <main class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+  <main class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-7">
     {% block content %}{% endblock %}
   </main>
 
-  <!-- Global Institutional Footer -->
-  <footer class="mt-20 border-t border-slate-200/80 dark:border-white/[0.08] bg-white/50 dark:bg-[#090a0f]/50 backdrop-blur-md transition-colors duration-150">
-    <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-10">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
-        <div class="space-y-3 md:col-span-2">
-          <div class="flex items-center gap-2.5">
-            <div class="relative flex items-center justify-center">
-              <span class="absolute inset-0 rounded-lg bg-indigo-500/25 blur-[3px]"></span>
-              <span class="relative w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center text-[10px] font-mono font-bold shadow-xs border border-indigo-400/30">TL</span>
-            </div>
-            <span class="text-sm font-bold text-slate-900 dark:text-white">Tickerlens Financial Intelligence</span>
-          </div>
-          <p class="text-xs text-slate-500 dark:text-gray-400 leading-relaxed max-w-md">
-            Deterministic SEC EDGAR XBRL normalization, automated GAAP balance sheet identity verification, rate-aware DCF valuation sensitivity, and multi-period financial statement analysis.
-          </p>
-          <div class="flex items-center gap-2 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium font-mono">
-            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>Primary SEC EDGAR Feed: Active & Normalized</span>
-          </div>
-        </div>
-
-        <div class="space-y-2.5">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-400 font-mono">Platform Quick Links</div>
-          <ul class="space-y-1.5 text-xs text-slate-600 dark:text-gray-400">
-            <li><a href="/" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Market Dashboard</a></li>
-            <li><a href="/calendar" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Earnings Calendar</a></li>
-            <li><a href="/company/AAPL" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Apple Inc. (AAPL)</a></li>
-            <li><a href="/company/NVDA/vs/AMD" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">NVDA vs AMD Head-to-Head</a></li>
-          </ul>
-        </div>
-
-        <div class="space-y-2.5">
-          <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-400 font-mono">Keyboard Navigation</div>
-          <div class="space-y-1.5 text-xs text-slate-500 dark:text-gray-400 font-mono">
-            <div class="flex items-center justify-between">
-              <span>Quick Search</span>
-              <kbd class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[10px] border border-slate-200 dark:border-gray-700">⌘K</kbd>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>Toggle Theme</span>
-              <kbd class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[10px] border border-slate-200 dark:border-gray-700">T</kbd>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>Shortcuts Help</span>
-              <kbd class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[10px] border border-slate-200 dark:border-gray-700">?</kbd>
-            </div>
-            <div class="flex items-center justify-between">
-              <span>Go to Home</span>
-              <kbd class="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-gray-800 text-[10px] border border-slate-200 dark:border-gray-700">G then H</kbd>
-            </div>
-          </div>
-        </div>
+  <!-- Minimal Footer -->
+  <footer class="mt-16 border-t border-slate-200/70 dark:border-white/[0.06] py-6">
+    <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-gray-500">
+      <div class="flex items-center gap-3 flex-wrap justify-center sm:justify-start">
+        <span class="font-semibold text-slate-600 dark:text-gray-400">Tickerlens</span>
+        <span>·</span>
+        <span>SEC EDGAR primary filings</span>
+        <span>·</span>
+        <button type="button" @click="shortcutsOpen = true" class="hover:text-indigo-500 transition cursor-pointer">Shortcuts (?)</button>
       </div>
-
-      <div class="pt-6 border-t border-slate-200/60 dark:border-white/[0.06] flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-400 dark:text-gray-500">
-        <div>
-          Tickerlens Financial Research Platform • GAAP ASC 606 & SEC EDGAR XBRL Data.
-        </div>
-        <div class="text-center sm:text-right">
-          For research and informational analysis only. Not financial or investment advice.
-        </div>
-      </div>
+      <div>Informational analysis only. Not investment advice.</div>
     </div>
   </footer>
 
