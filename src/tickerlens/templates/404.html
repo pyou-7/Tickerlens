@@ -2,24 +2,34 @@
 {% block title %}Not found — Tickerlens{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-xl text-center py-20">
-  <div class="text-6xl mb-6 select-none">🔭</div>
-  <h1 class="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mb-3">Couldn't find that company</h1>
-  <p class="text-slate-600 dark:text-gray-400 mb-8">{{ detail or "The ticker you asked for isn't in EDGAR's records, or we couldn't fetch its data." }}</p>
+<div class="mx-auto max-w-lg text-center py-16 space-y-6">
+  <div class="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-gray-900 border border-slate-200/80 dark:border-white/[0.08] text-slate-400 flex items-center justify-center mx-auto">
+    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+  </div>
+  <div class="space-y-2">
+    <h1 class="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">Couldn't find that company</h1>
+    <p class="text-sm text-slate-500 dark:text-gray-400">{{ detail or "The ticker you asked for isn't in EDGAR's records, or we couldn't fetch its data." }}</p>
+  </div>
+
   {%- if suggestions %}
-  <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-gray-400 mb-3">Did you mean:</p>
-  <div class="flex flex-wrap justify-center gap-2 mb-8">
-    {%- for s in suggestions %}
-    <a href="/company/{{ s.ticker }}"
-       class="rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3.5 py-1.5 text-xs text-slate-700 dark:text-gray-200 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-white shadow-xs transition">
-      <span class="font-mono font-bold">{{ s.ticker }}</span>
-      <span class="text-slate-400 dark:text-gray-500 font-normal">— {{ s.name }}</span>
-    </a>
-    {%- endfor %}
+  <div class="space-y-2.5">
+    <p class="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-gray-500">Did you mean:</p>
+    <div class="flex flex-wrap justify-center gap-2">
+      {%- for s in suggestions %}
+      <a href="/company/{{ s.ticker }}"
+         class="rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 px-3 py-1.5 text-xs text-slate-700 dark:text-gray-200 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-white transition">
+        <span class="font-mono font-bold">{{ s.ticker }}</span>
+        <span class="text-slate-400 dark:text-gray-500 font-normal">— {{ s.name }}</span>
+      </a>
+      {%- endfor %}
+    </div>
   </div>
   {%- endif %}
-  <a href="/" class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-indigo-500 shadow-xs transition">
-    ← Back to search
-  </a>
+
+  <div class="pt-2">
+    <a href="/" class="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 transition">
+      ← Back to search
+    </a>
+  </div>
 </div>
 {% endblock %}

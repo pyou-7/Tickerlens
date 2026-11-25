@@ -2,8 +2,18 @@
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Tickerlens — Enter passcode</title>
+
+  <!-- PWA & Mobile Web App Capabilities -->
+  <link rel="manifest" href="{{ url_for('static', path='manifest.json') }}" />
+  <meta name="theme-color" content="#6366f1" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#090a0f" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Tickerlens" />
+  <link rel="apple-touch-icon" href="{{ url_for('static', path='icons/icon-192.png') }}" />
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='icons/icon.svg') }}" />
 
   <!-- Prevent FOUC: Apply dark class immediately before render -->
   <script>
@@ -23,7 +33,7 @@
   <!-- Google Fonts: Inter & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -34,31 +44,17 @@
           fontFamily: {
             sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
             mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
-          },
-          colors: {
-            brand: {
-              50: '#eef2ff',
-              100: '#e0e7ff',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca',
-            },
-            surface: {
-              light: '#ffffff',
-              dark: '#0e1017',
-              darker: '#090a0f',
-            }
           }
         }
       }
     }
   </script>
 </head>
-<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-[#090a0f] selection:bg-indigo-500/20 dark:selection:bg-indigo-500/30">
+<body class="h-full text-slate-900 dark:text-gray-100 font-sans antialiased bg-slate-50 dark:bg-[#090a0f] selection:bg-indigo-500/20">
   <div class="min-h-full flex items-center justify-center px-4 py-12">
-    <div class="w-full max-w-sm rounded-3xl bg-white dark:bg-gray-900 border border-slate-200/90 dark:border-gray-800 p-8 shadow-2xl space-y-6">
+    <div class="w-full max-w-sm rounded-3xl bg-white dark:bg-gray-900 border border-slate-200/90 dark:border-white/[0.08] p-8 shadow-xl space-y-6">
       <div class="flex flex-col items-center gap-3 text-center">
-        <span class="w-11 h-11 rounded-2xl bg-indigo-600/10 dark:bg-indigo-600/25 border border-indigo-500/30 dark:border-indigo-500/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-sm font-mono font-bold shadow-sm">TL</span>
+        <span class="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center text-sm font-mono font-bold shadow-md">TL</span>
         <div>
           <h1 class="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">Tickerlens</h1>
           <p class="text-xs text-slate-500 dark:text-gray-400 mt-1">This site is shared privately.<br />Enter the passcode to continue.</p>
@@ -66,26 +62,31 @@
       </div>
 
       {% if error %}
-      <div class="rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 px-3.5 py-2.5 text-xs font-medium text-red-700 dark:text-red-300 text-center">
+      <div class="rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 px-3.5 py-2.5 text-xs font-medium text-rose-700 dark:text-rose-300 text-center">
         Incorrect passcode. Try again.
       </div>
       {% endif %}
 
-      <form method="post" action="/login" class="space-y-4">
+      <form method="post" action="/login" class="space-y-3.5">
         <input type="hidden" name="next" value="{{ next }}" />
-        <div>
+        <div class="relative">
           <label for="passcode" class="sr-only">Passcode</label>
           <input type="password" id="passcode" name="passcode" placeholder="Passcode" autocomplete="current-password"
                  autofocus required
-                 class="w-full rounded-xl bg-slate-100 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 dark:focus:ring-indigo-500/60 focus:bg-white dark:focus:bg-gray-900 transition shadow-inner" />
+                 class="w-full rounded-xl bg-slate-100 dark:bg-gray-950 border border-slate-200 dark:border-gray-800 pl-3.5 pr-10 py-2.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:bg-white dark:focus:bg-gray-900 transition" />
+          <button type="button" onclick="var i=document.getElementById('passcode'); i.type=(i.type==='password'?'text':'password');"
+                  aria-label="Toggle passcode visibility"
+                  class="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-gray-300 transition cursor-pointer">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+          </button>
         </div>
         <button type="submit"
-                class="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold py-2.5 transition shadow-sm cursor-pointer">
+                class="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white text-sm font-semibold py-2.5 transition shadow-sm cursor-pointer">
           Continue
         </button>
       </form>
 
-      <p class="text-[11px] text-slate-400 dark:text-gray-500 text-center">Your browser remembers the passcode for 30 days.</p>
+      <p class="text-[11px] text-slate-400 dark:text-gray-500 text-center">Remembered for 30 days on this device.</p>
     </div>
   </div>
 </body>

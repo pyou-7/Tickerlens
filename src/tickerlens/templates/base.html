@@ -340,12 +340,12 @@
   </nav>
 
   <!-- Main content -->
-  <main class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-7">
+  <main class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 py-7 pb-20 sm:pb-7">
     {% block content %}{% endblock %}
   </main>
 
   <!-- Minimal Footer -->
-  <footer class="mt-16 border-t border-slate-200/70 dark:border-white/[0.06] py-6">
+  <footer class="mt-16 mb-16 sm:mb-0 border-t border-slate-200/70 dark:border-white/[0.06] py-6">
     <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-slate-400 dark:text-gray-500">
       <div class="flex items-center gap-3 flex-wrap justify-center sm:justify-start">
         <span class="font-semibold text-slate-600 dark:text-gray-400">Tickerlens</span>
@@ -357,6 +357,29 @@
       <div>Informational analysis only. Not investment advice.</div>
     </div>
   </footer>
+
+  <!-- Mobile Bottom Tab Bar (iPhone/Android PWA native feel) -->
+  <nav class="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200/80 dark:border-white/[0.08] bg-white/95 dark:bg-[#090a0f]/95 backdrop-blur-xl print:hidden"
+       style="padding-bottom: env(safe-area-inset-bottom, 0px);" aria-label="Mobile navigation">
+    <div class="grid grid-cols-3 h-14 text-[11px] font-semibold">
+      <a href="/" onclick="if(window.triggerHaptic)window.triggerHaptic('light')"
+         class="flex flex-col items-center justify-center gap-0.5 transition {% if nav_path == '/' %}text-indigo-600 dark:text-indigo-400{% else %}text-slate-500 dark:text-gray-400{% endif %}">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        <span>Home</span>
+      </a>
+      <button type="button"
+              onclick="if(window.triggerHaptic)window.triggerHaptic('light'); const el = document.getElementById('ticker-input') || document.getElementById('nav-search-input'); if(el){ el.focus(); el.scrollIntoView({behavior:'smooth', block:'center'}); } else { window.location.href='/'; }"
+              class="flex flex-col items-center justify-center gap-0.5 text-slate-500 dark:text-gray-400 active:text-indigo-600 transition cursor-pointer">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <span>Search</span>
+      </button>
+      <a href="/calendar" onclick="if(window.triggerHaptic)window.triggerHaptic('light')"
+         class="flex flex-col items-center justify-center gap-0.5 transition {% if nav_path.startswith('/calendar') %}text-indigo-600 dark:text-indigo-400{% else %}text-slate-500 dark:text-gray-400{% endif %}">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <span>Calendar</span>
+      </a>
+    </div>
+  </nav>
 
   <!-- Interactive Toast Notification Container -->
   <div class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 max-w-sm pointer-events-none">
